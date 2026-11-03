@@ -7424,6 +7424,38 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg)
  * resource name is the cluster-wide sync point, so a volume served to a second
  * node serializes through the same resource.
  */
+/*
+ * THE IDENTITY OF A FILES-11 XQP LOCK (rd vms-7649): SYSTEM-WIDE (UIC group 0)
+ * at KERNEL mode (0), because on VMS the XQP takes these locks itself, in
+ * kernel mode, for the volume -- not for the process whose I/O it is serving.
+ * Measured both ways:
+ *   - VAX1's SDA on the resource OVMX failed to reach (lab run vms-5fa,
+ *     2026-11-02, tests/lab/captures/vms-5fa-shared-volume-20261102):
+ *     "F11B$vEVAC5FA     ", Length 18, "Kernel mode", "System".
+ *   - on the wire, every captured F11B$ request names (group 0, mode 0):
+ *     fixtures dlm-real-enq-request (F11B$s, op-0x01) and
+ *     dlm-rebuild-rejoin-f11b (F11B$a, op-0x0d).
+ * The identity is part of the resource (the directory hash is computed over
+ * it). These helpers used to take the MOUNTing process's own (UIC group 1,
+ * user mode 3) -- a DIFFERENT resource, hashed to a different directory node:
+ * OVMXE asked VAX2, was told "you master it", and mastered a second
+ * F11B$vEVAC5FA beside VAX1's, so the two nodes' XQPs never contended.
+ * Stated by the executive (enq_resource_identity's stated arm), never by a
+ * caller, exactly as the RMS file-access lock's is.
+ */
+#define VMS_F11B_LOCK_GROUP   0u
+#define VMS_F11B_LOCK_ACMODE  0u   /* PSL$C_KERNEL */
+
+static const struct dlm_enq_ident vms_f11b_lock_ident = {
+    VMS_F11B_LOCK_GROUP, VMS_F11B_LOCK_ACMODE
+};
+
+/* Every XQP lock's $ENQ goes through here, so its identity is stated once. */
+static long acp_f11b_enq(struct vms_proc *proc, struct vms_enq_args *a)
+{
+    return vms_enq_core_ident(proc, a, NULL, &vms_f11b_lock_ident);
+}
+
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
                              uint32_t *lkid_out)
 {
@@ -7444,7 +7476,7 @@ uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
      * resumes). Bounded only by the wait itself completing, exactly like the
      * uninterrupted case.
      */
-    while (vms_enq_core_ex(proc, &a, NULL) != 0)
+    while (acp_f11b_enq(proc, &a) != 0)
         ;   /* ACP volume lock: local, full detection */
     /* Whatever lock the $ENQ created is handed back, whatever status it reported,
      * so the caller's single exit releases it: a granted $ENQ may report SS$_SYNCH
@@ -7629,8 +7661,9 @@ uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
     strscpy(a.resnam, resnam, sizeof(a.resnam));
 
     /* Same contract as vms_lock_acp_vol_ex above (rd vms-f87): an interrupted
-     * wait is re-entered here, never reported as a status. */
-    while (vms_enq_core_ex(proc, &a, NULL) != 0)
+     * wait is re-entered here, never reported as a status. The identity is the
+     * XQP's, not the MOUNTing process's (rd vms-7649). */
+    while (acp_f11b_enq(proc, &a) != 0)
         ;
     if (a.status == SS__NORMAL && lkid_out)
         *lkid_out = a.lkid;

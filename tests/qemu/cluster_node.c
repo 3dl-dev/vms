@@ -33,6 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -108,6 +109,14 @@ struct node_cfg {
 	 * itself the one departing has nothing to observe.
 	 */
 	unsigned    remaster;
+	/*
+	 * Run the EVACUATION phase after the membership window (section 6g,
+	 * rd vms-1e58). Per-node ROLE, set by the host script: 1 = the
+	 * SURVIVOR (its waiter must be granted once the peer is gone), 2 = the
+	 * HOLDER (holds the workload lock until the rig kills its QEMU -9).
+	 * 0 (default) leaves every other mode exactly as it was.
+	 */
+	unsigned    evac;
 };
 
 static void cfg_defaults(struct node_cfg *c)
@@ -124,6 +133,7 @@ static void cfg_defaults(struct node_cfg *c)
 	c->linger = 30u;
 	c->qhang = 0u;
 	c->remaster = 0u;
+	c->evac = 0u;
 }
 
 /* One "--name=value" argument. Returns 0 if it was consumed. */
@@ -154,6 +164,7 @@ static int cfg_take(struct node_cfg *c, const char *arg)
 	TAKE_U("linger", linger)
 	TAKE_U("qhang", qhang)
 	TAKE_U("remaster", remaster)
+	TAKE_U("evac", evac)
 #undef TAKE_U
 #undef TAKE_STR
 	return -1;
@@ -2359,6 +2370,479 @@ static void rig_remaster_phase(int fd, const struct node_cfg *c)
 	fflush(stdout);
 }
 
+/* ==========================================================================
+ * 6g. THE EVACUATION (rd vms-1e58, the CI half of ci.6)
+ *
+ * WHAT THIS PHASE MEASURES. The ci.6 release gate's own shape, on two OVMX
+ * executives: a workload holds its lock EX on one member (the HOLDER, node B),
+ * a standby on the other member (the SURVIVOR, node A) waits QUEUED for it,
+ * the holder's whole system is evacuated -- the rig kills its QEMU process -9,
+ * no $DEQ, no rundown, no last gasp -- and the survivor's waiter is GRANTED by
+ * its own executive, after which the standby continues the workload's
+ * sequence at seq+1.
+ *
+ * THE WORKLOAD'S CONTRACT is tests/lab/ci6/EVACWL.C's: the resource name
+ * EVAC$WORKLOAD held EX for as long as the instance runs, and a standby that
+ * starts NL and CONVERTS to EX (EVACWL's "standby" path) so it queues behind
+ * the running instance and is granted only on takeover. EVACWL.EXE itself
+ * needs a booted OVMX userland and a shared EVAC.DAT; these two guests have
+ * neither (no disk at all), so the same $ENQ sequence is issued here through
+ * the executive's own lock services, and the sequence number travels where a
+ * real VMS cluster can carry it without a shared disk: the VALUE BLOCK of a
+ * second resource, EVAC$SEQ.
+ *
+ * WHY EVAC$SEQ AND NOT EVAC$WORKLOAD'S OWN VALUE BLOCK. On VMS a value block
+ * whose PW/EX holder dies without releasing it may no longer be trusted (the
+ * holder may have changed it and not written it back). The holder therefore
+ * commits each sequence number the way a VMS program does when it must
+ * survive its own node: it takes EVAC$SEQ EX, and DEMOTES EX->CR carrying
+ * LCK$M_VALBLK (the conversion that writes the block to the master -- op-0x06
+ * on the wire, rd vms-727), then releases it. When the holder dies it holds
+ * EVAC$SEQ in no mode at all, so the block the survivor reads back is the
+ * last one the holder genuinely committed, never one it may have been midway
+ * through changing.
+ *
+ * WHERE THE TWO RESOURCES LIVE. On the SURVIVOR -- discovered, never assumed:
+ * both nodes scan the same candidate list ("EVAC$WORKLOAD" first) and take the
+ * first name whose GET_RESMASTER readback names node A as master. That makes
+ * this the "holder's locks are released by the master that survives" case
+ * (vms_lock_dlm_member_departed -> vms_lock_dlm_release_csid_locks, rd vms-4d3),
+ * which is the one a standby can be granted through without a lock rebuild.
+ *
+ * EVERY VALUE PRINTED WAS READ BACK FROM THE EXECUTIVE (INV-6): granted and
+ * requested modes from $GETLKI, holders and masters from GET_RESMASTER, the
+ * member count from this node's own CLUB, the sequence number from the value
+ * block $GETLKI returns. The host verdict compares the survivor's read-back
+ * sequence with the holder's own last committed one.
+ * ========================================================================== */
+#define RIG_EV_ROLE_SURVIVOR  1u
+#define RIG_EV_ROLE_HOLDER    2u
+#define RIG_EV_CANDIDATES     16u
+#define RIG_EV_SEQ_RECORDS    3u      /* records the holder commits        */
+#define RIG_EV_POLL_MS        500u
+#define RIG_EV_PEERHOLD_MAX   360u    /* x POLL_MS = 180s for B to hold    */
+#define RIG_EV_GRANT_MAX      600u    /* x POLL_MS = 300s for the takeover */
+#define RIG_EV_HOLD_SECS      420u    /* holder: bound on waiting to die   */
+#define RIG_EV_HOLDER_DELAY_S 15u     /* holder: let the survivor master   */
+
+static void rig_ev_name(const char *base, unsigned i, char *out, size_t n)
+{
+	if (i == 0u)
+		snprintf(out, n, "%s", base);
+	else
+		snprintf(out, n, "%s%02u", base, i);
+}
+
+/* One $ENQ (async) at `mode`, optionally carrying LCK$M_VALBLK. */
+static uint32_t rig_ev_enq(int fd, const char *resnam, uint32_t mode,
+			   uint32_t flags, uint32_t *lkid_out)
+{
+	struct vms_enq_args a;
+
+	memset(&a, 0, sizeof(a));
+	a.lkmode = mode;
+	a.flags = flags;
+	snprintf(a.resnam, sizeof(a.resnam), "%s", resnam);
+	if (ioctl(fd, VMS_IOCTL_ENQ, &a) != 0)
+		return 0u;
+	*lkid_out = a.lkid;
+	return a.status;
+}
+
+static int rig_ev_getlki(int fd, uint32_t lkid, struct vms_getlki_args *g)
+{
+	memset(g, 0, sizeof(*g));
+	g->lkid = lkid;
+	return (ioctl(fd, VMS_IOCTL_GETLKI, g) == 0 && g->status == SS_NORMAL)
+		? 0 : -1;
+}
+
+/* Poll $GETLKI until the lock is GRANTED at `mode` (and not waiting). */
+static int rig_ev_wait_granted(int fd, uint32_t lkid, uint32_t mode,
+			       unsigned max_polls, unsigned poll_ms)
+{
+	unsigned t;
+	struct vms_getlki_args g;
+
+	for (t = 0; t < max_polls; t++) {
+		if (rig_ev_getlki(fd, lkid, &g) == 0 &&
+		    g.granted_mode == mode && g.requested_mode == mode)
+			return (int)t + 1;
+		rig_msleep(poll_ms);
+	}
+	return 0;
+}
+
+/* The 16-byte value block the workload commits: "SEQ=" + 12 digits. */
+static void rig_ev_seq_put(uint8_t *v, unsigned long seq)
+{
+	char tmp[32];
+
+	snprintf(tmp, sizeof(tmp), "SEQ=%012lu", seq % 1000000000000ul);
+	memcpy(v, tmp, LCK_VALBLK_SIZE);
+}
+
+/* Parse it back; -1 when the block holds no committed sequence number. */
+static long rig_ev_seq_get(const uint8_t *v)
+{
+	char tmp[LCK_VALBLK_SIZE + 1];
+	unsigned i;
+
+	if (memcmp(v, "SEQ=", 4) != 0)
+		return -1;
+	for (i = 4; i < LCK_VALBLK_SIZE; i++)
+		if (v[i] < '0' || v[i] > '9')
+			return -1;
+	memcpy(tmp, v, LCK_VALBLK_SIZE);
+	tmp[LCK_VALBLK_SIZE] = '\0';
+	return strtol(tmp + 4, NULL, 10);
+}
+
+/*
+ * Find the first candidate of `base` that node A (the survivor) masters, read
+ * back from GET_RESMASTER after a $ENQ at `mode`. `want_local` is 1 on node A
+ * (it must master the name itself) and 0 on node B (the PEER must master it).
+ * On success the lock is still held and returned in *lkid_out.
+ *
+ * THE HOLDER FINDS THE WORKLOAD AT EX, NOT NL. The survivor watches its own
+ * resource block for a lock held by the peer, and an NL discovery probe IS
+ * such a lock: measured on the first run of this phase, the survivor took
+ * the holder's NL probe for the workload, converted in the gap between the
+ * probe's $DEQ and the holder's EX request, and was granted at once -- no
+ * evacuation measured at all. With the holder's very first lock on the name
+ * being the EX it keeps, the only remote holder the survivor can see is the
+ * real one.
+ */
+static int rig_ev_find(int fd, const struct node_cfg *c, const char *base,
+		       uint32_t mode, int want_local, char *name, size_t n,
+		       uint32_t *lkid_out, struct vms_resmaster_args *rm)
+{
+	unsigned i;
+
+	for (i = 0; i < RIG_EV_CANDIDATES; i++) {
+		uint32_t lkid = 0u, st;
+		int ok;
+
+		rig_ev_name(base, i, name, n);
+		st = rig_ev_enq(fd, name, mode, 0u, &lkid);
+		if (st != SS_NORMAL || lkid == 0u)
+			continue;
+		rig_xn_wait_master(fd, name, rm);
+		ok = want_local ? (rm->found != 0u && rm->is_local_master != 0u)
+				: rig_xn_is_peer_mastered(rm);
+		if (ok) {
+			*lkid_out = lkid;
+			printf("RIG-%s-EVAC-RES base=%s res=%s lkid=0x%08x "
+			       "local_csid=0x%08x master_csid=0x%08x "
+			       "is_local_master=%u dir_csid=0x%08x tried=%u\n",
+			       c->tag, base, name, (unsigned)lkid,
+			       (unsigned)rm->local_csid,
+			       (unsigned)rm->master_csid,
+			       (unsigned)rm->is_local_master,
+			       (unsigned)rm->dir_csid, i + 1u);
+			fflush(stdout);
+			return 1;
+		}
+		printf("RIG-%s-EVAC-SKIP res=%s found=%u master_csid=0x%08x "
+		       "is_local_master=%u dir_csid=0x%08x\n", c->tag, name,
+		       (unsigned)rm->found, (unsigned)rm->master_csid,
+		       (unsigned)rm->is_local_master, (unsigned)rm->dir_csid);
+		fflush(stdout);
+		(void)rig_dlm_deq(fd, lkid);
+	}
+	name[0] = '\0';
+	printf("RIG-%s-EVAC-RES base=%s NONE (no candidate is mastered by the "
+	       "survivor)\n", c->tag, base);
+	fflush(stdout);
+	return 0;
+}
+
+/*
+ * THE HOLDER (node B). Take the workload lock EX, commit RIG_EV_SEQ_RECORDS
+ * sequence numbers through EVAC$SEQ's value block, then hold the workload
+ * lock until this whole system is killed. Returns only if it never is.
+ */
+static void rig_evac_holder_body(int fd, const struct node_cfg *c)
+{
+	struct vms_resmaster_args rm;
+	struct vms_getlki_args g;
+	char wname[32], sname[32];
+	uint32_t sprobe = 0u, wlk = 0u, st;
+	unsigned k, t;
+
+	printf("RIG-%s-EVAC-PHASE begin role=holder (rd vms-1e58)\n", c->tag);
+	fflush(stdout);
+	/* The survivor's discovery goes first: both phases begin at the same
+	 * wall moment, and a name both nodes probe at once is a race between
+	 * two first requesters rather than a reading of where it lives. */
+	sleep(RIG_EV_HOLDER_DELAY_S);
+	if (!rig_ev_find(fd, c, "EVAC$WORKLOAD", LCK_K_EXMODE, 0, wname,
+			 sizeof(wname), &wlk, &rm) ||
+	    !rig_ev_find(fd, c, "EVAC$SEQ", LCK_K_NLMODE, 0, sname,
+			 sizeof(sname), &sprobe, &rm)) {
+		printf("RIG-%s-EVAC-PHASE end role=holder res=none\n", c->tag);
+		fflush(stdout);
+		return;
+	}
+	(void)rig_dlm_deq(fd, sprobe);
+
+	st = SS_NORMAL;
+	t = (unsigned)rig_ev_wait_granted(fd, wlk, LCK_K_EXMODE, 80u,
+					  RIG_XN_POLL_MS);
+	(void)rig_ev_getlki(fd, wlk, &g);
+	(void)rig_dlm_resmaster(fd, wname, &rm);
+	printf("RIG-%s-EVAC-HOLD res=%s status=%u lkid=0x%08x granted_mode=%u "
+	       "master_csid=0x%08x is_local_master=%u polls=%u\n",
+	       c->tag, wname, (unsigned)st, (unsigned)wlk,
+	       (unsigned)g.granted_mode, (unsigned)rm.master_csid,
+	       (unsigned)rm.is_local_master, t);
+	fflush(stdout);
+	if (t == 0u)
+		return;
+
+	for (k = 1u; k <= RIG_EV_SEQ_RECORDS; k++) {
+		struct vms_enq_args a;
+		uint32_t slk = 0u, cst = 0u;
+		int granted;
+
+		st = rig_ev_enq(fd, sname, LCK_K_EXMODE, 0u, &slk);
+		granted = (st == SS_NORMAL && slk != 0u) &&
+			  rig_ev_wait_granted(fd, slk, LCK_K_EXMODE, 80u,
+					      RIG_XN_POLL_MS) != 0;
+		if (granted) {
+			/* EX -> CR carrying the block: the committing write. */
+			memset(&a, 0, sizeof(a));
+			a.lkid = slk;
+			a.lkmode = LCK_K_CRMODE;
+			a.flags = LCK_M_CONVERT | LCK_M_VALBLK;
+			rig_ev_seq_put(a.valblk, k);
+			cst = (ioctl(fd, VMS_IOCTL_CONVERT, &a) == 0)
+				? a.status : 0u;
+			rig_msleep(1000u);   /* the op-0x06 reaches the master */
+		}
+		printf("RIG-%s-EVAC-SEQ k=%u res=%s enq_status=%u granted=%d "
+		       "commit_status=%u deq_status=%u\n",
+		       c->tag, k, sname, (unsigned)st, granted, (unsigned)cst,
+		       slk ? (unsigned)rig_dlm_deq(fd, slk) : 0u);
+		fflush(stdout);
+		if (!granted || cst != SS_NORMAL)
+			return;
+	}
+
+	(void)rig_ev_getlki(fd, wlk, &g);
+	printf("RIG-%s-EVAC-HOLDING res=%s lkid=0x%08x granted_mode=%u "
+	       "last_seq=%u (holding until this system is evacuated)\n",
+	       c->tag, wname, (unsigned)wlk, (unsigned)g.granted_mode,
+	       RIG_EV_SEQ_RECORDS);
+	fflush(stdout);
+	for (t = 0; t < RIG_EV_HOLD_SECS; t++)
+		sleep(1);
+	printf("RIG-%s-EVAC-NOT-EVACUATED (the rig never killed this system)\n",
+	       c->tag);
+	fflush(stdout);
+}
+
+/*
+ * THE SURVIVOR (node A). Master both resources (hold NL on each), wait for
+ * the peer to hold the workload, queue the standby's NL->EX conversion behind
+ * it, and then watch -- nothing else -- for the executive to grant it.
+ */
+static void rig_evac_survivor_body(int fd, const struct node_cfg *c)
+{
+	struct vms_resmaster_args rm;
+	struct vms_getlki_args g;
+	struct vms_club_view_wire club;
+	struct vms_enq_args a;
+	char wname[32], sname[32];
+	uint32_t wlk = 0u, snl = 0u, slk = 0u, rlk = 0u, peer = 0u, st;
+	unsigned t, polls = 0u;
+	long seq = -1, reread = -1;
+
+	printf("RIG-%s-EVAC-PHASE begin role=survivor (rd vms-1e58)\n",
+	       c->tag);
+	fflush(stdout);
+	if (!rig_ev_find(fd, c, "EVAC$WORKLOAD", LCK_K_NLMODE, 1, wname,
+			 sizeof(wname), &wlk, &rm) ||
+	    !rig_ev_find(fd, c, "EVAC$SEQ", LCK_K_NLMODE, 1, sname,
+			 sizeof(sname), &snl, &rm)) {
+		printf("RIG-%s-EVAC-PHASE end role=survivor res=none\n",
+		       c->tag);
+		fflush(stdout);
+		return;
+	}
+
+	/* The holder's EX lock, as THIS master's resource block holds it. */
+	for (t = 0; t < RIG_EV_PEERHOLD_MAX; t++) {
+		if (rig_dlm_resmaster(fd, wname, &rm) != 0u &&
+		    rm.remote_holder_csid != 0u &&
+		    rm.remote_holder_csid != rm.local_csid) {
+			peer = rm.remote_holder_csid;
+			break;
+		}
+		rig_msleep(RIG_EV_POLL_MS);
+	}
+	printf("RIG-%s-EVAC-PEERHOLD res=%s remote_holder_csid=0x%08x "
+	       "n_granted=%u polls=%u\n", c->tag, wname, (unsigned)peer,
+	       (unsigned)rm.n_granted, t + 1u);
+	fflush(stdout);
+	if (peer == 0u)
+		return;
+
+	/* EVACWL's standby: convert the held NL to EX. It must QUEUE. */
+	memset(&a, 0, sizeof(a));
+	a.lkid = wlk;
+	a.lkmode = LCK_K_EXMODE;
+	a.flags = LCK_M_CONVERT;
+	st = (ioctl(fd, VMS_IOCTL_CONVERT, &a) == 0) ? a.status : 0u;
+	rig_msleep(2000u);
+	(void)rig_ev_getlki(fd, wlk, &g);
+	(void)rig_dlm_resmaster(fd, wname, &rm);
+	printf("RIG-%s-EVAC-WAITING res=%s lkid=0x%08x convert_status=%u "
+	       "granted_mode=%u requested_mode=%u remote_holder_csid=0x%08x\n",
+	       c->tag, wname, (unsigned)wlk, (unsigned)st,
+	       (unsigned)g.granted_mode, (unsigned)g.requested_mode,
+	       (unsigned)rm.remote_holder_csid);
+	fflush(stdout);
+	if (st != SS_NORMAL)
+		return;
+
+	/* THE TAKEOVER: nothing but polling the executive for the grant. */
+	polls = (unsigned)rig_ev_wait_granted(fd, wlk, LCK_K_EXMODE,
+					      RIG_EV_GRANT_MAX, RIG_EV_POLL_MS);
+	if (rig_read_club(fd, &club) != 0)
+		memset(&club, 0, sizeof(club));
+	(void)rig_ev_getlki(fd, wlk, &g);
+	(void)rig_dlm_resmaster(fd, wname, &rm);
+	printf("RIG-%s-EVAC-GRANTED granted=%d res=%s granted_mode=%u "
+	       "requested_mode=%u polls=%u nodes_at_grant=%u "
+	       "remote_holder_csid=0x%08x departed_csid=0x%08x\n",
+	       c->tag, polls != 0u, wname, (unsigned)g.granted_mode,
+	       (unsigned)g.requested_mode, polls,
+	       (unsigned)club.cluster_nodes, (unsigned)rm.remote_holder_csid,
+	       (unsigned)peer);
+	fflush(stdout);
+	if (polls == 0u) {
+		rig_dump_dlm(fd, c, "evac");
+		return;
+	}
+
+	/* THE CONTINUATION: read the last committed seq, commit seq+1. */
+	st = rig_ev_enq(fd, sname, LCK_K_EXMODE, LCK_M_VALBLK, &slk);
+	if (st == SS_NORMAL && slk != 0u &&
+	    rig_ev_wait_granted(fd, slk, LCK_K_EXMODE, 20u, RIG_XN_POLL_MS) &&
+	    rig_ev_getlki(fd, slk, &g) == 0)
+		seq = rig_ev_seq_get(g.valblk);
+	printf("RIG-%s-EVAC-SEQREAD res=%s status=%u seq=%ld\n", c->tag, sname,
+	       (unsigned)st, seq);
+	fflush(stdout);
+	if (seq < 0)
+		return;
+
+	memset(&a, 0, sizeof(a));
+	a.lkid = slk;
+	a.lkmode = LCK_K_CRMODE;
+	a.flags = LCK_M_CONVERT | LCK_M_VALBLK;
+	rig_ev_seq_put(a.valblk, (unsigned long)seq + 1ul);
+	st = (ioctl(fd, VMS_IOCTL_CONVERT, &a) == 0) ? a.status : 0u;
+	printf("RIG-%s-EVAC-SEQWRITE res=%s seq=%ld status=%u\n", c->tag,
+	       sname, seq + 1, (unsigned)st);
+	fflush(stdout);
+
+	/* A FRESH lock reads it back: the block the master now holds. */
+	if (rig_ev_enq(fd, sname, LCK_K_CRMODE, LCK_M_VALBLK, &rlk) ==
+		    SS_NORMAL && rlk != 0u &&
+	    rig_ev_wait_granted(fd, rlk, LCK_K_CRMODE, 20u, RIG_XN_POLL_MS) &&
+	    rig_ev_getlki(fd, rlk, &g) == 0)
+		reread = rig_ev_seq_get(g.valblk);
+	printf("RIG-%s-EVAC-SEQREREAD res=%s seq=%ld\n", c->tag, sname,
+	       reread);
+	printf("RIG-%s-EVAC-PHASE end role=survivor res=%s\n", c->tag, wname);
+	fflush(stdout);
+	if (rlk != 0u)
+		(void)rig_dlm_deq(fd, rlk);
+	if (slk != 0u)
+		(void)rig_dlm_deq(fd, slk);
+	(void)rig_dlm_deq(fd, snl);
+	(void)rig_dlm_deq(fd, wlk);
+}
+
+/*
+ * THE WORKLOAD IS ITS OWN PROCESS. EVACWL runs as an ordinary process, never
+ * as STARTUP.EXE -- and in this rig THIS program is STARTUP.EXE's stand-in: it
+ * issued CLUSTER_START, so the executive made it the cluster DELIVERY process
+ * (vms_ioctl_cluster_start, rd vms-c27), the owner of every lock this node's
+ * master holds FOR another system. Running the standby in that same process
+ * would make the remote holder's lock and the standby's request share one
+ * owner, which the lock manager's local wait-for search reads as the standby
+ * waiting on itself -- measured on the second run of this phase: the NL->EX
+ * conversion came back SS$_DEADLOCK. So each workload instance is a
+ * SUBPROCESS the executive creates for it ($CREPRC's PCB, the same
+ * VMS_IOCTL_CREPRC_PCB tests/qemu/ovmx_test_fork.h uses), with its own
+ * /dev/vms channel; this process only waits for it.
+ */
+static void rig_evac_in_subprocess(int fd, const struct node_cfg *c,
+				   void (*body)(int, const struct node_cfg *))
+{
+	struct vms_creprc_pcb_args a;
+	int hold[2], ws = 0;
+	pid_t pid;
+	char go = 0;
+
+	fflush(stdout);
+	if (pipe(hold) != 0) {
+		printf("RIG-%s-EVAC-SUBPROCESS pipe failed\n", c->tag);
+		return;
+	}
+	pid = fork();
+	if (pid == 0) {
+		int cfd;
+
+		close(hold[1]);
+		while (read(hold[0], &go, 1) < 0 && errno == EINTR)
+			;
+		close(hold[0]);
+		if (go != 'g')
+			_exit(125);
+		cfd = rig_open_executive();
+		if (cfd < 0)
+			_exit(1);
+		body(cfd, c);
+		fflush(stdout);
+		close(cfd);
+		_exit(0);
+	}
+	close(hold[0]);
+	if (pid < 0) {
+		close(hold[1]);
+		printf("RIG-%s-EVAC-SUBPROCESS fork failed\n", c->tag);
+		return;
+	}
+	memset(&a, 0, sizeof(a));
+	a.child_pid = (uint32_t)pid;
+	a.flags = VMS_CREPRC_PCB_SUBPROCESS;
+	if (ioctl(fd, VMS_IOCTL_CREPRC_PCB, &a) != 0)
+		a.status = 0u;
+	printf("RIG-%s-EVAC-SUBPROCESS status=%u vms_pid=0x%08x\n", c->tag,
+	       (unsigned)a.status, (unsigned)a.vms_pid);
+	fflush(stdout);
+	while (write(hold[1], (a.status & 1u) ? "g" : "x", 1) < 0 &&
+	       errno == EINTR)
+		;
+	close(hold[1]);
+	while (waitpid(pid, &ws, 0) < 0 && errno == EINTR)
+		;
+}
+
+static void rig_evac_holder(int fd, const struct node_cfg *c)
+{
+	rig_evac_in_subprocess(fd, c, rig_evac_holder_body);
+}
+
+static void rig_evac_survivor(int fd, const struct node_cfg *c)
+{
+	rig_evac_in_subprocess(fd, c, rig_evac_survivor_body);
+}
+
 /*
  * THE RUN, in the order the proof needs.
  *
@@ -2420,6 +2904,14 @@ static int rig_poll(int fd, const struct node_cfg *c)
 		rig_xn_survival(fd, c, c->linger);
 		rig_sample_take(fd, &s);
 		rig_verdict(c, &s);   /* the SURVIVAL reading -- see above */
+	}
+
+	if (c->evac == RIG_EV_ROLE_SURVIVOR) {
+		rig_evac_survivor(fd, c);
+		rig_sample_take(fd, &s);
+		rig_verdict(c, &s);   /* the post-evacuation reading */
+	} else if (c->evac == RIG_EV_ROLE_HOLDER) {
+		rig_evac_holder(fd, c);   /* returns only if never evacuated */
 	}
 
 	if (c->remaster) {

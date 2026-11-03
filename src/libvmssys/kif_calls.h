@@ -43,7 +43,8 @@ enum kif_svc {
     KIF_SVC_BGCONN_GETNAME,
     KIF_SVC_BGCONN_SOCKOPT,
     KIF_SVC_KFE,
-    KIF_SVC_CREPRC_PCB
+    KIF_SVC_CREPRC_PCB,
+    KIF_SVC_VA              /* $EXPREG/$CRETVA/$DELTVA (rd vms-bc53) */
 };
 
 /* The transport's encoding of a service (today: the /dev/vms request word). */
@@ -71,6 +72,7 @@ static inline unsigned long kif_svc_request(enum kif_svc s)
     case KIF_SVC_BGCONN_SOCKOPT: return VMS_IOCTL_BGCONN_SOCKOPT;
     case KIF_SVC_KFE:            return VMS_IOCTL_KFE;
     case KIF_SVC_CREPRC_PCB:     return VMS_IOCTL_CREPRC_PCB;
+    case KIF_SVC_VA:             return VMS_IOCTL_VA;
     }
     return 0;
 }

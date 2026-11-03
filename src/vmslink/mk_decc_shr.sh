@@ -233,6 +233,15 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
         $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -I"$LIBVMSSYS_DIR_VF" -o "$ALPHA_VFORK_OBJ" \
         "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_vfork.c"
+    # vms-bc53: the C RTL heap's address space -- mallocng's glue (musl-arch
+    # src/malloc/mallocng/glue.h) calls ovmx$vm_expreg/ovmx$vm_deltva, which ask
+    # the executive's $EXPREG/$DELTVA through the same transport seam. No decc$
+    # universal, so the vector is unchanged.
+    ALPHA_VM_OBJ="$ALPHA_BOOT_DIR/ovmx_decc_vm.o"
+    # shellcheck disable=SC2086
+    "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+        $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -I"$LIBVMSSYS_DIR_VF" -o "$ALPHA_VM_OBJ" \
+        "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_vm.c"
     ALPHA_KIFX_OBJ="$ALPHA_BOOT_DIR/kif_transport_linux.o"
     ALPHA_KIFS_OBJ="$ALPHA_BOOT_DIR/syscall_vms.o"
     # shellcheck disable=SC2086
@@ -352,6 +361,31 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
             VEC=$(printf '%s' ",$VEC," | sed "s/,decc\\\$$_fw=PROCEDURE,/,decc\$$_fw\/ovmx_crtl_$_fw=PROCEDURE,/; s/^,//; s/,\$//")
         done
         ALPHA_VENEER_OBJ="$FD_OBJ"
+        # vms-593: the C RTL's clock and time zone (src/vmsrms/crtl_time.c). The
+        # file layer's install (ovmx_crtl_fd_install, from decc$main) turns it on:
+        # musl's time family then reads $GETUTC and the SYS$TIMEZONE_* logicals
+        # (sys$getutc/sys$trnlnm, LIBVMS$SHR --use ALPHA_CRTL_VMS_USE), never the
+        # substrate clock or TZ. No universal of its own: the vector is unchanged.
+        TIME_OBJ="$VENEER_DIR/crtl_time.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            $ALPHA_MUSL_INC -o "$TIME_OBJ" "$RMS_SRC_DIR/crtl_time.c"
+        "$NM" --defined-only "$TIME_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_time_install \
+            || { echo "mk_decc_shr: FAIL crtl_time.c did not define ovmx_crtl_time_install" >&2; exit 2; }
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $TIME_OBJ"
+        # vms-931: the C RTL's signals (src/vmsrms/crtl_signal.c), turned on by
+        # the same install: musl's signal/sigaction/sigprocmask/raise/kill/alarm/
+        # setitimer/pause system calls are served by LIB$SIGNAL + the secondary
+        # exception vector, $SETIMR/$CANTIM ASTs, $HIBER/$WAKE and $FORCEX/
+        # $DELPRC/$SUSPND/$RESUME/$GETJPIW on a VMS PID (LIBVMS$SHR, --use
+        # ALPHA_CRTL_VMS_USE), never rt_sig*/kill/setitimer. No universal of its own.
+        SIG_OBJ="$VENEER_DIR/crtl_signal.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            $ALPHA_MUSL_INC -o "$SIG_OBJ" "$RMS_SRC_DIR/crtl_signal.c"
+        "$NM" --defined-only "$SIG_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_signal_hook \
+            || { echo "mk_decc_shr: FAIL crtl_signal.c did not define ovmx_crtl_signal_hook" >&2; exit 2; }
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $SIG_OBJ"
         # vms-4ba3: DEC C fgetname, from the same layer (an RMS stream's
         # resultant spec); new to this pass, so it goes at the vector tail.
         "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF 'decc$fgetname' \
@@ -570,7 +604,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     [ -n "${ALPHA_CRTL_VMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_VMS_USE"
     [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
     # shellcheck disable=SC2086
-    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" "$ALPHA_KIFX_OBJ" "$ALPHA_KIFS_OBJ" "$ALPHA_STAT_OBJ" ${ALPHA_VENEER_OBJ:-}
+    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" "$ALPHA_VM_OBJ" "$ALPHA_KIFX_OBJ" "$ALPHA_KIFS_OBJ" "$ALPHA_STAT_OBJ" ${ALPHA_VENEER_OBJ:-}
     rm -rf "$ALPHA_BOOT_DIR"
     [ -n "${VENEER_DIR:-}" ] && rm -rf "$VENEER_DIR"
     echo "mk_decc_shr: created $OUT (alpha/EVAX)"

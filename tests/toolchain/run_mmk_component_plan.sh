@@ -98,7 +98,7 @@ C_MTH=$(line 'TCC -x c -c -ffreestanding -fno-builtin -I OVMX$INCLUDE: VMS_MATH.
 C_STR=$(line 'TCC -x c -c -ffreestanding -fno-builtin -I OVMX$INCLUDE: VMS_STRING.C -o VMS_STRING.OBJ')
 C_SNP=$(line 'TCC -x c -c -ffreestanding -fno-builtin -I OVMX$INCLUDE: VMS_SNPRINTF.C -o VMS_SNPRINTF.OBJ')
 L_LIB=$(grep -nE '^LIBR /CREATE OVMXRT.OLB VMS_MATH.OBJ VMS_STRING.OBJ VMS_SNPRINTF.OBJ$' plan1.txt | head -1 | cut -d: -f1)
-L_LNK=$(grep -nE '^LNK --executable .* -o OVMXRT.EXE OVMXRTDRV.OBJ OVMXRT.OLB$' plan1.txt | head -1 | cut -d: -f1)
+L_LNK=$(grep -nE '^LNK /EXECUTABLE=OVMXRT\.EXE/NOSYSLIB/NOSYSSHR OVMXRTDRV\.OBJ,OVMXRT\.OLB/LIBRARY,RTLIBS\.OPT/OPTIONS$' plan1.txt | head -1 | cut -d: -f1)
 
 fails=0
 need() { if [ -z "$2" ]; then echo "FAIL: $1"; fails=$((fails+1)); else echo "  PASS: $1 (plan line $2)"; fi; }
@@ -107,7 +107,7 @@ need "MMK resolved the TCC compile of VMS_MATH.C   -> VMS_MATH.OBJ"     "$C_MTH"
 need "MMK resolved the TCC compile of VMS_STRING.C -> VMS_STRING.OBJ"   "$C_STR"
 need "MMK resolved the TCC compile of VMS_SNPRINTF.C -> VMS_SNPRINTF.OBJ" "$C_SNP"
 need "MMK resolved the LIBRARIAN archive of the three runtime objects -> OVMXRT.OLB" "$L_LIB"
-need "MMK resolved the LINK of the driver against the .OLB -> OVMXRT.EXE (RTLIBS macro expanded)" "$L_LNK"
+need "MMK resolved the LINK of the driver against the .OLB -> OVMXRT.EXE (RTLIBS.OPT)" "$L_LNK"
 [ "$fails" -eq 0 ] || { echo "FAIL: MMK did not resolve the full component plan"; exit 1; }
 
 # Dependency order: every compile precedes the archive; the archive precedes the

@@ -69,6 +69,10 @@ extern "C" {
 #define CLI$_DEFAULTED      0x0003A041  /* Value came from CLD default (succ)*/
 #define CLI$_COMMA          0x0003A049  /* Value followed by ',' (success)   */
 #define CLI$_CONCAT         0x0003A051  /* Value followed by '+' (success)   */
+/* A LOCAL / POSITIONAL qualifier given on the parameter value CLI$GET_VALUE
+ * last returned (CDU PLACEMENT=). Same severity rule as PRESENT / NEGATED. */
+#define CLI$_LOCPRES        0x0003A059  /* Present on the current value (succ)*/
+#define CLI$_LOCNEG         0x0003A060  /* /NOxxx on the current value (warn) */
 
 /* ================================================================
  * Spawn flags for lib$spawn

@@ -245,7 +245,7 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 RUN . /etc/ovmx-karch.env; n=0; until [ "$n" -ge 3 ]; do \
     apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     gcc binutils make bc bison flex libssl-dev libelf-dev openssl \
-    xz-utils curl ca-certificates kmod cpio patch $KXPKG \
+    xz-utils zstd curl ca-certificates kmod cpio patch $KXPKG \
     && break; \
     n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
 done; [ "$n" -lt 3 ] && \
@@ -353,9 +353,13 @@ RUN openssl req -new -nodes -utf8 -sha256 -x509 -newkey rsa:2048 -days 2 \
 # single source of the OVMX-required option set; see its header.
 COPY distro/kernel/ovmx-x86_64.config /tmp/ovmx-x86_64.config
 COPY distro/kernel/ovmx-arm64.config /tmp/ovmx-arm64.config
+# The "diet" fragment (vms-fee) is shared by both arches and merged LAST: it
+# prunes categories OVMX never needs and sets zstd module compression, while the
+# per-arch fragment keeps the broad hardware set (see its header).
+COPY distro/kernel/ovmx-diet.config /tmp/ovmx-diet.config
 RUN . /etc/ovmx-karch.env && \
     make ARCH=$KARCH CROSS_COMPILE=$KCROSS $KDEFCONFIG && \
-    ARCH=$KARCH ./scripts/kconfig/merge_config.sh -m .config $KFRAG && \
+    ARCH=$KARCH ./scripts/kconfig/merge_config.sh -m .config $KFRAG /tmp/ovmx-diet.config && \
     make ARCH=$KARCH CROSS_COMPILE=$KCROSS olddefconfig
 
 # Hard gate: every load-bearing option MUST be enabled as expected. A future
@@ -377,6 +381,13 @@ RUN set -e; . /etc/ovmx-karch.env; \
     grep -q "^CONFIG_OVMX=y$" .config || { echo "FAIL: CONFIG_OVMX=y not set (the drivers/ovmx menu; vms-934)"; exit 1; }; \
     for sym in $(grep -h '^config OVMX_' drivers/ovmx/*/Kconfig | awk '{print $2}'); do \
         grep -q "^CONFIG_${sym}=m$" .config || { echo "FAIL: CONFIG_${sym}=m not set (in-tree OVMX module would not build; vms-934/vms-bae)"; exit 1; }; \
+    done; \
+    for opt in CONFIG_MODULE_COMPRESS_ZSTD CONFIG_MODULE_DECOMPRESS CONFIG_DEBUG_INFO_NONE; do \
+        grep -q "^${opt}=y$" .config || { echo "FAIL: ${opt} not =y -- the kernel diet (vms-fee) did not land"; exit 1; }; \
+    done; \
+    if [ "$KARCH" = x86_64 ]; then grep -q "^CONFIG_KERNEL_ZSTD=y$" .config || { echo "FAIL: CONFIG_KERNEL_ZSTD not =y (vms-fee)"; exit 1; }; fi; \
+    for opt in CONFIG_STAGING CONFIG_MEDIA_SUPPORT CONFIG_HAMRADIO CONFIG_KASAN CONFIG_PROVE_LOCKING CONFIG_DEBUG_INFO_BTF; do \
+        ! grep -q "^${opt}=" .config || { echo "FAIL: ${opt} is enabled -- the pruned category came back (vms-fee)"; exit 1; }; \
     done; \
     echo "OK: OVMX kernel .config carries every load-bearing option + CONFIG_OVMX=y and every discovered in-tree OVMX module (=m)"
 
@@ -514,6 +525,20 @@ RUN KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
     ${KCROSS}nm /kernel-out/vms.ko | grep -q ' ods2_home_parse$' || { echo "FAIL: shipped vms.ko is missing ods2_home_parse -- the kernel-resident ODS-2 codec the Files-11 ACP uses did NOT compile in (rd vms-4a8/vms-5f0, epic vms-208); acp_validate_ods2 in vmsfs_acp.c would be a dangling-symbol modpost break, not a clean build"; exit 1; }; \
     ${KCROSS}nm /kernel-out/vms.ko | grep -q ' ods2_dir_insert_blocks$' || { echo "FAIL: shipped vms.ko is missing the genuine ODS-2 edit symbols (ods2_*) the IO\$_WRITEVBLK path uses -- codec NOT compiled in (rd vms-4a8/vms-5f0)"; exit 1; }; \
     echo "OK: shipped vms.ko CARRIES the kernel-resident ODS-2 codec (ods2_home_parse + ods2_dir_insert_blocks present; the Files-11 ACP path, rd vms-4a8/vms-5f0, epic vms-208)"
+
+# Module tree (vms-fee/vms-c5f): the broad-hardware modules ride here, not in
+# vmlinuz. modules_install signs every module (MODULE_SIG_ALL), strips it
+# (INSTALL_MOD_STRIP) and zstd-compresses it (MODULE_COMPRESS_ZSTD), and runs
+# depmod. Exposed by the kernel-out stage as /modules/lib/modules/<ver>/ together
+# with the final .config, so tests/kernel-config/check_kernel_budget.sh can
+# measure the diet and prove the real-hardware driver set survived it.
+RUN . /etc/ovmx-karch.env && \
+    rm -rf /kernel-out/modules && mkdir -p /kernel-out/modules && \
+    make ARCH=$KARCH CROSS_COMPILE=$KCROSS modules_install \
+        INSTALL_MOD_PATH=/kernel-out/modules INSTALL_MOD_STRIP=1 && \
+    rm -f /kernel-out/modules/lib/modules/*/build /kernel-out/modules/lib/modules/*/source && \
+    cp .config /kernel-out/config && \
+    echo "OK: module tree $(find /kernel-out/modules -name '*.ko*' | wc -l) modules, $(du -sh /kernel-out/modules | cut -f1)"
 
 # NODEV negative-control stub (vms-165): harvest ONE real, self-contained stock
 # module from the from-source kernel to serve as "a module that loads but
@@ -876,7 +901,7 @@ RUN . /etc/ovmx-arch.env && mkdir -p /system-stage/dev /system-stage/proc /syste
     # initramfs test_syssvc_mmk_build. (Plain `cp ... SYSEXE/` form so the
     # image-parity gate's cp-line scanner sees them -- the FATAL guard is the
     # separate `test -f` block below, which the scanner ignores.)
-    cp build-static/bin/LINK.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp build-static/bin/sysexe/LINK.EXE /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/TCC.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/MMK.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     # NOTE (vms-992e): TCC's header closure (tinycc + musl <stdint.h>) is NOT

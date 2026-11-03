@@ -64,6 +64,7 @@ if(VMSSYS_SUBSTRATE STREQUAL "netbsd")
         vms_stdio.c
         vms_futex.c
         vms_kif.c
+        vms_systime.c
         kif_transport_netbsd.c
     )
 else()
@@ -98,6 +99,7 @@ else()
         vms_math.c
         vms_runtime_init.c
         vms_kif.c
+        vms_systime.c
         kif_transport_linux.c
     )
     # Alpha has no hardware integer divide and GCC's alpha backend has no

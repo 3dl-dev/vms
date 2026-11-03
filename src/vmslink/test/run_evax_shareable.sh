@@ -56,7 +56,7 @@ echo "== ROUND-TRIP: link an EVAX consumer that imports FOO via --use =="
 "$WORK/LINK.EXE" --transfer CONSUMER_PROC --use "$WORK/FOO\$SHR.EXE" \
     -o "$WORK/consumer.exe" "$FIX/shr_consumer.obj" > "$WORK/consumer.log" 2>&1
 cat "$WORK/consumer.log"
-grep -q "cross-image import 'FOO' bound to --use producer FOO\$SHR.EXE \[sv#0\]" \
+grep -q "cross-image import 'FOO' bound to shareable producer FOO\$SHR.EXE \[sv#0\]" \
     "$WORK/consumer.log" \
     || { echo "FAIL: consumer did not bind FOO to FOO\$SHR.EXE at sv#0"; exit 1; }
 echo "ok:   consumer binds FOO to the Alpha shareable FOO\$SHR.EXE at sv#0 (by vector index)"

@@ -434,6 +434,10 @@ extern "C" {
 #define SS$_UNSUPPORTED     3658    /* Unsupported operation */
 #define SS$_ACCVIO_RO       2340    /* Read-only access violation */
 #define SS$_PAGOWNVIO       492    /* Page owner violation */
+/* SS$_VASFULL (rd vms-bc53): $EXPREG found no room left in the region.
+ * Oracle: docs/oracle/alpha84-starlet-defs/SSDEF.txt; F$MESSAGE(580) ->
+ * %SYSTEM-F-VASFULL, virtual address space is full (see SS$_ILLIOFUNC above). */
+#define SS$_VASFULL         580    /* Virtual address space is full */
 #define SS$_NOSOLICIT       644    /* No solicitation */
 #define SS$_FILNOTACC       172    /* File not accessed */
 #define SS$_IVMODE          852    /* Invalid access mode */

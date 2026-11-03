@@ -1,0 +1,39 @@
+# decc-heap-linux-mmap -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the DEC C RTL heap's address space comes from the executive's \$EXPREG/\$DELTVA and is charged to PGFLQUOTA (VMS_IOCTL_VA, rd vms-bc53)";;
+        targets)      echo "vmslink/ovmx_decc_vm.c";;
+        suites_red)   echo "test_syssvc_va";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ovmx\$vm_expreg -- what DECC\$SHR's malloc calls for address space -- is routed back to a raw Linux mmap, the libc drop this item removed. The heap still gets memory, so every allocation 'works'; what goes red is everything that says the memory is VMS state: the executive charges nothing, the quota never refuses, and the 16 KB loop runs to its 64-iteration bound.";;
+        require_fail) cat <<'EOF'
+child: the executive charged the heap's 64 KB: 128 pagelets, 128 remaining
+child: a heap request past PGFLQUOTA is refused SS$_EXQUOTA by the executive
+child: 16 KB at a time, the heap gets exactly 8 before SS$_EXQUOTA
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+child: ... and nothing was charged for the refused request
+the quota child's checks all passed
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+Both follow from the one mutation. "nothing was charged for the refused
+request" asserts the charge stands at the 128 pagelets the first heap request
+should have cost; with the heap on Linux mmap that charge was never made, so it
+reads 0. "the quota child's checks all passed" is the parent's view of the same
+child exiting non-zero.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    a.region = VMS_VA_REGION_P0;$|    { extern void *mmap(void *, unsigned long, int, int, int, long); void *m = mmap(0, len, 3, 0x22, -1, 0); if (m == (void *)-1) return 0x124u; *addr = (unsigned long long)(unsigned long)m; return 1u; } /* NEGCTL decc-heap-linux-mmap */|' "$_file"
+    :
+}

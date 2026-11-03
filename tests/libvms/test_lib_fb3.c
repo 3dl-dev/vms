@@ -84,24 +84,37 @@ static void test_deltva_64(void)
 {
     printf("Testing sys$deltva_64...\n");
 
-    /* sys$expreg (32-bit) allocates real memory we can then delete
-     * through the 64-bit entry point - there's no sys$cretva_64/
-     * sys$create_region_64 yet to allocate via the 64-bit family
-     * itself (see the starlet.h doc comment). */
-    void *retadr[2];
+    /* $EXPREG/$DELTVA are the EXECUTIVE's (rd vms-bc53): it creates and
+     * deletes the pages and charges PGFLQUOTA. This host suite runs with no
+     * /dev/vms, so the honest answer is SS$_NOSUCHDEV from both -- never a
+     * userspace mmap standing in. The executive-backed round trip (create,
+     * delete through the 64-bit entry, echoed range, quota accounting) is
+     * tests/qemu/test_syssvc_va.c, against a real vms.ko. */
+    void *retadr[2] = { (void *)0x10000, (void *)0x11fff };
     uint32_t st = sys$expreg(4, retadr, 0, 0);
-    check(st == SS$_NORMAL, "sys$expreg allocates memory to delete");
-
     GENERIC_64 region_id = { 0 };
-    void *deleted_addr = NULL;
-    uint64_t deleted_len = 0;
-    uint64_t bytlen = (uint64_t)((char *)retadr[1] - (char *)retadr[0] + 1);
+    uint64_t bytlen = 0x2000;
 
-    st = sys$deltva_64(&region_id, retadr[0], bytlen, 0,
-                       &deleted_addr, &deleted_len);
-    check(st == SS$_NORMAL, "sys$deltva_64 returns SS$_NORMAL");
-    check(deleted_addr == retadr[0], "sys$deltva_64 echoes the start address");
-    check(deleted_len == bytlen, "sys$deltva_64 echoes the byte length");
+    if (st == SS$_NOSUCHDEV) {
+        check(1, "sys$expreg with no executive is SS$_NOSUCHDEV, not a userspace mmap");
+        void *deleted_addr = (void *)1;
+        uint64_t deleted_len = 1;
+        st = sys$deltva_64(&region_id, retadr[0], bytlen, 0,
+                           &deleted_addr, &deleted_len);
+        check(st == SS$_NOSUCHDEV, "sys$deltva_64 with no executive is SS$_NOSUCHDEV");
+        check(deleted_addr == (void *)1 && deleted_len == 1,
+              "... and it reports no deleted range");
+    } else {
+        check(st == SS$_NORMAL, "sys$expreg allocates memory to delete");
+        void *deleted_addr = NULL;
+        uint64_t deleted_len = 0;
+        bytlen = (uint64_t)((char *)retadr[1] - (char *)retadr[0] + 1);
+        st = sys$deltva_64(&region_id, retadr[0], bytlen, 0,
+                           &deleted_addr, &deleted_len);
+        check(st == SS$_NORMAL, "sys$deltva_64 returns SS$_NORMAL");
+        check(deleted_addr == retadr[0], "sys$deltva_64 echoes the start address");
+        check(deleted_len == bytlen, "sys$deltva_64 echoes the byte length");
+    }
 
     check(sys$deltva_64(&region_id, NULL, bytlen, 0, NULL, NULL) == SS$_BADPARAM,
           "sys$deltva_64(NULL inadr) returns SS$_BADPARAM");

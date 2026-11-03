@@ -56,6 +56,9 @@ QHANG=$(cmdline_val ovmx.qhang)
 # window. Set on exactly one node (the survivor) by the host script -- see
 # cluster_node.c section 6f.
 REMASTER=$(cmdline_val ovmx.remaster)
+# rd vms-1e58: the EVACUATION phase's role on this node (1 survivor, 2 holder;
+# cluster_node.c section 6g). Set per node by the host script.
+EVAC=$(cmdline_val ovmx.evac)
 
 [ -z "$TAG" ] && TAG=X
 [ -z "$VAXCLUSTER" ] && VAXCLUSTER=2
@@ -68,6 +71,7 @@ REMASTER=$(cmdline_val ovmx.remaster)
 [ -z "$LINGER" ] && LINGER=30
 [ -z "$QHANG" ] && QHANG=0
 [ -z "$REMASTER" ] && REMASTER=0
+[ -z "$EVAC" ] && EVAC=0
 
 echo ""
 echo "=== OVMX cluster GENESIS rig: node $TAG ($SCSNODE/$SYSID) ==="
@@ -99,6 +103,7 @@ CAPSECS=$((WINDOW + 20))
 [ "$XNODE" = "1" ] && CAPSECS=$((WINDOW + LINGER + 220))
 [ "$QHANG" = "1" ] && CAPSECS=$((WINDOW + 360))
 [ "$REMASTER" = "1" ] && CAPSECS=$((WINDOW + 220))
+[ "$EVAC" != "0" ] && CAPSECS=$((WINDOW + 540))
 if [ -x /bin/sca_l2probe ]; then
 	sca_l2probe recv eth0 "$CAPSECS" /tmp/$TAG.pcap >/tmp/cap.log 2>&1 &
 fi
@@ -132,6 +137,7 @@ cluster_node \
 	--linger="$LINGER" \
 	--qhang="$QHANG" \
 	--remaster="$REMASTER" \
+	--evac="$EVAC" \
 	> /dev/ttyS1 2>&1
 
 # ---- the executive's own transcript ------------------------------------------

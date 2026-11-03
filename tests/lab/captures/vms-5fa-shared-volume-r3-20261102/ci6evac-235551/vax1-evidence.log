@@ -1,0 +1,65 @@
+$ ! CI6EVAC-R3EVID
+$ DIRECTORY/FILE_ID/SIZE=ALL/DATE $2$DUA2:[CI6E11022355]
+
+Directory $2$DUA2:[CI6E11022355]
+
+EVAC.DAT;1           (12,1,0)                     10/36        2-NOV-2026 23:59:12.60
+
+Total of 1 file, 10/36 blocks.
+$ DUMP/HEADER/BLOCK=COUNT=0 $2$DUA2:[CI6E11022355]EVAC.DAT
+
+Dump of file $2$DUA2:[CI6E11022355]EVAC.DAT;1 on  3-NOV-2026 00:07:19.58
+File ID (12,1,0)   End of file block 10 / Allocated 36
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           255
+    Reserved area offset:                 255
+    Extension segment number:             0
+    Structure level and version:          2, 1
+    File identification:                  (12,1,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Fixed
+        File organization:                Sequential
+        Record attributes:                Implied carriage control
+        Record size:                      64
+        Highest block:                    36
+        End of file block:                10
+        End of file byte:                 192
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              64
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 <none specified>
+    Caching attribute:                    Writethrough
+    Map area words in use:                4
+    Access mode:                          0
+    File owner UIC:                       [SYSTEM]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (11,1,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    Highest block written:                36
+    Client attributes:                    None
+
+Identification area
+    File name:                            EVAC.DAT;1
+    Revision number:                      3
+    Creation date:                         2-NOV-2026 23:59:12.60
+    Revision date:                         3-NOV-2026 00:02:14.31
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+
+Map area
+    Retrieval pointers
+        Count:          3        LBN:          9
+        Count:         33        LBN:         15
+
+Checksum:                                 16311
+$ 

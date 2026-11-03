@@ -86,7 +86,7 @@ if [ "${OVMX_DECC_ARCH:-}" = alpha ]; then
     ALPHA_INCS="-I$HERE/../libvms/include -I$HERE/../libvmssys -I$HERE/../vmsprocess/include -I$HERE/../vmslnm/include -I$HERE/../vmsfs/include -I$HERE/../vmsrms/include -I$HERE/include" \
     ALPHA_DEFS="-DOVMX_HAVE_ACP" \
         exec sh "$HERE/mk_alpha_shr.sh" "$LINK_EXE" "$OUT" "$SRC" \
-            "vms_kif kif_transport_linux vms_string arch/alpha/syscall_vms arch/alpha/emutls_vms" \
+            "vms_kif vms_systime kif_transport_linux vms_string arch/alpha/syscall_vms arch/alpha/emutls_vms" \
             --use "$ALPHA_DECC_USE" --use "$ALPHA_OTS_USE"
 fi
 ARCH=${ARCH:-aarch64}

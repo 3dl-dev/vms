@@ -100,6 +100,11 @@ if [ "$LRC" -ne 0 ]; then
     exit 2
 fi
 readelf -lW "$SYSEXE/LINK.EXE" | grep -q 'INTERP' || { echo "FAIL: native LINK.EXE has no PT_INTERP (IMGACT)"; exit 1; }
+# rd vms-3cb1: the shipped linker takes the VMS LINK command only -- no build
+# flag of the host tool is in the image.
+if strings -a "$SYSEXE/LINK.EXE" | grep -E -- '--(use|library|executable|shareable|symbol-vector|transfer)\b'; then
+    echo "FAIL: native LINK.EXE carries a build flag (above): it must take the VMS LINK command only"; exit 1
+fi
 chmod +x "$SYSEXE/LINK.EXE"
 echo "-- native LINK.EXE built: PT_INTERP=IMGACT.EXE, ready to activate --"
 
@@ -130,10 +135,14 @@ echo "-- hello.o compiled: $HELLO_O_BYTES bytes --"
 echo
 echo "== ACTIVATE native LINK.EXE through IMGACT — link hello.o -> HELLO.EXE via RMS — DONE conditions 1 & 2 =="
 set +e
-"$SYSEXE/LINK.EXE" --executable \
-    --use "$SYSLIB/DECC\$SHR.EXE" --use "$SYSLIB/LIBVMS\$SHR.EXE" --use "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" \
-    --use "$SYSLIB/LIBVMSFS\$SHR.EXE" --use "$SYSLIB/LIBVMSLNM\$SHR.EXE" --use "$SYSLIB/LIBVMSRMS\$SHR.EXE" \
-    -o "$WORK/HELLO.EXE" "$WORK/hello.o" > "$WORK/link-run.out" 2>&1
+# The native LINK.EXE takes the VMS LINK command (rd vms-3cb1) from its CLI:
+# LIB$GET_FOREIGN reads VMS_FOREIGN_CMD off the executive (the no-/dev/vms
+# channel DCL uses for a foreign command). Linux paths are quoted file specs.
+VMS_FOREIGN_CMD="/EXECUTABLE=\"$WORK/HELLO.EXE\"/NOSYSLIB/NOSYSSHR \"$WORK/hello.o\",\
+\"$SYSLIB/DECC\$SHR.EXE\"/SHAREABLE,\"$SYSLIB/LIBVMS\$SHR.EXE\"/SHAREABLE,\
+\"$SYSLIB/LIBVMSPROCESS\$SHR.EXE\"/SHAREABLE,\"$SYSLIB/LIBVMSFS\$SHR.EXE\"/SHAREABLE,\
+\"$SYSLIB/LIBVMSLNM\$SHR.EXE\"/SHAREABLE,\"$SYSLIB/LIBVMSRMS\$SHR.EXE\"/SHAREABLE" \
+"$SYSEXE/LINK.EXE" > "$WORK/link-run.out" 2>&1
 RRC=$?
 set -e
 echo "-- activated LINK.EXE exit=$RRC; output (last 12 lines): --"

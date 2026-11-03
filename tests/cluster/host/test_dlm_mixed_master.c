@@ -474,6 +474,10 @@ static void mixed_up(uint8_t ovmx_wt, uint8_t vax_wt)
 	g.n_sent = 0u;
 	g.last_dst = 0u;
 	dlm_relq_init(&g.relq);
+	/* No frame of an EARLIER scenario may stand in for one this scenario
+	 * never sent (rd vms-7649: a check of g.last after a send that did not
+	 * happen read the previous scenario's frame). */
+	memset(g.last, 0, sizeof(g.last));
 	vms_local_csid = CSID_OVMX;
 
 	club_up(ovmx_wt, vax_wt);
@@ -1431,6 +1435,157 @@ static void f29f_fuzz_the_deferred_grant_entry(void)
 			"the lock is still pending after 20,000 hostile frames");
 	ct_check(admitted_ours > 0u,
 		 "  (the mutator did reach admissible frames for our handle)");
+	mixed_down();
+}
+
+/*
+ * rd vms-7649: OVMX's FILES-11 VOLUME LOCK REACHES THE VAX THAT HOLDS IT.
+ *
+ * Lab run vms-5fa (2026-11-02, tests/lab/captures/vms-5fa-shared-volume-
+ * 20261102): VAX1 MOUNTed EVAC5FA, then OVMXE MOUNTed the same volume through
+ * VAX1's MSCP server. VAX1's SDA on "F11B$vEVAC5FA     ": DIRENTR, CSID 0,
+ * "Kernel mode", "System", Lock Count 1 -- OVMX's lock never reached it. The
+ * one frame OVMXE sent for that name (lock-frames.txt, frame 4965) went to
+ * VAX2 and named UIC group 1, access mode 3, hash 0xbe1fb09f: the MOUNTing
+ * process's identity, a DIFFERENT resource, whose directory is VAX2. VAX2
+ * answered 0xf9 and OVMX mastered a second copy.
+ *
+ * The bed is the lab's: three members, the VAXes at LOCKDIRWT 1, OVMX at 0.
+ * The MOUNT path's own call (vms_lock_acp_vol_standing) runs from a process
+ * at UIC group 1, user mode -- the lab's SYSTEM -- on its own thread.
+ */
+#define E7649_NAME        "F11B$vEVAC5FA     "  /* 18 bytes, as VAX1's SDA */
+#define E7649_LAB_GROUP   1u            /* frame 4965 body[44:46]          */
+#define E7649_LAB_MODE    3u            /* frame 4965 body[46]             */
+#define E7649_LAB_HASH    0xbe1fb09fu   /* frame 4965 body[128:132]        */
+
+struct e7649_standing {
+	struct vms_proc *proc;
+	uint32_t status;
+	uint32_t lkid;
+	int remote;
+	volatile int done;
+};
+
+static void *e7649_mount_thread(void *arg)
+{
+	struct e7649_standing *r = (struct e7649_standing *)arg;
+
+	r->status = vms_lock_acp_vol_standing(r->proc, E7649_NAME, &r->lkid,
+					      &r->remote);
+	r->done = 1;
+	return NULL;
+}
+
+static void *e7649_sync_thread(void *arg)
+{
+	struct e7649_standing *r = (struct e7649_standing *)arg;
+
+	r->status = vms_lock_acp_vol_ex(r->proc, "F11B$sEVAC5FA     ",
+					&r->lkid);
+	r->done = 1;
+	return NULL;
+}
+
+static void e7649_the_volume_lock_goes_to_its_directory(void)
+{
+	struct e7649_standing r;
+	struct vms_resmaster_args rm;
+	struct vms_proc mounter;
+	pthread_t th;
+	uint32_t want_hash = 0, lab_hash = 0;
+	int i;
+
+	printf("-- rd vms-7649: OVMX's F11B$v<label> lock is the XQP's "
+	       "system-wide, kernel-mode resource, and goes to VAX1 --\n");
+	labbed_up(0u, 1u, 1u);
+	lab_proc_init(&mounter);   /* UIC group 1, user mode: the lab's SYSTEM */
+
+	/* What the identities resolve to, through the real vector. */
+	ct_check(vms_dlm_name_hash_proven((uint16_t)E7649_LAB_GROUP,
+					  (uint8_t)E7649_LAB_MODE,
+					  (const uint8_t *)E7649_NAME,
+					  (uint32_t)strlen(E7649_NAME),
+					  &lab_hash) == VMS_DLM_HASH_OK &&
+		 lab_hash == E7649_LAB_HASH,
+		 "the proven hash of the lab frame's identity (group 1, user "
+		 "mode) is the value OVMXE put on the wire");
+	ct_check_eq_u32((uint32_t)dir_node_for(E7649_NAME,
+					       (uint16_t)E7649_LAB_GROUP,
+					       (uint8_t)E7649_LAB_MODE),
+			CSID_VAX2,
+			"  and that identity's directory is VAX2 -- where the "
+			"lab's frame went");
+	ct_check_eq_u32((uint32_t)dir_node_for(E7649_NAME, 0u, 0u), CSID_VAX,
+			"the XQP's identity (system-wide, kernel) is directed "
+			"at VAX1 -- which holds the DIRENTR in the lab");
+	(void)vms_dlm_name_hash_proven(0u, 0u, (const uint8_t *)E7649_NAME,
+				       (uint32_t)strlen(E7649_NAME),
+				       &want_hash);
+
+	memset(&r, 0, sizeof(r));
+	r.proc = &mounter;
+	ct_check(pthread_create(&th, NULL, e7649_mount_thread, &r) == 0,
+		 "the MOUNT's standing NL lock runs on its own thread");
+	for (i = 0; i < 400 && g.n_sent == 0u; i++)
+		usleep(5000);
+	ct_check_eq_u32(g.n_sent, 1u, "one frame leaves this node");
+	/* negctl: dlm-7649-f11b-lock-takes-the-mounters-identity */
+	ct_check_eq_u32((uint32_t)g.last_dst, CSID_VAX,
+			"*** addressed to VAX1, the resource's directory -- not "
+			"VAX2, where the lab's went ***");
+	ct_check_eq_u32((uint32_t)g.last[VMS_OFB_DLM_RES_GROUP] |
+			((uint32_t)g.last[VMS_OFB_DLM_RES_GROUP + 1] << 8), 0u,
+			"*** naming UIC group 0, system-wide -- not the "
+			"mounter's group 1 ***");
+	ct_check_eq_u32((uint32_t)g.last[VMS_OFB_DLM_RES_MODE], 0u,
+			"*** at access mode 0, kernel -- not the mounter's "
+			"user mode ***");
+	ct_check_eq_u32(sent_dir_hash(), want_hash,
+			"  with the proven hash of THAT identity");
+
+	/* VAX1, the directory AND the master, grants the NL. */
+	ct_check(vax_grants(0u, 0x3100069au, (uint8_t)LCK_K_NLMODE) == 0,
+		 "VAX1 grants it");
+	for (i = 0; i < 400 && !r.done; i++)
+		usleep(5000);
+	if (!r.done) {
+		ct_check(0, "the MOUNT's $ENQW woke on VAX1's grant");
+		pthread_detach(th);
+		return;
+	}
+	pthread_join(th, NULL);
+	ct_check(r.status == SS__NORMAL && r.lkid != 0u && r.remote == 1,
+		 "the standing lock is held as a PROXY: VAX1 masters it");
+	read_resmaster(E7649_NAME, &rm);
+	ct_check(rm.master_csid == CSID_VAX && rm.is_local_master == 0u,
+		 "*** ONE master for the volume lock: VAX1 -- not a second "
+		 "copy on this node ***");
+	(void)vms_lock_acp_vol_release(&mounter, r.lkid);
+
+	/* ...AND THE XQP's PER-WRITE SYNC LOCK, through the same door. */
+	g.n_sent = 0u;
+	memset(&r, 0, sizeof(r));
+	r.proc = &mounter;
+	ct_check(pthread_create(&th, NULL, e7649_sync_thread, &r) == 0,
+		 "an XQP write's EX F11B$s lock runs on its own thread");
+	for (i = 0; i < 400 && g.n_sent == 0u; i++)
+		usleep(5000);
+	ct_check(g.n_sent == 1u &&
+		 ((uint32_t)g.last[VMS_OFB_DLM_RES_GROUP] |
+		  ((uint32_t)g.last[VMS_OFB_DLM_RES_GROUP + 1] << 8)) == 0u &&
+		 g.last[VMS_OFB_DLM_RES_MODE] == 0u,
+		 "*** the F11B$s request names (group 0, kernel) too ***");
+	(void)vax_grants(0u, 0x3100069bu, (uint8_t)LCK_K_EXMODE);
+	for (i = 0; i < 400 && !r.done; i++)
+		usleep(5000);
+	if (!r.done) {
+		ct_check(0, "the XQP's $ENQW woke on VAX1's grant");
+		pthread_detach(th);
+		return;
+	}
+	pthread_join(th, NULL);
+	(void)vms_lock_acp_vol_release(&mounter, r.lkid);
 	mixed_down();
 }
 
@@ -2847,6 +3002,7 @@ int main(void)
 	f29f_a_queued_enqw_wakes_on_the_masters_grant();
 	f29f_an_op02_grants_nothing_it_does_not_name();
 	f29f_fuzz_the_deferred_grant_entry();
+	e7649_the_volume_lock_goes_to_its_directory();
 
 	vax_first_then_ovmx_routes_to_the_vax();
 	with_no_entry_the_enq_masters_locally();

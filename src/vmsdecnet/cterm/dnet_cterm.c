@@ -388,16 +388,37 @@ static const uint8_t k_found_client_seg2_body_tmpl[53] = {
 };
 #define DNET_CTERM_FOUND_CLIENT_WIDTH_OFF  31
 #define DNET_CTERM_FOUND_CLIENT_PAGE_OFF   36
+/* The 12-byte IO$_SENSEMODE terminal image inside each client message:
+ * class (0x42 = DC$_TERM), type, width, devdepend (page in its high byte),
+ * devdepend2. */
+#define DNET_CTERM_SENSE_LEN               12
+#define DNET_CTERM_FOUND_CLIENT_SENSE_OFF  29
+#define DNET_CTERM_FOUND_SEG4_SENSE_OFF    10
+#define DNET_CTERM_FOUND_READCHAR_SENSE_OFF 14
+
+static int termchar_build_sense(const uint8_t *sense, uint16_t width, uint16_t page,
+                                uint8_t *buf, size_t cap, size_t *outlen);
 
 int dnet_cterm_found_client_termchar_build(uint16_t width, uint16_t page,
                                            uint8_t *buf, size_t cap,
                                            size_t *outlen)
 {
+    return termchar_build_sense(NULL, width, page, buf, cap, outlen);
+}
+
+static int termchar_build_sense(const uint8_t *sense, uint16_t width, uint16_t page,
+                                uint8_t *buf, size_t cap, size_t *outlen)
+{
     uint8_t body[sizeof(k_found_client_seg2_body_tmpl)];
 
     memcpy(body, k_found_client_seg2_body_tmpl, sizeof(body));
-    put_u16(body + DNET_CTERM_FOUND_CLIENT_WIDTH_OFF, width);
-    put_u16(body + DNET_CTERM_FOUND_CLIENT_PAGE_OFF, page);
+    if (sense)
+        memcpy(body + DNET_CTERM_FOUND_CLIENT_SENSE_OFF, sense, DNET_CTERM_SENSE_LEN);
+    else {
+        /* the captured terminal, at the given width and page */
+        put_u16(body + DNET_CTERM_FOUND_CLIENT_WIDTH_OFF, width);
+        put_u16(body + DNET_CTERM_FOUND_CLIENT_PAGE_OFF, page);
+    }
 
     return dnet_cterm_found_envelope_build(0x0035, body, sizeof(body),
                                            buf, cap, outlen);
@@ -452,6 +473,15 @@ int dnet_cterm_found_client_seg4_build(uint8_t *buf, size_t cap, size_t *outlen)
                                            buf, cap, outlen);
 }
 
+static int seg4_build_sense(const uint8_t *sense, uint8_t *buf, size_t cap, size_t *outlen)
+{
+    uint8_t body[sizeof(k_found_client_seg4_body)];
+    memcpy(body, k_found_client_seg4_body, sizeof body);
+    if (sense)
+        memcpy(body + DNET_CTERM_FOUND_SEG4_SENSE_OFF, sense, DNET_CTERM_SENSE_LEN);
+    return dnet_cterm_found_envelope_build(0x0016, body, sizeof body, buf, cap, outlen);
+}
+
 /* Client read-characteristics response body (26 bytes; oracle #53/#67/#70).
  * Body offset 2-5 is the read handle echoed from the host's 0f-00 solicit; the
  * template carries #53's 04 34 00 00 and is overwritten by the builder. The
@@ -471,8 +501,18 @@ int dnet_cterm_found_client_readchar_build(const uint8_t handle[4],
                                            uint8_t *buf, size_t cap,
                                            size_t *outlen)
 {
+    return dnet_cterm_found_client_readchar_build_sense(handle, NULL, buf, cap, outlen);
+}
+
+int dnet_cterm_found_client_readchar_build_sense(const uint8_t handle[4],
+                                                 const uint8_t *sense,
+                                                 uint8_t *buf, size_t cap,
+                                                 size_t *outlen)
+{
     uint8_t body[sizeof(k_found_client_readchar_body)];
     memcpy(body, k_found_client_readchar_body, sizeof(body));
+    if (sense)
+        memcpy(body + DNET_CTERM_FOUND_READCHAR_SENSE_OFF, sense, DNET_CTERM_SENSE_LEN);
     if (handle)
         memcpy(body + DNET_CTERM_FOUND_READCHAR_HANDLE_OFF, handle,
                DNET_CTERM_FOUND_READCHAR_HANDLE_LEN);
@@ -499,6 +539,48 @@ int dnet_cterm_found_read_data_build(const uint8_t *data, size_t len,
     body[b++] = terminator;
 
     return dnet_cterm_found_envelope_build((uint16_t)b, body, b, buf, cap, outlen);
+}
+
+int dnet_cterm_found_read_data_build_code(const uint8_t *data, size_t len,
+                                          uint8_t code,
+                                          uint8_t *buf, size_t cap, size_t *outlen)
+{
+    if (!buf || (len && !data) || code > 0x0f)
+        return DNET_CTERM_EINVAL;
+    if (len > DNET_CTERM_MAX_DATA)
+        return DNET_CTERM_EBADLEN;
+    /* body = 03 <code> 00 00 00 00 | termpos = len (LE2) | data */
+    uint8_t body[6 + 2 + DNET_CTERM_MAX_DATA];
+    size_t b = 0;
+    body[b++] = 0x03; body[b++] = code;
+    body[b++] = 0x00; body[b++] = 0x00; body[b++] = 0x00; body[b++] = 0x00;
+    put_u16(body + b, (uint16_t)len); b += 2;
+    if (len) { memcpy(body + b, data, len); b += len; }
+    return dnet_cterm_found_envelope_build((uint16_t)b, body, b, buf, cap, outlen);
+}
+
+/* Start Read FLAGS bit 13, Q: the TIMEOUT field is meaningful (pinned against
+ * a VAX host's timed LOGINOUT reads, dnet_cterm_hostfsm.h DNET_CTH_RD_TIMED). */
+#define SR_FLAG_TIMED 0x002000u
+
+int dnet_cterm_start_read_timeout(const uint8_t *buf, size_t len, unsigned *secs)
+{
+    if (secs) *secs = 0;
+    if (!buf || !secs)
+        return DNET_CTERM_EINVAL;
+    const uint8_t *body;
+    size_t body_len;
+    int rc = dnet_cterm_found_envelope_parse(buf, len, NULL, &body, &body_len, NULL);
+    if (rc != DNET_CTERM_OK)
+        return rc == DNET_CTERM_ETRUNC ? rc : DNET_CTERM_EINVAL;
+    if (body_len < 1 || body[0] != 0x02)
+        return DNET_CTERM_EINVAL;
+    if (body_len < 10)
+        return DNET_CTERM_ETRUNC;     /* MSGTYPE, FLAGS(3), MAX-LENGTH, END-OF-DATA, TIMEOUT */
+    uint32_t flags = (uint32_t)body[1] | ((uint32_t)body[2] << 8) | ((uint32_t)body[3] << 16);
+    if (flags & SR_FLAG_TIMED)
+        *secs = (unsigned)body[8] | ((unsigned)body[9] << 8);
+    return DNET_CTERM_OK;
 }
 
 /* The two write-opcode prefixes the oracle showed for host screen output. */
@@ -1249,6 +1331,14 @@ int dnet_cterm_client_found_rx(struct dnet_cterm_session *s,
     return DNET_CTERM_OK;
 }
 
+void dnet_cterm_client_set_sense(struct dnet_cterm_session *s, const uint8_t sense[12])
+{
+    if (!s || !sense)
+        return;
+    memcpy(s->client_sense, sense, DNET_CTERM_SENSE_LEN);
+    s->client_sense_set = 1;
+}
+
 int dnet_cterm_client_found_next(struct dnet_cterm_session *s,
                                  uint16_t width, uint16_t page,
                                  uint8_t *out, size_t cap, size_t *outlen)
@@ -1281,8 +1371,8 @@ int dnet_cterm_client_found_next(struct dnet_cterm_session *s,
         if (!s->found_host_config_seen)
             return DNET_CTERM_OK;
         {
-            int rc = dnet_cterm_found_client_termchar_build(width, page,
-                                                            out, cap, outlen);
+            int rc = termchar_build_sense(s->client_sense_set ? s->client_sense : NULL,
+                                          width, page, out, cap, outlen);
             if (rc != DNET_CTERM_OK) return rc;
         }
         s->width = width;
@@ -1298,7 +1388,8 @@ int dnet_cterm_client_found_next(struct dnet_cterm_session *s,
         return DNET_CTERM_OK;
     case 3:
         {
-            int rc = dnet_cterm_found_client_seg4_build(out, cap, outlen);
+            int rc = seg4_build_sense(s->client_sense_set ? s->client_sense : NULL,
+                                      out, cap, outlen);
             if (rc != DNET_CTERM_OK) return rc;
         }
         s->found_step = 4;

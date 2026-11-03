@@ -22,16 +22,16 @@
 # Phase 0 is scoped to the named canaries only; the rest of this facade class
 # is Phase 2's job.
 #
-# SET HOST is NO LONGER A STUB (vms-f54): `SET HOST <node>` now activates
-# SYS$SYSTEM:DECNETD.EXE --set-host on the caller's terminal through the
-# executive image activator (the real outbound DECnet client). On THIS host
+# SET HOST is NO LONGER A STUB (vms-f54): `SET HOST <node>` activates
+# SYS$SYSTEM:RTPAD.EXE (rd vms-0a7 S2) on the caller's terminal through the
+# executive image activator, the command recorded for its CLI$GET_VALUE. On THIS host
 # ctest runtime the image is not staged on a system disk, so it reports the
 # genuine "%SET-I-NOTAVAIL, DECnet is not available on this system" -- the same
 # text, now an HONEST not-available (the image really is not here) rather than a
 # permanent stub. That is why the node is present in the transcript: bare
 # `SET HOST` with no node is a %SET-E-NOHOST parameter error. The full
-# authenticated client path is proven over a real datalink by
-# tests/integration/decnet_set_host_live.sh.
+# authenticated client path is proven by tests/vmsdecnet/test_rtpad_session.c,
+# the booted two-node SET HOST and the live VAX capture.
 #
 # SET VOLUME's bare-no-device case (the last line of the transcript) moved
 # off the OLD facade text ("%SET-I-NOTIMPL ... requires a mounted VMSFS

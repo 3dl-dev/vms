@@ -1003,6 +1003,20 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 
 		if (!tt->passall) {
 			/* OUT-OF-BAND: acted on when TYPED, read or no read. */
+			/* A character in an armed IO$M_OUTBAND mask is the mask
+			 * owner's, whatever it is -- CTRL/Y, CTRL/C and CTRL/O
+			 * included: their own handling (the *INTERRUPT* echo, the
+			 * CTRL/Y AST, the image interrupt) does not happen (I/O
+			 * User's Reference, Terminal Driver, out-of-band ASTs).
+			 * SET HOST's RTPAD.EXE takes CTRL/Y and CTRL/C this way to
+			 * send them to the remote node (rd vms-0a7 S2). */
+			if (c < 0x20 && tt->oob[VMS_TT_OOB_OUTBAND - 1].proc &&
+			    (tt->oob[VMS_TT_OOB_OUTBAND - 1].mask & (1u << c))) {
+				/* an out-of-band character: never data, never
+				 * echoed; its AST carries it (stays armed) */
+				tt_oob_fire(tt, &tt->oob[VMS_TT_OOB_OUTBAND - 1], c);
+				continue;
+			}
 			if (c == TT_CTRL('Y') || c == TT_CTRL('C')) {
 				/*
 				 * CTRL/Y, CTRL/C (rd vms-f0fb). The driver echoes
@@ -1058,13 +1072,6 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 						tt_out(tt, "*OUTPUT ON*\r\n", 13);
 					tt->pos = TT_POS_CLEAN;
 				}
-				continue;
-			}
-			if (c < 0x20 && tt->oob[VMS_TT_OOB_OUTBAND - 1].proc &&
-			    (tt->oob[VMS_TT_OOB_OUTBAND - 1].mask & (1u << c))) {
-				/* an out-of-band character: never data, never
-				 * echoed; its AST carries it (stays armed) */
-				tt_oob_fire(tt, &tt->oob[VMS_TT_OOB_OUTBAND - 1], c);
 				continue;
 			}
 			if ((dc & VMS_TTC_TTSYNC) &&

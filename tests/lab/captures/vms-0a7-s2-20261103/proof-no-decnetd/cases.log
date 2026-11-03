@@ -1,0 +1,55 @@
+==== PROOF/copy
+COPY SYS$SYSTEM:RTPAD.EXE SYS$LOGIN:RTPAD.EXE
+
+==== PROOF/define
+DEFINE/PROCESS SYS$SYSTEM SYS$LOGIN:
+
+==== PROOF/dir
+DIRECTORY/SIZE SYS$SYSTEM:DECNETD.EXE,RTPAD.EXE
+%DIRECT-E-OPENIN, error opening SYS$SYSTEM:DECNETD.EXE as input
+-RMS-E-FNF, file not found
+
+Directory SYS$SYSTEM:[SYSMGR]
+
+RTPAD.EXE;1                                772
+
+Total of 1 file, 772 blocks.
+
+==== PROOF/control
+RUN SYS$SYSTEM:DECNETD.EXE
+%DCL-E-IVIMAGE, image not found - SYS$SYSTEM:DECNETD.EXE
+
+==== PROOF/control/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X00000910"
+
+==== PROOF/connect
+SET HOST VAXC
+
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+Username: 
+==== PROOF/remote
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+
+NODE=VAXC
+==== PROOF/logout
+LOGOUT
+
+  SYSTEM       logged out at  3-NOV-2026 01:46:22.49
+%REM-S-END,
+==== PROOF/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+==== PROOF/deassign
+DEASSIGN/PROCESS SYS$SYSTEM
+
+==== PROOF/dir-after
+DIRECTORY/SIZE SYS$SYSTEM:DECNETD.EXE
+
+Directory SYS$SYSROOT:[SYSEXE]
+
+DECNETD.EXE;1                             2050
+
+Total of 1 file, 2050 blocks.
+

@@ -98,6 +98,11 @@ TIERS = {
         ".github/workflows/ci-changes.yml",
         "tools/cross-alpha/run-syssvc-tests-alpha.sh",
         "tools/cross-alpha/alpha-syssvc-baseline.txt",
+        # The ptrace syscall audits carry per-arch register reads (#if
+        # __alpha__) that only this tier executes. vms-0a7's new audit read
+        # Alpha registers with PTRACE_GETREGSET (absent on Linux/Alpha), the
+        # queue never ran it, and main stayed red ~26h.
+        "tests/qemu/test_syssvc_*audit*.c",
         "tools/cross-alpha/build-vmsko-alpha.sh",
         "tools/cross-alpha/Dockerfile",
         "tools/ci/ci_tiers.py",

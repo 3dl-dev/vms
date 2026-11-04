@@ -3237,7 +3237,7 @@ struct vms_pql_load_args {
     uint32_t flags;                       /* in: VMS_PQL_LOAD_F_*              */
     uint32_t status;                      /* out: SS$_ status                  */
 };
-#define VMS_IOCTL_PQL_LOAD _IOWR(VMS_IOC_MAGIC, 0xc5, struct vms_pql_load_args)
+#define VMS_IOCTL_PQL_LOAD _IOWR(VMS_IOC_MAGIC, 0xc7, struct vms_pql_load_args)
 
 
 /*

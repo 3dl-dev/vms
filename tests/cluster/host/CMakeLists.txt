@@ -548,6 +548,24 @@ set_tests_properties(cluster_host_test_cluster_opa0 PROPERTIES
     TIMEOUT 30
 )
 
+# ---- rd vms-896d: an executive operator line never splits a write request ----
+# (src/kernel-core/vms_tt_oper.h, pure). OPCOM's real operator-status message
+# with "%CNXMAN,  now a VAXcluster member" arriving at every byte of it; plus
+# source checks that vms_tt.c and the NetBSD console path drive it that way.
+add_executable(test_tt_oper test_tt_oper.c)
+target_include_directories(test_tt_oper PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel-core
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_tt_oper PRIVATE
+    OVMX_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+add_test(NAME cluster_host_test_tt_oper COMMAND test_tt_oper)
+set_tests_properties(cluster_host_test_tt_oper PROPERTIES
+    LABELS "unit;cluster;cluster_host"
+    TIMEOUT 30
+)
+
 # ---- FC-P0.11: the VAXCLUSTER boot-path gate (port up) ----
 # The ONE function (src/libvms/include/cluster_boot_gate.h) ovmx_init.c's
 # start_cluster_port() calls before issuing VMS_IOCTL_CLUSTER_START, compiled
@@ -928,6 +946,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_dlm_rm_fsm.c        # rd vms-ed5
     hdr_alone_vms_cluster_emit_guard.c # E82
     hdr_alone_vms_cluster_opa0.c      # rd vms-c56
+    hdr_alone_vms_tt_oper.c           # rd vms-896d
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

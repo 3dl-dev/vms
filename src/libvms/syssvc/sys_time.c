@@ -353,24 +353,72 @@ struct timer_entry {
 static struct timer_entry timer_table[MAX_TIMERS];
 static pthread_mutex_t timer_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* Signal handler for POSIX timer expiry */
+/*
+ * THE TABLE IS NEVER TOUCHED WITH THE TIMER SIGNAL DELIVERABLE (rd vms-2a84).
+ * The expiry handler runs the request's AST, and an AST may queue a timer --
+ * a timer re-armed from its own AST is the common shape (NETACP's, the
+ * dir_writers suite's). sys$setimr used to arm the host timer while it held
+ * timer_mutex: a timer that expired before the unlock ran its AST right there,
+ * in the same thread, and the AST's sys$setimr waited for the mutex its own
+ * thread held, for ever (the logger of test_syssvc_rms_dir_writers, merge-queue
+ * run 41917160473). So every holder of timer_mutex blocks SIGRTMIN first and
+ * restores it after the unlock: the AST runs once the service has returned,
+ * which is when VMS delivers it. The handler, which runs with SIGRTMIN
+ * blocked, may then take the mutex itself.
+ */
+static void timer_sig_block(sigset_t *old)
+{
+    sigset_t s;
+
+    sigemptyset(&s);
+    sigaddset(&s, SIGRTMIN);
+    sigprocmask(SIG_BLOCK, &s, old);
+}
+
+static void timer_sig_restore(const sigset_t *old)
+{
+    sigprocmask(SIG_SETMASK, old, NULL);
+}
+
+/*
+ * Signal handler for POSIX timer expiry. AN EXPIRED REQUEST IS GONE (rd
+ * vms-2a84): its host timer is deleted here, before the AST runs. It used to be
+ * kept until the process exited, each one holding a signal-queue entry the
+ * substrate charges against a per-user limit, so after ~1,500 expiries $SETIMR
+ * failed SS$_INSFMEM and an AST-re-armed timer simply stopped. A VMS timer
+ * request that has fired holds no quota. The slot is freed first, so the AST
+ * may reuse it.
+ */
 static void timer_signal_handler(int sig, siginfo_t *si, void *uc) {
     (void)sig; (void)uc;
 
     struct timer_entry *te = (struct timer_entry *)si->si_value.sival_ptr;
-    if (!te || !te->active) return;
+    uint32_t efn, astprm;
+    void (*astadr)(uint32_t);
+
+    if (!te) return;
+
+    pthread_mutex_lock(&timer_mutex);
+    if (!te->active) {                  /* cancelled: $CANTIM got there first */
+        pthread_mutex_unlock(&timer_mutex);
+        return;
+    }
+    efn = te->efn;
+    astadr = te->astadr;
+    astprm = te->astprm;
+    timer_delete(te->timerid);
+    te->active = 0;
+    pthread_mutex_unlock(&timer_mutex);
 
     /* Set the event flag */
-    if ((te->efn & 0xFFu) < 128) {
-        sys$setef(te->efn);
+    if ((efn & 0xFFu) < 128) {
+        sys$setef(efn);
     }
 
     /* Call the AST routine */
-    if (te->astadr) {
-        te->astadr(te->astprm);
+    if (astadr) {
+        astadr(astprm);
     }
-
-    te->active = 0;
 }
 
 static pthread_once_t timer_once = PTHREAD_ONCE_INIT;
@@ -626,6 +674,8 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
 
     init_timer_signals();
 
+    sigset_t sig_old;
+    timer_sig_block(&sig_old);         /* its AST runs after the return */
     pthread_mutex_lock(&timer_mutex);
 
     /* Find a free timer slot */
@@ -638,6 +688,7 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
     }
     if (slot < 0) {
         pthread_mutex_unlock(&timer_mutex);
+        timer_sig_restore(&sig_old);
         return SS$_EXQUOTA;
     }
 
@@ -658,6 +709,7 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
     if (timer_create(CLOCK_REALTIME, &sev, &te->timerid) < 0) {
         te->active = 0;
         pthread_mutex_unlock(&timer_mutex);
+        timer_sig_restore(&sig_old);
         return SS$_INSFMEM;
     }
 
@@ -678,8 +730,10 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
         /* Absolute time - convert from VMS to Unix */
         struct timespec abs_ts;
         if (vms_to_unix_time((uint64_t)signed_time, &abs_ts) < 0) {
+            timer_delete(te->timerid);
             te->active = 0;
             pthread_mutex_unlock(&timer_mutex);
+            timer_sig_restore(&sig_old);
             return SS$_BADPARAM;
         }
         its.it_value = abs_ts;
@@ -690,10 +744,12 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
         timer_delete(te->timerid);
         te->active = 0;
         pthread_mutex_unlock(&timer_mutex);
+        timer_sig_restore(&sig_old);
         return SS$_BADPARAM;
     }
 
     pthread_mutex_unlock(&timer_mutex);
+    timer_sig_restore(&sig_old);
     return SS$_NORMAL;
 #endif /* OVMX_HOST_POSIX_TIMERS */
 }
@@ -708,6 +764,8 @@ uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
     (void)acmode;
 
 #if OVMX_HOST_POSIX_TIMERS
+    sigset_t sig_old;
+    timer_sig_block(&sig_old);
     pthread_mutex_lock(&timer_mutex);
     for (int i = 0; i < MAX_TIMERS; i++) {
         if (timer_table[i].active &&
@@ -717,6 +775,7 @@ uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
         }
     }
     pthread_mutex_unlock(&timer_mutex);
+    timer_sig_restore(&sig_old);
 #else
     {
         uint64_t old = vt_block();

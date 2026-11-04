@@ -1,0 +1,30 @@
+# setimr-expired-timer-kept -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "an expired \$SETIMR request is gone: its host timer is deleted when it fires, so a process can queue timers for ever without running out (rd vms-2a84)";;
+        targets)      echo "libvms/syssvc/sys_time.c";;
+        suites_red)   echo "test_syssvc_setimr_ast_rearm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The expiry handler deletes the request's POSIX timer before it runs the AST. The mutation keeps it. Every live POSIX timer holds a signal-queue entry charged against the user's RLIMIT_SIGPENDING, so after about 1,500 expiries (measured 1477 in the QEMU guest) timer_create fails and \$SETIMR returns SS\$_INSFMEM. The sequence subprocess's 10000 timers stop there. The rearm subprocess queues 8000, so its chains stop too (knock-on), but nothing deadlocks.";;
+        require_fail) cat <<'EOF2'
+*** expired $SETIMR requests hold nothing: 10000 timers in a row all succeed ***
+  and every one of their ASTs ran
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+  and every re-armed chain ran to its end
+EOF2
+                      ;;
+        knock_on_why)  echo "The rearm subprocess's 2000 rounds of four timers run past the same limit; its \$SETIMR fails SS\$_INSFMEM and the chain it was in stops.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    timer_delete(te->timerid);$|    /* NEGCTL setimr-expired-timer-kept */|' "$_file"
+    :
+}

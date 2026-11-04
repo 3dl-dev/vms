@@ -415,6 +415,13 @@ if(BUILD_TESTS)
     set_tests_properties(tcpip_posture_guard PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # rd vms-a6b: the TELNET session loop and the TCP/IP client engine use only
+    # VMS system services -- no poll()/select()/read() on a Linux fd.
+    add_test(NAME telnet_no_libc_wait
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_telnet_no_libc_wait.sh)
+    set_tests_properties(telnet_no_libc_wait PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # rd vms-4ff: an emulated x86 OVMX node must tell the kernel not to verify
     # the 8254-to-IO-APIC wiring. check_timer()'s timer_irq_works() demands 5
     # serviced IRQ0 ticks inside a window bounded in TSC CYCLES -- i.e. ~18 ms
@@ -942,6 +949,18 @@ if(BUILD_TESTS)
     set_tests_properties(qemu_harness_verdict PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
 
+    # The corpus runtime's reply protocol cannot lose sync with the boot task
+    # (vms-84e). init.sh polled the reply FIFO with `read -t`, which drops the
+    # bytes it read when its deadline lapses mid-line, and the corpus reported
+    # "rc=" (empty) for a program that had passed. This runs init.sh's own
+    # corpus loop against a boot task that splits its RC line, plus the boot
+    # task's budgeted wait (tests/qemu/ovmx_wait_budget.h). No QEMU.
+    add_test(NAME qemu_corpus_rt_reply_protocol
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_corpus_rt_reply_protocol.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(qemu_corpus_rt_reply_protocol PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
+
     # Userspace service register (vms-5b4): every sys$ service either reaches
     # the executive or is declared, against an item, as answering from
     # userspace. The census asks "is this vms_kif wrapper called?" and cannot
@@ -1140,22 +1159,15 @@ if(BUILD_TESTS)
     # positive-only, which is the state the tree was in before a negative value
     # was reachable through F$IDENTIFIER at all.
     #
-    # TIMEOUT derived, not guessed, and the measurement says under WHAT LOAD --
-    # which is the half that is usually missing. MEASURED on workshop
-    # 2026-08-05: 7-8s wall-clock serialized (invoked directly, and under ctest
-    # with nothing else running), 14s with a second full ctest running
-    # concurrently. One sandbox configure plus four builds of the vmsdcl target.
-    # 120 is ~8.5x the loaded figure. A bare "8s" would have been true and
-    # would have overstated the margin by 2x, because this suite's cost is
-    # dominated by compiler contention rather than by its own work -- the same
-    # effect that took the per-facility negctl job from 27m to >60m and killed
-    # it (rd vms-86a). If this is ever approached, measure and record it here
-    # rather than doubling it blind (the lesson rd vms-008 charged to
-    # terminal_identity_negctl, where a never-derived 120 was killing a
-    # PASSING test).
+    # COST (rd vms-797c): the mutants reuse THIS build tree's vmsdcl objects,
+    # libraries and link line and recompile only dcl_cmd_show.c, so a run is
+    # ~1.5s and writes under 1MB of scratch. The old sandbox rebuilt the whole
+    # dependency chain (15s alone, 73-82s with 24 concurrent runs, against the
+    # 120 TIMEOUT) and leaked a ~32MB tree whenever ctest killed it. TIMEOUT
+    # is unchanged at 120.
     add_test(NAME show_symbol_longword_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_symbol_longword_negctl.sh
-                ${CMAKE_CURRENT_SOURCE_DIR})
+                ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_BINARY_DIR})
     set_tests_properties(show_symbol_longword_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
 
@@ -1314,7 +1326,10 @@ if(BUILD_TESTS)
     # quorum lost, no/granted/mistimed NOQUEUE probe, takeover off seq+1, no
     # REMOVE_NODE, unwindowed console) and the real run16 hand-run capture,
     # which must FAIL only criterion 4 (it ran no NOQUEUE probe). Also checks
-    # the fire subcommand's dry-run console order. Hermetic: no pod.
+    # the fire subcommand's dry-run console order. rd vms-6731: the SETUP
+    # node-clock check (clock.txt; a misaligned bed is a SETUP FAULT and C3 is
+    # UNGRADED) and console_stamp.py, lab-console.sh stamp's in-pod half.
+    # Hermetic: no pod.
     add_test(NAME lab_ci6_evac_grade
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_ci6_evac_grade.sh)
     set_tests_properties(lab_ci6_evac_grade PROPERTIES

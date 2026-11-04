@@ -209,6 +209,11 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     gcc -O2 -Wall -I/repo/src/vmsfs/include -I/repo/tests/qemu -o /work/mk_imgact \
         /repo/tests/qemu/mkimage_ods2_imgact.c $ODS2CC
     /work/mk_imgact /work/tests/ods2_imgact.img 1
+    # VDA700: (vdh) the cluster-factor-3 volume test_syssvc_acp_cluster3 extends a
+    # file on (rd vms-563; on x86/aarch64 it is the virtio-scsi SDA0:).
+    gcc -O2 -Wall -I/repo/src/vmsfs/include -I/repo/tests/ods2 -o /work/mk_cluster3 \
+        /repo/tests/qemu/mkimage_ods2_cluster3.c $ODS2CC
+    /work/mk_cluster3 /work/tests/ods2_cluster3.img
     # DKA300: the SYS$SYSTEM sysvol carrying the REAL SYSUAF/RIGHTSLIST. The
     # product subject images (TCC/LIBRARIAN/LINK/DECC$SHR) are x86 build
     # artifacts not present in this cross env; stage the DAT records the login/
@@ -340,6 +345,8 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # rd vms-3ea: a SECOND copy of the OVMXSEARCH volume on DKA600: -- the
     # same-label unit test_syssvc_acp_volalrmnt (its $MOUNT) must refuse.
     cp /work/tests/ods2_search.img /work/d6.img
+    # rd vms-563: the cluster-factor-3 volume on VDA700: (vdh, the eighth function).
+    cp /work/tests/ods2_cluster3.img /work/d7.img
 
     echo "== boot qemu-system-alpha -M clipper, timeout ${BT}s =="
     # NO NIC: on clipper, a virtio-net-pci alongside the 5 virtio-blk fixture
@@ -359,6 +366,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
         -drive file=/work/d4.img,format=raw,if=none,id=d4 \
         -drive file=/work/d5.img,format=raw,if=none,id=d5 \
         -drive file=/work/d6.img,format=raw,if=none,id=d6 \
+        -drive file=/work/d7.img,format=raw,if=none,id=d7 \
         -device virtio-blk-pci,drive=d0,addr=0x3.0x0,multifunction=on \
         -device virtio-blk-pci,drive=d1,addr=0x3.0x1 \
         -device virtio-blk-pci,drive=d2,addr=0x3.0x2 \
@@ -366,6 +374,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
         -device virtio-blk-pci,drive=d4,addr=0x3.0x4 \
         -device virtio-blk-pci,drive=d5,addr=0x3.0x5 \
         -device virtio-blk-pci,drive=d6,addr=0x3.0x6 \
+        -device virtio-blk-pci,drive=d7,addr=0x3.0x7 \
         2>&1 | tee /work/syssvc-boot.raw \
         | grep -avE "TSUNAMI machine check|tsunami_(read|write)" || true
     grep -avE "TSUNAMI machine check|tsunami_(read|write)" /work/syssvc-boot.raw > /work/syssvc-boot.log || true

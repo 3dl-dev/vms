@@ -229,7 +229,10 @@ DNET_BROKER_API int dnet_broker_call(const struct dnet_broker_io *io,
  * a _NET: $QIO: op = DNET_BROKER_OP_* (| DNET_BROKER_OPF_NOW for a RECV).
  *   OPEN : in = the NCB text (NODE"user password account"::"object"); on
  *          success the NETACP-issued link handle is kept in bc->handle.
- *   SEND : in = the message; *xfer = bytes accepted.
+ *   SEND : in = the message; *xfer = bytes accepted. While the link's NSP
+ *          transmit queue is full (the remote has not acknowledged, or has
+ *          stopped us) NETACP answers ENDOFFILE and the client offers the
+ *          message again; a dead remote ends it ABORT (rd vms-985).
  *   RECV : out = the next message (*xfer = its length). Without OPF_NOW the
  *          client waits (re-asking NETACP) until a message or a link failure
  *          arrives; with OPF_NOW an empty link completes ENDOFFILE at once.

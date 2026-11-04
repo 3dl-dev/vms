@@ -78,6 +78,9 @@ vms_codec_status_t vms_dlm_enq_request_parse_body(const uint8_t *body, uint32_t 
 		return VMS_CODEC_E_CLASS;
 
 	out->mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	/* body[28:30], the requester's $ENQ options as received (rd vms-1e58
+	 * C4; only VMS_DLM_REQ_FLAG_NOQUEUE is grounded -- see the header). */
+	out->req_flags = vms_wire_get_le16(&v, VMS_OFB_DLM_REQ_FLAGS);
 	out->req_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
 	out->master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
 	/* body[20:24] is ONE cell carrying one of two things, and a RECEIVER
@@ -180,6 +183,10 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, opcode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, req->mode);
+	/* rd vms-d63: body[28:30] is the caller's $ENQ flags in the LCK$M_
+	 * encoding (struct vms_dlm_enq_request), on a new request. */
+	if (opcode == VMS_DLM_WIREOP_ENQ && req->req_flags != 0u)
+		vms_wire_put_le16(&w, VMS_OFF_DLM_REQ_FLAGS, req->req_flags);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req->req_lkid);
 	/* The master's handle when the master has named one, and the requesting
 	 * process's id until then (the struct's census note). One cell, two
@@ -189,8 +196,9 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 			  req->master_lkid != 0u ? req->master_lkid
 						 : req->req_pid);
 	/*
-	 * body[128:132] ONLY when the caller holds a WIRE-LEARNED hash for this
-	 * root name. No `else` branch, on purpose: a zero written here would be
+	 * body[128:132] ONLY when the caller holds a hash for this resource --
+	 * learned off the wire or computed by the proven function, for a root
+	 * name or (rd vms-d63) a sub-resource. No `else` branch, on purpose: a zero written here would be
 	 * a hash nobody derived, the directory node would scan the wrong chain,
 	 * miss the name, and install US as master of a resource somebody else
 	 * already masters -- the campaign's 35/s grant storm (FC-P4.1 §3).
@@ -674,6 +682,52 @@ vms_codec_status_t vms_dlm_enq_response_build_queued(const uint8_t *req_body,
 }
 
 /*
+ * A MASTER'S DENY of a NOQUEUE first ENQ (rd vms-1e58 C4) -- the request
+ * echoed, the category made a response, body[28:32] cleared and the NOTQUEUED
+ * record at body[32:36]. Every figure: the header's declaration.
+ */
+vms_codec_status_t vms_dlm_enq_response_build_notqueued(const uint8_t *req_body,
+							uint32_t req_len,
+							uint8_t *frame,
+							uint32_t cap,
+							uint32_t *written)
+{
+	vms_wire_view_t v;
+	vms_wire_buf_t w;
+	uint8_t cat, op;
+
+	if (req_body == (const uint8_t *)0 || req_len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, req_body, req_len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_ENQ)
+		return VMS_CODEC_E_CLASS;
+	/* A sub-lock's deny names the master's own S0 address at body[40:44]:
+	 * not a value this executive holds, so no answer is composed for it. */
+	if (dlm_req_names_parent(&v))
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
+			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
+	/* body[28:32]: cleared on the real root denies -- the requested mode
+	 * included, because no lock of that mode exists. */
+	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_FLAG, 0u);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_NOTQUEUED_REC_VAL);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+/*
  * A CONVERT (op 0x07) the master QUEUED (rd vms-cab). GROUNDED from real
  * VAX<->VAX traffic (2026-10-09 lab captures ev11/ev13/e8b-refire/m4): a real
  * VMS master answers a queued conversion AT ONCE with the request echoed, the
@@ -895,6 +949,24 @@ int vms_dlm_shape_fit_for_any_member(const uint8_t *body, uint32_t len)
 		return dlm_names_for_directory(&v, op) &&
 		       vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN) != 0u &&
 		       vms_wire_view_ok(&v);
+	/*
+	 * rd vms-fdeb: THE MASTER'S DIRECTORY RE-REGISTRATION, op 0x0d. A real
+	 * VMS master sends one to the directory node of every root resource it
+	 * masters after the coordinator's release 4 of a transition (18 of 18
+	 * real sender-transitions in tests/lab/captures), and the directory
+	 * answers each 82/0d (1487 of 1487 real answers). Without it a real
+	 * directory holds no entry for a resource OVMX masters after any
+	 * transition and makes the next requester a second master. Admitted on
+	 * SHAPE: a name of 1..31 bytes, which vms_dlm_dir_reg_build always
+	 * writes (body[12:16] is the connection manager's, stamped after this
+	 * gate, exactly as for the op-0x04 removal above).
+	 */
+	if (op == VMS_DLM_WIREOP_REBUILD) {
+		uint8_t nlen = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
+
+		return vms_wire_view_ok(&v) && nlen != 0u &&
+		       nlen < VMS_DLM_NAME_MAX;
+	}
 	/*
 	 * THE op-0x14 THIS NODE SENDS once it has adopted a tree (rd vms-ed5).
 	 * It faces a real VMS member BY DEFINITION -- the old master and the
@@ -1234,6 +1306,46 @@ vms_codec_status_t vms_dlm_dir_answer_parse_body(const uint8_t *body,
 	return VMS_CODEC_OK;
 }
 
+/*
+ * rd vms-fdeb: THE DIRECTORY'S ANSWER TO A MASTER'S op-0x0d. 1487 of 1487 real
+ * 82/0d answers in tests/lab/captures (every pair matched by its transaction)
+ * are the request echoed byte for byte except the envelope body[0:4], the
+ * category body[8] (0x82) and body[34] = 0xf9 -- so the identity is read back
+ * at the request's own four positions, and body[34] is returned as read.
+ */
+vms_codec_status_t vms_dlm_dir_reg_answer_parse_body(const uint8_t *body,
+						     uint32_t len,
+						     struct vms_dlm_dir_reg *out,
+						     uint8_t *stamp)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_dir_reg r;
+	vms_codec_status_t st;
+	uint8_t cat, op, s;
+	uint16_t one;
+
+	if (out == (struct vms_dlm_dir_reg *)0 || stamp == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	one = vms_wire_get_le16(&v, VMS_OFB_DLM_REBUILD_INV1);
+	r.dlm_seq = vms_wire_get_le16(&v, VMS_OFB_DLM_REBUILD_TYPE);
+	s = vms_wire_get_u8(&v, VMS_OFB_DLM_RESULT_STAMP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (!vms_wire_is_response(cat) ||
+	    (cat & 0x7fu) != VMS_DLM_CAT_REQUEST ||
+	    op != VMS_DLM_WIREOP_REBUILD || one != VMS_DLM_REBUILD_INV1_CONST)
+		return VMS_CODEC_E_CLASS;
+	st = dlm_answer_ident(&v, &r.id);
+	if (st != VMS_CODEC_OK)
+		return st;
+	*out = r;
+	*stamp = s;
+	return VMS_CODEC_OK;
+}
+
 vms_codec_status_t vms_dlm_dir_answer_build(const uint8_t *req_body,
 					    uint32_t req_len, uint8_t status,
 					    uint32_t master_csid,
@@ -1481,6 +1593,18 @@ vms_codec_status_t vms_dlm_deq_parse_body(const uint8_t *body, uint32_t len,
 	 * there for every held mode NL..EX -- so the parse side hands the
 	 * caller what the frame carried and nothing else. */
 	d.rel_cell = vms_wire_get_u8(&v, VMS_OFB_DLM_DEQ_REL_CELL);
+	/* rd vms-d63: a release marked 1 carries the value block it writes at
+	 * body[36:52]; one marked anything else carries a stale buffer there,
+	 * which is never read as a block. */
+	d.write_valblk = (uint8_t)(d.rel_cell == VMS_DLM_DEQ_REL_CELL_VALBLK);
+	{
+		uint32_t i;
+
+		for (i = 0u; i < 16u; i++)
+			d.valblk[i] = d.write_valblk
+				? vms_wire_get_u8(&v, VMS_OFB_DLM_VALBLK + i)
+				: 0u;
+	}
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 
@@ -1515,8 +1639,23 @@ vms_codec_status_t vms_dlm_deq_build(const struct vms_dlm_deq *d,
 	 * caller's `rel_cell` is deliberately NOT consulted: it is what an
 	 * inbound release carried, and echoing it would put a peer's byte on
 	 * this node's wire. */
-	vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL2, VMS_DLM_DEQ_REL_CELL);
+	/* rd vms-d63: a release that WRITES its value block carries the cell 1
+	 * (at both places) and the block at body[36:52] -- the form 1,472 of
+	 * 1,496 real writing releases had their block stored by the master
+	 * with (vms_cluster_codec_dlm.h, struct vms_dlm_deq). */
+	if (d->write_valblk) {
+		uint32_t i;
+
+		vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL,
+				VMS_DLM_DEQ_REL_CELL_VALBLK);
+		vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL2,
+				VMS_DLM_DEQ_REL_CELL_VALBLK);
+		for (i = 0u; i < 16u; i++)
+			vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK + i, d->valblk[i]);
+	} else {
+		vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);
+		vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL2, VMS_DLM_DEQ_REL_CELL);
+	}
 	/* The name span is deliberately left untouched: a real DEQ carries
 	 * no resource name, so writing one would be adding a field the
 	 * reference does not have. */

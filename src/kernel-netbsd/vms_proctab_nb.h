@@ -400,6 +400,33 @@ struct vms_creprc_pcb_args {
 #define VMS_IOCTL_CREPRC_PCB _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x9a, struct vms_creprc_pcb_args)
 
 /*
+ * $CREPRC's creation record (rd vms-416d; kernel-core/vms_proctab.c,
+ * vms_ioctl_creprc_sync). The creator and the task it forked synchronise
+ * through this executive object -- never a host pipe. ARRIVE and HOLD may be
+ * issued by a task with no PCB (the forked task, the detach intermediate); they
+ * do not make it one.
+ */
+#define VMS_CREPRC_SYNC_OPEN    1u  /* creator: out rec                                */
+#define VMS_CREPRC_SYNC_ARRIVE  2u  /* task: names itself; waits; out value=PCB status, vms_pid */
+#define VMS_CREPRC_SYNC_ACCEPT  3u  /* creator: in pid=fork child to watch; out pid=task */
+#define VMS_CREPRC_SYNC_ANSWER  4u  /* creator: in value=PCB status, vms_pid            */
+#define VMS_CREPRC_SYNC_HOLD    5u  /* detach intermediate: in pid=grandchild to watch   */
+#define VMS_CREPRC_SYNC_REPORT  6u  /* task: in value=creation status                    */
+#define VMS_CREPRC_SYNC_RESULT  7u  /* creator: out value=the task's report              */
+#define VMS_CREPRC_SYNC_CLOSE   8u  /* creator                                           */
+struct vms_creprc_sync_args {
+    uint32_t op;        /* in: VMS_CREPRC_SYNC_*                                 */
+    uint32_t rec;       /* in/out: the record                                    */
+    uint32_t pid;       /* in/out: substrate pid (see the op)                    */
+    uint32_t value;     /* in/out: a posted status (see the op)                  */
+    uint32_t vms_pid;   /* in/out: the new process's VMS PID                     */
+    uint32_t status;    /* out: SS$_ status of the op (SS$_ABORT: the other side
+                         * died or gave up)                                      */
+    uint32_t pad[2];
+};
+#define VMS_IOCTL_CREPRC_SYNC _IOWR(VMS_PROCTAB_IOC_MAGIC, 0xc6, struct vms_creprc_sync_args)
+
+/*
  * VMS_IOCTL_DASSGN (vms-329) -- $DASSGN, release one assigned channel. Also
  * missing here, and also needed by the shared ACP client: imgact_acp.c and the
  * RMS ACP arm $DASSGN every channel they take, and PID 1's boot bridge stages
@@ -670,6 +697,8 @@ _Static_assert(sizeof(struct vms_brkauth_args) == 8,
                "vms_brkauth_args layout changed: VMS_IOCTL_BRKAUTH ABI break");
 _Static_assert(sizeof(struct vms_creprc_pcb_args) == 64,
                "vms_creprc_pcb_args layout changed: VMS_IOCTL_CREPRC_PCB ABI break");
+_Static_assert(sizeof(struct vms_creprc_sync_args) == 32,
+               "vms_creprc_sync_args layout changed: VMS_IOCTL_CREPRC_SYNC ABI break");
 _Static_assert(sizeof(struct vms_procctl_args) == 16,
                "vms_procctl_args layout changed: VMS_IOCTL_PROCCTL ABI break");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,

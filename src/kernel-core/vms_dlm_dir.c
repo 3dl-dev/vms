@@ -277,6 +277,27 @@ enum vms_dlm_dir_outcome vms_dlm_dir_lookup_directed(struct vms_dlm_dir *d,
 {
 	const struct vms_dlm_dir_entry *e;
 
+	/* rd vms-966e: the vector, read now, places the name's directory at
+	 * another member -- the requester itself (r3, r5) or a third member
+	 * (r10) -- and this table names the requester the master: the entry's
+	 * own answer, nothing recorded (header). Any other table state is an
+	 * undirected lookup like every other. */
+	if (directed_here == VMS_DLM_DIR_AT_REQUESTER ||
+	    directed_here == VMS_DLM_DIR_ELSEWHERE) {
+		if (d != (struct vms_dlm_dir *)0 &&
+		    id != (const struct vms_dlm_res_ident *)0 &&
+		    out_master != (vms_csid_t *)0 && requester != 0u) {
+			e = vms_dlm_dir_find(d, id);
+			if (e != (const struct vms_dlm_dir_entry *)0 &&
+			    e->master == requester) {
+				*out_master = requester;
+				d->answered_you++;
+				d->answered_at_requester++;
+				return VMS_DLM_DIR_ANSWER_YOU;
+			}
+		}
+		directed_here = 0;
+	}
 	if (directed_here)
 		return vms_dlm_dir_lookup(d, id, requester, self, out_master);
 	if (d == (struct vms_dlm_dir *)0 || id == (const struct vms_dlm_res_ident *)0 ||

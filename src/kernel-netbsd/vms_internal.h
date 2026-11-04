@@ -135,6 +135,7 @@
 #define SS__IVCHAN    316          /* SS$_IVCHAN -- invalid I/O channel */
 #define SS__IVDEVNAM  324          /* SS$_IVDEVNAM -- invalid device name */
 #define SS__NOSUCHDEV 2312         /* SS$_NOSUCHDEV -- no such device available */
+#define SS__IVTIME    388          /* SS$_IVTIME -- $SETIME of a delta time (rd vms-642) */
 /*
  * Cluster port/SCS subset (FC-P2.4). Values match src/kernel/vms_internal.h
  * exactly and are the ones src/libvms/include/ssdef.h already ships for those
@@ -665,9 +666,10 @@ extern uint32_t vms_local_csid;
 /* What a deleted process's creator is told (rd vms-9f32), captured at the claim. */
 struct vms_termination {
 	uint32_t owner_vms_pid, vms_pid, linux_pid, condition;
-	uint8_t  has_status, compl_armed, compl_acmode, pad;
+	uint8_t  has_status, compl_armed, compl_acmode, handed_on;
 	uint32_t compl_parent_pid, compl_efn;
 	uint64_t compl_astadr, compl_astprm;
+	uint32_t owner_linux_pid, compl_parent_linux_pid; /* rd vms-e70f */
 };
 
 struct vms_termrec {
@@ -793,6 +795,8 @@ struct vms_proc {
 	 */
 	uint32_t            exit_status;
 	uint8_t             has_exit_status;
+	uint8_t             has_inh_status;   /* rd vms-ff24 */
+	uint32_t            inh_status;
 	uint8_t             cli_present;
 	uint16_t            cli_length;
 	char                cli_command[VMS_CLI_CMDLINE_SIZE];
@@ -832,6 +836,7 @@ struct vms_proc {
 	uint8_t             compl_armed;
 	uint8_t             compl_acmode;
 	uint32_t            compl_parent_pid;
+	uint32_t            compl_parent_linux_pid; /* rd vms-e70f */
 	uint32_t            compl_efn;
 	uint64_t            compl_astadr;
 	uint64_t            compl_astprm;
@@ -840,6 +845,7 @@ struct vms_proc {
 	 * records of this process's ended subprocesses. Same field set and
 	 * meaning as src/kernel/vms_internal.h. Guarded by vms_proc_hash_lock. */
 	uint32_t            owner_vms_pid;
+	uint32_t            owner_linux_pid;  /* the creating task (rd vms-e70f) */
 	struct vms_termrec  termrec[VMS_TERMREC_MAX];
 	uint32_t            termrec_next;
 
@@ -1123,6 +1129,14 @@ long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg);
+
+/* ----------------------------------------------------------------
+ * System time (rd vms-642) -- DEFINED in src/kernel-core/vms_systime.c.
+ * ---------------------------------------------------------------- */
+void vms_systime_init(void);
+void vms_systime_cleanup(void);
+uint64_t vms_systime_now(void);
+long vms_ioctl_systime(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_power(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_netcfg(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);
@@ -1154,6 +1168,8 @@ long vms_ioctl_mbx_chkacc(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_proc_access_identity(const struct vms_proc *caller, uint32_t vms_pid,
                                   uint32_t *uic, uint64_t *privs);
 int  vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
+/* $GETDVI of a mailbox unit (rd vms-a66e; vms_mbx.c) */
+uint32_t vms_mbx_devinfo(const char *devnam, struct vms_devinfo *info);
 void vms_mbx_release_all(struct vms_proc *proc);
 
 /* ----------------------------------------------------------------
@@ -1176,7 +1192,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
  * EX-mode $ENQ on a per-volume resource, enqueued directly in the caller's
  * ioctl context (no /dev/vms round-trip). Release with a zero lkid is a no-op. */
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
-                             uint32_t *lkid_out);
+                             uint32_t *lkid_out, int *intr_out);
 uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
 /* THE RMS FILE-ACCESS LOCK, taken by the EXECUTIVE on RMS's behalf (rd
  * vms-326): 'RMS$' + the 6-byte file id + 0x02 + the 12-byte space-padded
@@ -1192,6 +1208,14 @@ uint32_t vms_lock_rms_file_enq(struct vms_proc *proc,
                                uint32_t *lkid_out);
 uint32_t vms_lock_rms_file_enq_no_label(void);
 uint32_t vms_lock_rms_file_release(struct vms_proc *proc, uint32_t lkid);
+/* THE XQP'S PER-FILE SERIALIZATION LOCK (rd vms-d63). Mirror of the
+ * src/kernel/vms_internal.h decls, where the full note lives (#928). */
+uint32_t vms_lock_acp_file_ser(struct vms_proc *proc, const char *vresnam,
+                               uint32_t vresnam_len, uint32_t fidnum,
+                               uint8_t *vb_out, uint32_t *par_lkid_out,
+                               uint32_t *lkid_out);
+uint32_t vms_lock_acp_file_ser_release(struct vms_proc *proc, uint32_t par_lkid,
+                                       uint32_t lkid, const uint8_t *vb);
 /* The STANDING per-volume lock a faithful MOUNT holds for the whole mount life
  * (vms-25e): an NL-mode $ENQ on the F11B$v<label> resource, held from $MOUNT to
  * $DISMOUNT as the cluster-registration presence marker. Released with
@@ -1550,7 +1574,7 @@ void vms_proc_free_claimed(struct vms_proc *proc);
  * vms_proc_may_read are used cross-file on Linux; here they are simply part of
  * the compiled facility. The ioctl entry points are dispatched by vms_netbsd.c. */
 /* The two halves of process deletion around the substrate's release (rd vms-9f32). */
-void vms_proc_termination_capture(const struct vms_proc *victim,
+void vms_proc_termination_capture(struct vms_proc *victim,
                                   struct vms_termination *t);
 void vms_proc_termination_post_locked(const struct vms_termination *t);
 
@@ -1593,6 +1617,10 @@ long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procctl(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg);
+/* rd vms-416d: $CREPRC's creation record (proc NULL for ARRIVE/HOLD) */
+long vms_ioctl_creprc_sync(struct vms_proc *proc, unsigned long arg);
+void vms_creprc_sync_init(void);
+void vms_creprc_sync_cleanup(void);
 /* Substrate half of creator-driven creation (rd vms-c43): vms_module.c (Linux),
  * vms_netbsd.c (NetBSD). */
 uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,

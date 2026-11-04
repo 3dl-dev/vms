@@ -1,0 +1,28 @@
+# lock-interrupted-enq-orphans-request -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "an interrupted \$ENQW \$DEQs the request it abandoned, so re-entering the wait never leaves an orphan lock: two writers in one directory under \$SETIMR never wedge the Files-11 volume-sync lock (rd vms-b6e)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_syssvc_rms_dir_writers";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "When a signal ends a local \$ENQW wait, vms_enq_core_ident \$DEQs the abandoned request before it returns -ERESTARTSYS, because every re-entry (KIF_WAIT_CALL, or the ACP's re-issued IO\$_WRITEVBLK) is a NEW request. The mutation leaves the abandoned request queued. Whenever a writer's 1 ms \$SETIMR interrupts its wait for F11B\$s, an orphan EX stays queued. It is granted when the other writer releases, and nobody ever releases it. The volume lock is then held for ever, so the logger or the writer (or both) cannot finish, or its write ends in an error. Single-process suites never wait on F11B\$s, so they stay green. Only two concurrent writers with timer signals queue behind each other.";;
+        require_fail) cat <<'EOF'
+*** both writers finished, every write succeeding: no orphaned volume lock wedged them ***
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^                        (void)vms_deq_core(proc, &d);$|                        d.lkid = 0; (void)vms_deq_core(proc, \&d); /* NEGCTL lock-interrupted-enq-orphans-request */|' "$_file"
+    :
+}

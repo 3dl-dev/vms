@@ -304,6 +304,53 @@ int main(void)
           "VBN 1 still reads pattern1 after the extend -- the new extent did not collide with the old");
     (void)vms_kif_acp_deaccess(chan);
 
+    /* --- (4) rd vms-d63: ANOTHER accessor changed the header -------------
+     * Two channels hold HELLO.TXT open for write at once -- the shape of a VAX
+     * and OVMX sharing EVAC.DAT, on one node. Channel A extends the file (its
+     * header, and the F11B$s header counter, change). Channel B's window and
+     * EOF were read BEFORE that; its next write takes the file's F11B$s lock,
+     * sees a header counter it did not read under, and must re-read the
+     * header. Without that, B writes the header back with its OLD EOF and HIBLK
+     * and A's extension is lost -- on the lab volume, the VAX overwriting
+     * OVMX's records (tests/lab/captures/vms-5fa-shared-volume-r2-20261102). */
+    {
+        uint32_t chan_b = 0;
+        struct vms_acp_access_args ab;
+
+        st = vms_kif_acp_assign(ODS2_UNIT, &chan_b);
+        check($VMS_STATUS_SUCCESS(st) && chan_b != 0,
+              "$ASSIGN a SECOND file-class channel (rd vms-d63)");
+        st = access_hello(chan, 1, &a);
+        check($VMS_STATUS_SUCCESS(st) && a.attr.efblk == HELLO_EFBLK + 1u,
+              "channel A: IO$_ACCESS HELLO.TXT for WRITE (efblk 35)");
+        st = access_hello(chan_b, 1, &ab);
+        check($VMS_STATUS_SUCCESS(st) && ab.attr.efblk == HELLO_EFBLK + 1u,
+              "channel B: IO$_ACCESS HELLO.TXT for WRITE too (efblk 35)");
+        rw_init(&r, chan, HELLO_EFBLK + 2u, 0, 512, pat1);    /* VBN 36 */
+        st = vms_kif_acp_writevb(&r);
+        check($VMS_STATUS_SUCCESS(st) && r.extended == 1 &&
+              r.new_efblk == HELLO_EFBLK + 2u,
+              "channel A extends HELLO.TXT to VBN 36 (its header changes)");
+        rw_init(&r, chan_b, 1, 0, 16, pat2);                  /* B: 16 bytes in place */
+        st = vms_kif_acp_writevb(&r);
+        /* negctl: acp-writevb-stale-header-not-reread */
+        check($VMS_STATUS_SUCCESS(st) && r.new_efblk == HELLO_EFBLK + 2u &&
+              r.new_hiblk == HELLO_EFBLK + 2u,
+              "*** channel B's write RE-READ the header A changed: it keeps EOF/HIBLK 36, not its stale 35 (rd vms-d63) ***");
+        memset(rdbuf, 0, 512);
+        rw_init(&r, chan_b, HELLO_EFBLK + 2u, 0, 512, rdbuf);
+        st = vms_kif_acp_readvb(&r);
+        check($VMS_STATUS_SUCCESS(st) && memcmp(rdbuf, pat1, 512) == 0,
+              "channel B now maps VBN 36 and reads A's data there");
+        (void)vms_kif_acp_deaccess(chan_b);
+        (void)vms_kif_acp_deaccess(chan);
+        st = access_hello(chan, 0, &a);
+        check($VMS_STATUS_SUCCESS(st) && a.attr.efblk == HELLO_EFBLK + 2u,
+              "after both close, the on-disk header still says efblk 36: A's extension survived B");
+        (void)vms_kif_acp_deaccess(chan);
+        (void)vms_kif_dassgn(chan_b);
+    }
+
     (void)vms_kif_dassgn(chan);
     st = vms_kif_acp_dmount(ODS2_UNIT);
     check($VMS_STATUS_SUCCESS(st), "$DISMOUNT removes the ODS-2 volume");

@@ -4779,7 +4779,10 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
      * PT_INTERP (it is read as a producer by IMGACT / a --use consumer, never
      * activated through the kernel interp). An executable keeps PT_PHDR +
      * PT_INTERP=IMGACT.EXE + PT_LOAD (vms-e0c). (vms-c65) */
-    const int      nph        = is_shareable ? 1 : 3;
+    /* ... and a PT_GNU_STACK (rd vms-507): an EVAX image's stack is data,
+     * never code, so the executable says so -- without it the substrate kernel
+     * maps the stack executable and announces it on the console. */
+    const int      nph        = is_shareable ? 1 : 4;
     const uint64_t off_ph     = sizeof(Elf_Ehdr);
     const uint64_t phdrs_end  = ALIGN_UP(off_ph + (uint64_t)nph * sizeof(Elf_Phdr), 16);
     const uint64_t off_interp = is_shareable ? 0 : phdrs_end;
@@ -5179,6 +5182,8 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         ph[1].p_offset = off_interp; ph[1].p_vaddr = g_evax_vbase + off_interp; ph[1].p_paddr = ph[1].p_vaddr;
         ph[1].p_filesz = interp_sz; ph[1].p_memsz = interp_sz; ph[1].p_align = 1;
         li = 2;
+        ph[3].p_type = PT_GNU_STACK; ph[3].p_flags = PF_R | PF_W;   /* not executable */
+        ph[3].p_align = 16;
     }
     ph[li].p_type = PT_LOAD; ph[li].p_flags = PF_R | PF_W | PF_X;
     ph[li].p_offset = 0; ph[li].p_vaddr = g_evax_vbase; ph[li].p_paddr = g_evax_vbase;

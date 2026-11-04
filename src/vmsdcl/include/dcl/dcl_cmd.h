@@ -125,6 +125,13 @@ int cmd_product(struct dcl_command *cmd);
 /* VMS month abbreviations */
 extern const char *vms_months[];
 
+/* The system time -- SYS$GETTIM, the executive's (rd vms-642) -- as a
+ * timespec; returns the $GETTIM status. */
+struct timespec;
+uint32_t dcl_system_time(struct timespec *ts);
+/* Report a system-service condition with its $GETMSG text. */
+void dcl_put_sysmsg(uint32_t st);
+
 /* Queue initialization helper */
 int ensure_queue_init(void);
 

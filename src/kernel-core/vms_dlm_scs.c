@@ -91,6 +91,7 @@
 #include "vms_cnxman.h"
 #include "vms_dlm_ldwv.h"
 #include "vms_dlm_master.h"
+#include "vms_dlm_master_wire.h" /* rd vms-1e58: wire -> master request */
 #include "vms_dlm_dir.h"      /* rd vms-8219: the lock directory's entries */
 #include "vms_dlm_proxy.h"
 #include "vms_dlm_quorum.h"
@@ -1346,43 +1347,15 @@ static int dlm_arm_peer_is_ours(struct vms_dlm_scs *d,
 }
 
 /* Fill the master-side request from the PARSED frame and the connection
- * manager's own identification of the sender. `from_csid` is spec §4(a)'s
- * cluster-logical source address -- the one grounded answer to "who is
- * asking"; the DLM body carries no CSID field at all. */
+ * manager's own identification of the sender -- through the ONE translation
+ * the host harnesses also call (vms_dlm_master_wire.h, rd vms-1e58 C4), so the
+ * requester's NOQUEUE reaches the master here exactly as it does under test. */
 static void dlm_arm_fill_master_req(const struct dlm_scs_request *in,
 				    const struct vms_dlm_enq_request *e,
 				    uint8_t wireop,
 				    struct vms_dlm_master_request *out)
 {
-	uint32_t n = e->name_len;
-
-	memset(out, 0, sizeof(*out));
-	out->op = (wireop == VMS_DLM_WIREOP_CONVERT) ? VMS_DLM_MREQ_CONVERT
-						     : VMS_DLM_MREQ_ENQ;
-	out->req_csid = (uint32_t)in->from_csid;
-	out->req_lkid = e->req_lkid;
-	out->master_lkid = e->master_lkid;
-	out->lkmode = e->mode;
-	/* COUNTED (rd vms-326): the frame states the length at body[47] and a
-	 * VMS resource name may contain NULs, so the master is told how many
-	 * bytes the name is rather than being left to find a terminator. The
-	 * tail stays zero (the struct was memset above), so a diagnostic
-	 * printf of an ASCII name is still safe. */
-	if (n > sizeof(out->resnam))
-		n = (uint32_t)sizeof(out->resnam);
-	memcpy(out->resnam, e->name, n);
-	out->resnam_len = (uint8_t)n;
-	/*
-	 * WHICH resource of that name (rd vms-b5b0): body[44:46] UIC group and
-	 * body[46] access mode, as the codec read them. `res_ident_valid` is 0
-	 * for an op-0x07 CONVERT, whose identity span is stale buffer on a real
-	 * frame -- the engine then takes the identity off the LOCK the convert
-	 * names, which is an executive read (vms_lock.c). Nothing is defaulted
-	 * here.
-	 */
-	out->res_group = e->res_group;
-	out->res_mode = e->res_acmode;
-	out->res_ident_valid = e->res_ident_valid;
+	vms_dlm_master_req_from_wire(e, wireop, (uint32_t)in->from_csid, out);
 }
 
 /*
@@ -1477,27 +1450,23 @@ static int dlm_arm_reply_grant(struct vms_dlm_scs *d,
 }
 
 /*
- * DENIED (SS$_NOTQUEUED): the spec's deny shape echoes the request's body[20]
- * placeholder and the resource name back verbatim. Those two ARE echoes, by the
- * protocol's own definition of this reply -- they identify the request being
- * refused -- and nothing else is asserted: no lock id of ours, because we hold
- * no lock for it.
+ * DENIED (SS$_NOTQUEUED): the request ECHOED with the deny record, the same
+ * discipline as the grant and the queued answer (rd vms-1e58 C4). It used to be
+ * composed from a zeroed buffer -- no transaction token, no outcome byte at
+ * body[34] -- a frame no real master sends; every real deny carries b8 09 fc at
+ * body[32:35] (vms_dlm_enq_response_build_notqueued). Nothing of ours is named:
+ * no lock exists, so the PID-form placeholder at body[20:24] rides back.
  */
 static int dlm_arm_reply_deny(struct vms_dlm_scs *d,
 			      const struct dlm_scs_request *in,
-			      const struct vms_dlm_enq_request *e,
 			      struct dlm_scs_reply *reply)
 {
 	uint32_t written = 0;
 
 	memset(d->txframe, 0, sizeof(d->txframe));
-	/* body[46] echoes the DENIED REQUEST's own access mode (rd vms-b5b0):
-	 * this reply is about that requester's resource, in its domain. */
-	if (vms_dlm_enq_response_build_deny(e->req_lkid, e->master_lkid,
-					    e->res_acmode, e->name_len,
-					    e->name, d->txframe,
-					    (uint32_t)sizeof(d->txframe),
-					    &written) != VMS_CODEC_OK) {
+	if (vms_dlm_enq_response_build_notqueued(in->body, in->len, d->txframe,
+						 (uint32_t)sizeof(d->txframe),
+						 &written) != VMS_CODEC_OK) {
 		d->codec_failures++;
 		return -1;
 	}
@@ -1709,7 +1678,7 @@ static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 	case VMS_DLM_MASTER_GRANTED:
 		return dlm_arm_reply_grant(d, in, &res, reply);
 	case VMS_DLM_MASTER_DENIED:
-		return dlm_arm_reply_deny(d, in, e, reply);
+		return dlm_arm_reply_deny(d, in, reply);
 	case VMS_DLM_MASTER_QUEUED:
 		/*
 		 * A REAL lock on a REAL waiting queue. Nothing goes back NOW --
@@ -1827,8 +1796,10 @@ static int dlm_arm_serve_mixed_held(struct vms_dlm_scs *d,
  *   lkmode       body[30], carried as the mode being released.
  *
  * NOTHING IS DEFAULTED. No resource name is read (a real $DEQ carries none) and
- * `valblk_present` stays 0, so the master's own value block is LEFT ALONE
- * rather than overwritten with sixteen zeros that would read exactly like data.
+ * `valblk_present` stays 0 unless the release is MARKED as writing its value
+ * block (rd vms-d63, the cell 1 at body[30]), so an unmarked release leaves
+ * the master's own value block ALONE rather than overwriting it with a stale
+ * buffer that would read exactly like data.
  */
 static void dlm_arm_fill_deq_req(const struct dlm_scs_request *in,
 				 const struct vms_dlm_deq *q,
@@ -1839,6 +1810,14 @@ static void dlm_arm_fill_deq_req(const struct dlm_scs_request *in,
 	out->req_csid = (uint32_t)in->from_csid;
 	out->req_lkid = q->req_lkid;
 	out->master_lkid = q->master_lkid;
+	/* rd vms-d63: a release MARKED as writing its value block hands the
+	 * engine that block; the engine stores it only for a lock it holds for
+	 * this sender at PW/EX with LCK$M_VALBLK (vms_lock_dlm_xnode_deq). An
+	 * unmarked release hands nothing, so the master's block is left alone. */
+	if (q->write_valblk) {
+		memcpy(out->valblk, q->valblk, sizeof(out->valblk));
+		out->valblk_present = 1u;
+	}
 	/* NO MODE. body[30] of a release is not a lock mode (rd vms-194's
 	 * driven arm: nine real releases, every held mode NL..EX, all 0), and
 	 * the DEQ seam identifies the lock by (csid, handle) and reads no mode
@@ -2351,6 +2330,24 @@ static int dlm_arm_dir_name_orphaned(struct vms_dlm_scs *d,
 	return 1;
 }
 
+/*
+ * rd vms-966e r10: does this node's vector, read now, place the name's
+ * directory at a member that is neither this node nor the requester? 0 for an
+ * unbuilt or unreadable vector, which places it nowhere.
+ */
+static int dlm_arm_dir_elsewhere(struct vms_dlm_scs *d,
+				 const struct vms_dlm_res_ident *id,
+				 vms_csid_t from)
+{
+	vms_csid_t at = 0u;
+
+	if (d->cl == NULL ||
+	    vms_ldwv_resolve(&d->cl->club.ldwv, vms_ldwv_key(id->hash), &at) !=
+	    VMS_LDWV_OK)
+		return 0;
+	return (at != 0u && at != from) ? 1 : 0;
+}
+
 static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 			      const struct dlm_scs_request *req,
 			      const struct vms_dlm_res_ident *id,
@@ -2408,7 +2405,31 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 			"node's own weight vector does not direct here: answered "
 			"only from an entry naming its master");
 	}
+	/*
+	 * rd vms-966e: ...and when the vector names the REQUESTER as the
+	 * directory, the lookup is the requester's own name routed here under
+	 * the vector a transition just replaced (VAXC at barrier step 0x0a, the
+	 * same lock this node told it "you master it" before the join). The
+	 * table answers it only from an entry naming the requester -- see
+	 * vms_dlm_dir_lookup_directed -- and otherwise it is refused below
+	 * exactly as before.
+	 */
+	if (!directed && d->cl != NULL &&
+	    vms_ldwv_names(&d->cl->club.ldwv, vms_ldwv_key(id->hash),
+			   req->from_csid))
+		directed = VMS_DLM_DIR_AT_REQUESTER;
+	/*
+	 * ...and when it names a THIRD member (rd vms-966e r10): the same lookup,
+	 * re-sent at step 0x0a to the node it was in flight to when the
+	 * requester's transition began. The vector's choice is not what decides
+	 * it; the entry this node's own earlier answer recorded is.
+	 */
+	if (!directed && dlm_arm_dir_elsewhere(d, id, req->from_csid))
+		directed = VMS_DLM_DIR_ELSEWHERE;
 	o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);
+	if (directed == VMS_DLM_DIR_AT_REQUESTER ||
+	    directed == VMS_DLM_DIR_ELSEWHERE)
+		directed = 0;       /* undirected here, whatever it was answered */
 	if (o == VMS_DLM_DIR_ANSWER_NONE && !directed) {
 		d->dir_undirected_refused++;
 		dlm_arm_dir_say(d, &d->dir_said_undirected,
@@ -2885,6 +2906,63 @@ static int dlm_arm_rb_quorum_hang(void *ctx)
 	       cnxman_quorum_hang_active(d->cl) : 0;
 }
 
+/*
+ * THE DIRECTORY RE-REGISTRATION'S TWO DOORS (rd vms-fdeb): the engine's walk
+ * and its record, with the identity carried across in the engine's own tree
+ * shape (vms_dlm_adopt.h) -- the same translation the rebuild doors make.
+ */
+static void dlm_arm_ident_to_tree(const struct vms_dlm_res_ident *id,
+				  struct vms_dlm_adopt_tree *t)
+{
+	memset(t, 0, sizeof(*t));
+	if (id->name_len > sizeof(t->resnam))
+		return;
+	memcpy(t->resnam, id->name, id->name_len);
+	t->resnam_len = id->name_len;
+	t->res_group = id->group;
+	t->res_mode = id->mode;
+	t->ident_valid = 1u;
+}
+
+static int dlm_arm_dr_next(void *ctx, const struct vms_dlm_res_ident *skip,
+			   uint32_t n_skip, struct vms_dlm_res_ident *out,
+			   uint32_t *dir_csid)
+{
+	struct vms_dlm_adopt_tree sk[VMS_DLM_DR_WINDOW];
+	struct vms_dlm_adopt_tree t;
+	uint32_t i, hash = 0u, dir = 0u;
+
+	(void)ctx;
+	if (out == NULL || dir_csid == NULL || n_skip > VMS_DLM_DR_WINDOW)
+		return 0;
+	for (i = 0u; i < n_skip; i++)
+		dlm_arm_ident_to_tree(&skip[i], &sk[i]);
+	if (!vms_lock_dlm_dirreg_next(sk, n_skip, &t, &hash, &dir))
+		return 0;
+	if (t.resnam_len == 0u || t.resnam_len >= VMS_DLM_NAME_MAX)
+		return 0;
+	memset(out, 0, sizeof(*out));
+	memcpy(out->name, t.resnam, t.resnam_len);
+	out->name_len = t.resnam_len;
+	out->group = t.res_group;
+	out->mode = t.res_mode;
+	out->hash = hash;
+	*dir_csid = dir;
+	return 1;
+}
+
+static int dlm_arm_dr_told(void *ctx, const struct vms_dlm_res_ident *id,
+			   uint32_t dir_csid)
+{
+	struct vms_dlm_adopt_tree t;
+
+	(void)ctx;
+	if (id == NULL)
+		return 0;
+	dlm_arm_ident_to_tree(id, &t);
+	return t.ident_valid ? vms_lock_dlm_dirreg_told(&t, dir_csid) : 0;
+}
+
 static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 {
 	d->rm_ops.ctx                = d;
@@ -2914,6 +2992,8 @@ static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 	d->rm_ops.rb_unsent          = dlm_arm_rb_unsent;
 	d->rm_ops.rb_settle          = dlm_arm_rb_settle;
 	d->rm_ops.rb_quorum_hang     = dlm_arm_rb_quorum_hang;
+	d->rm_ops.dr_next            = dlm_arm_dr_next;
+	d->rm_ops.dr_told            = dlm_arm_dr_told;
 	vms_dlm_rm_init(&d->rm, &d->rm_ops);
 }
 
@@ -3071,6 +3151,14 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 	 * (rd vms-874f): told apart the same way, by the record's destination
 	 * and the lock whose record is out. */
 	if (vms_dlm_rm_rb_answer(&d->rm, (uint32_t)req->from_csid,
+				 req->category, req->opcode, req->body,
+				 req->len))
+		return 0;
+
+	/* ...AND THE DIRECTORY'S 82/0d TO ONE OF OUR op-0x0d RE-REGISTRATIONS
+	 * (rd vms-fdeb): told apart by its sender (the directory node the
+	 * record went to) and the echoed identity. */
+	if (vms_dlm_rm_dr_answer(&d->rm, (uint32_t)req->from_csid,
 				 req->category, req->opcode, req->body,
 				 req->len))
 		return 0;
@@ -3260,6 +3348,8 @@ static void dlm_arm_transition_begin(void *ctx,
 	vms_dlm_rm_rb_transition_begin(&d->rm);
 	/* rd vms-2fa: no rebuild record until this transition releases R. */
 	vms_dlm_rm_rb_window_close(&d->rm);
+	/* rd vms-fdeb: ...and no re-registration until it releases 4. */
+	vms_dlm_rm_dr_close(&d->rm);
 }
 
 /*
@@ -3282,14 +3372,19 @@ static uint32_t dlm_arm_barrier_released(void *ctx,
 	vms_dlm_rm_rb_barrier_released(&d->rm, step,
 				       (uint32_t)d->cl->params.lockdirwt,
 				       dlm_arm_now_ms(d));
-	return vms_dlm_rm_rb_outstanding(&d->rm);
+	/* rd vms-fdeb: release 4 -- every master re-registers its directory
+	 * entries now, and the next frame is held until each is answered. */
+	vms_dlm_rm_dr_barrier_released(&d->rm, step, dlm_arm_now_ms(d));
+	return vms_dlm_rm_rb_outstanding(&d->rm) +
+	       vms_dlm_rm_dr_outstanding(&d->rm);
 }
 
 static uint32_t dlm_arm_rebuild_outstanding(void *ctx)
 {
 	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
 
-	return d != NULL ? vms_dlm_rm_rb_outstanding(&d->rm) : 0u;
+	return d != NULL ? vms_dlm_rm_rb_outstanding(&d->rm) +
+			   vms_dlm_rm_dr_outstanding(&d->rm) : 0u;
 }
 
 /*
@@ -3391,6 +3486,7 @@ static void dlm_arm_transition_end(void *ctx,
 	 * this node is its directory -- nothing on the wire). */
 	vms_dlm_rm_rb_window_close(&d->rm);
 	vms_dlm_rm_rb_kick(&d->rm);
+	vms_dlm_rm_dr_close(&d->rm);   /* rd vms-fdeb */
 }
 
 static void dlm_arm_member_departed(void *ctx, vms_csid_t csid)
@@ -3546,9 +3642,13 @@ static void dlm_arm_work_handler(void *ctx, const struct cf_work *w)
 		/* rd vms-2fa: a record unanswered for the cluster's own
 		 * RECNXINTERVAL stops its tree, so the barrier held on it goes
 		 * on (it re-tries on its own watchdog). */
-		if (d->cl != NULL)
+		if (d->cl != NULL) {
 			(void)vms_dlm_rm_rb_expire(&d->rm, dlm_arm_now_ms(d),
 				(uint32_t)d->cl->club.recnxinterval * 1000u);
+			/* rd vms-fdeb: the same bound on a re-registration. */
+			(void)vms_dlm_rm_dr_expire(&d->rm, dlm_arm_now_ms(d),
+				(uint32_t)d->cl->club.recnxinterval * 1000u);
+		}
 		dlm_arm_arm_beat(d);
 		return;
 	}

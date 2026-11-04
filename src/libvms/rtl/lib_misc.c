@@ -15,6 +15,7 @@
 #include <sys/wait.h>
 #include <stdio.h>
 #include "ssdef.h"
+#include "ovmx_substrate.h"  /* OVMX_SUBSTRATE_SCOPE (rd vms-a66e) */
 #include "descrip.h"
 #include "lib$routines.h"
 #include "str$routines.h"
@@ -369,6 +370,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
                    const struct dsc$descriptor_s *prompt,
                    const struct dsc$descriptor_s *cli_name,
                    const struct dsc$descriptor_s *table_name) {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
     (void)prompt; (void)cli_name; (void)table_name;   /* OVMX's one CLI is DCL */
     /* efn/astadr/astprm: the /NOWAIT completion-notification path, wired in the
      * CLI$M_NOWAIT branch below via vms_kif_spawn_notify (B1). */
@@ -603,8 +605,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
     uint32_t gj = vms_kif_getjpi_pid(vms_pid, &info);
     if ((gj & 1) && info.linux_pid) {
         int wstatus;
-        while (waitpid((pid_t)info.linux_pid, &wstatus, 0) < 0 && errno == EINTR)
-            ;
+        (void)vms_kif_substrate_reap(info.linux_pid, &wstatus, 0);   /* rd vms-e70f */
         if (status) {
             if (WIFEXITED(wstatus))
                 *status = (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;

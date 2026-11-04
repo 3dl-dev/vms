@@ -83,6 +83,7 @@
  * and a mutation that will not compile is a broken fixture, not a gate. */
 #include <pwd.h>
 #include "starlet.h"
+#include "ovmx_substrate.h"  /* OVMX_SUBSTRATE_SCOPE (rd vms-a66e) */
 #include "vms/pcb.h"
 #include "vms_kif.h"
 extern int vms$$chan_to_fd(uint16_t chan);   /* sys_assign.c */
@@ -169,6 +170,7 @@ static uint32_t operator_log_put_record(const char *banner,
  */
 static FILE *open_operator_log_host(void)
 {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
     char oplog_linux[1024];
     vmsfs_to_linux_path(OPERATOR_LOG_PATH, oplog_linux, sizeof(oplog_linux));
     FILE *f = fopen(oplog_linux, "a");
@@ -495,6 +497,7 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
 
 static int brk_write(const char *devnam, const char *text, size_t len, uint32_t carcon)
 {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
     char path[256] = "";
     int fd = -1;
     if (ovmx_console_terminal_path(devnam, path, sizeof path)) {

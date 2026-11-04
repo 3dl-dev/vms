@@ -1,0 +1,43 @@
+# systime-gettim-substrate-clock -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$GETTIM reads the executive's system time, not the substrate clock (VMS_IOCTL_SYSTIME, rd vms-642)";;
+        targets)      echo "libvmssys/vms_systime.c";;
+        suites_red)   echo "test_syssvc_systime test_syssvc_crtl_time";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_systime_get -- what SYS\$GETTIM, \$GETUTC, \$ASCTIM(now), \$CREATE_UID, SYSUAF and DECC\$SHR's time() read -- goes back to the substrate's realtime clock (the clock_gettime path this item removed). \$SETIME still sets the executive's cell; nothing reads it.";;
+        require_fail) cat <<'EOF2'
+this process's $GETTIM now reads 1-JAN-2031
+the second process's $GETTIM reads the time this one set
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+... its $GETUTC too (abstime = the set time + the 1582 offset)
+... its $ASCTIM of the current time formats 1-JAN-2031
+... its $CREATE_UID stamps the set time
+... and SYSUAF ages a password against it: a lifetime ending 31-DEC-2030 has expired
+F$TIME in a DCL process is the time this process set
+SHOW TIME in a DCL process shows it as VMS does: '   1-JAN-2031 00:0m:ss', no hundredths
+DCL SET TIME=1-JAN-2032:12:00:00 with OPER and LOG_IO: this process reads 1-JAN-2032 12:00
+time() in another process is the system time $SETIME set (1-JAN-2031)
+EOF2
+                      ;;
+        knock_on_why) cat <<'EOF2'
+Every one reads "now" through vms_systime_get after a $SETIME, and now gets the
+substrate clock instead of the executive's cell; test_syssvc_crtl_time's
+time() is DECC$SHR's $GETUTC, which reads it the same way.
+EOF2
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    a.op = VMS_SYSTIME_GET;$|    { struct vms_timespec ts; if (vms_sys_clock_gettime(VMS_CLOCK_REALTIME, \&ts) != 0) return SS$_ABORT; *vmstime = (uint64_t)ts.tv_sec * 10000000ULL + (uint64_t)ts.tv_nsec / 100u + 0x007C95674BEB4000ULL; return SS$_NORMAL; } /* NEGCTL systime-gettim-substrate-clock */|' "$_file"
+        grep -q '"vms_syscall.h"' "$_file" || sed -i 's|^#include "vms_errno.h"$|#include "vms_errno.h"\n#include "vms_syscall.h"|' "$_file"
+    :
+}

@@ -590,6 +590,8 @@ vtt_write(struct tty *tp, struct uio *uio, int flag __unused)
 		return EIO;
 	vtt_reclaim(p);
 	tt = port_tt_get(p);
+	if (tt != NULL)
+		vms_tt_write_begin(tt);   /* one write(2), however many pieces */
 	while (uio->uio_resid > 0 && rc == 0) {
 		k = uio->uio_resid < sizeof(chunk) ? uio->uio_resid : sizeof(chunk);
 		error = uiomove(chunk, k, uio);
@@ -609,8 +611,10 @@ vtt_write(struct tty *tp, struct uio *uio, int flag __unused)
 			}
 		}
 	}
-	if (tt != NULL)
+	if (tt != NULL) {
+		vms_tt_write_end(tt);
 		vms_tt_release(tt);
+	}
 	if (error)
 		return error;
 	if (rc == -EINTR)

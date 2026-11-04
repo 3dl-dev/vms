@@ -2342,12 +2342,16 @@ coord_table[CNXMAN_COORD_STATE__COUNT][CNXMAN_EV__COUNT] = {
 
 static enum cnxman_event coord_event_of_response(const struct coord_msg *m)
 {
-	if (m->env.category == vms_wire_response_category(VMS_CM_CAT_DLM)) {
-		/* A member answered an interleaved rebuild record. */
-		if (m->env.opcode == VMS_CM_OP_DLM_REBUILD)
-			return CNXMAN_EV_RX_TR_ACK;
+	/*
+	 * rd vms-fdeb: a member's 82/0d answers a re-registration THIS node's
+	 * lock manager sent, and only the lock manager can match it to its
+	 * record (vms_dlm_rm_dr_answer) -- so it is routed on to the DLM leg,
+	 * which re-tries the held release itself (vms_cnxman.c,
+	 * cnxman_coord_rebuild_retry). Claimed here it would have been lost
+	 * and the release held to RECNXINTERVAL.
+	 */
+	if (m->env.category == vms_wire_response_category(VMS_CM_CAT_DLM))
 		return CNXMAN_EV__COUNT;
-	}
 	/*
 	 * Only a CONFIG (0x81) answer is a transition acknowledgement (rd
 	 * vms-6e3 residual). The opcodes below are cat-0x01 opcodes; the same

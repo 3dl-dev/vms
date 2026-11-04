@@ -341,6 +341,26 @@ static void arm_bindings(void)
 	       "two counters read as a total and a subset");
 
 	/*
+	 * AND A REQUEST THAT MAY NOT BE QUEUED IS NOT (rd vms-1e58 C4). The arm
+	 * used to fill the master's request field by field and never set its
+	 * flags, so a real VAX's EX/NOQUEUE against an EX this node held was
+	 * QUEUED (lab fire ci6evac-031902, frames 7310/7312). The translation
+	 * now lives in vms_dlm_master_wire.h, which test_dlm_mixed_master.c
+	 * drives with the captured frame; what only the shipped text can say is
+	 * that the ARM calls that same translation, and that its DENY is the
+	 * grounded echo rather than a frame composed from zeros.
+	 */
+	has("vms_dlm_master_req_from_wire(e, wireop, (uint32_t)in->from_csid, out);",
+	    "*** the arm fills the master's request through THE translation "
+	    "the host harness drives -- the one that reads NOQUEUE ***");
+	has("vms_dlm_enq_response_build_notqueued(in->body, in->len,",
+	    "*** and the DENIED outcome is answered with the request echoed "
+	    "and the b8 09 fc record ***");
+	absent("vms_dlm_enq_response_build_deny(",
+	       "*** and the arm no longer composes a deny from a zeroed "
+	       "buffer (no transaction token, no outcome byte) ***");
+
+	/*
 	 * AND THE OTHER HALF OF THE SAME HANG (rd vms-28bd): a LOCAL release
 	 * that advances a cross-node queue. The engine's notification carries
 	 * only (csid, master_lkid); what this arm does with it is all order and
@@ -483,6 +503,30 @@ static void arm_bindings(void)
 	before("directed = dlm_arm_dir_is_ours(d, id->hash, 1);",
 	       "o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);",
 	       "the vector is read for the name before the table is asked");
+	/* rd vms-966e: a lookup the vector directs at the REQUESTER itself is
+	 * marked so, from the vector and the frame's own sender, before the
+	 * table is asked -- test_dlm_transition_enq drives what the table does
+	 * with it on the real demo frames. */
+	has("vms_ldwv_names(&d->cl->club.ldwv, vms_ldwv_key(id->hash),\n"
+	    "\t\t\t   req->from_csid))\n"
+	    "\t\tdirected = VMS_DLM_DIR_AT_REQUESTER;",
+	    "*** rd vms-966e: the arm marks a lookup the vector directs at its "
+	    "own sender VMS_DLM_DIR_AT_REQUESTER ***");
+	before("directed = VMS_DLM_DIR_AT_REQUESTER;",
+	       "o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);",
+	       "... before the table is asked");
+	/* rd vms-966e r10: ...and one it directs at a THIRD member is marked
+	 * VMS_DLM_DIR_ELSEWHERE, from the vector read now, before the table is
+	 * asked; test_dlm_transition_enq drives the r10 frames through it. */
+	has("if (!directed && dlm_arm_dir_elsewhere(d, id, req->from_csid))\n"
+	    "\t\tdirected = VMS_DLM_DIR_ELSEWHERE;",
+	    "*** rd vms-966e r10: the arm marks a lookup the vector directs at a "
+	    "third member VMS_DLM_DIR_ELSEWHERE ***");
+	has("return (at != 0u && at != from) ? 1 : 0;",
+	    "... a member that is neither this node nor the requester");
+	before("directed = VMS_DLM_DIR_ELSEWHERE;",
+	       "o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);",
+	       "... before the table is asked");
 	before("if (o == VMS_DLM_DIR_ANSWER_NONE && !directed) {",
 	       "if (vms_dlm_dir_answer_build(req->body, req->len, status,",
 	       "an undirected request the table cannot answer from an entry "
@@ -891,6 +935,25 @@ static void arm_bindings(void)
 	       "d->dir_entries_forgotten += vms_lock_dlm_directory_discarded();",
 	       "*** a transition's start forgets every told-directory record "
 	       "(the V0.7-15 LOCKMGRERR) ***");
+	/* rd vms-fdeb: release 4 re-registers this node's directory entries
+	 * (op-0x0d), the barrier is held on them, and the directory's 82/0d is
+	 * matched by the table before any other reply path sees it. */
+	has("vms_dlm_rm_dr_barrier_released(&d->rm, step, dlm_arm_now_ms(d));",
+	    "*** the barrier's releases reach the re-registration ***");
+	has("vms_dlm_rm_dr_outstanding(&d->rm);",
+	    "*** the barrier is held while a re-registration is unanswered ***");
+	has("d->rm_ops.dr_next            = dlm_arm_dr_next;",
+	    "the engine's walk is bound to the table");
+	has("d->rm_ops.dr_told            = dlm_arm_dr_told;",
+	    "the engine's told-record is bound to the table");
+	before("if (vms_dlm_rm_dr_answer(&d->rm, (uint32_t)req->from_csid,",
+	       "return dlm_arm_handle_reply(d, req);",
+	       "*** the directory's 82/0d is matched before the generic reply "
+	       "path ***");
+	has("vms_dlm_rm_dr_close(&d->rm);",
+	    "a transition's start shuts the re-registration window");
+	has("(void)vms_dlm_rm_dr_expire(&d->rm, dlm_arm_now_ms(d),",
+	    "RECNXINTERVAL bounds an unanswered re-registration");
 	before("(void)vms_dlm_dir_drop_unless(&d->dir, dlm_arm_dir_is_ours, d);",
 	       "(void)dlm_req_fsm_transition_ended(&d->req);",
 	       "*** a held request is released only AFTER the new directory "

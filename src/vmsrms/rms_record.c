@@ -64,6 +64,7 @@
 
 #include <stdio.h>
 #include "rms_internal.h"
+#include "rms_remote.h"      /* RMS remote file access (rd vms-0a7) */
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -716,11 +717,15 @@ static uint32_t rms_impl_write(void *rab_ptr)
  * ============================================================ */
 uint32_t sys$get(void *rab, void (*err)(void *), void (*suc)(void *))
 {
+    if (rms_remote_owns_rab(rab))                     /* node:: (rd vms-0a7) */
+        return rms_complete(rms_remote_get(rab), rab, err, suc);
     return rms_complete(rms_impl_get(rab), rab, err, suc);
 }
 
 uint32_t sys$put(void *rab, void (*err)(void *), void (*suc)(void *))
 {
+    if (rms_remote_owns_rab(rab))                     /* node:: (rd vms-0a7) */
+        return rms_complete(rms_remote_put(rab), rab, err, suc);
     return rms_complete(rms_impl_put(rab), rab, err, suc);
 }
 

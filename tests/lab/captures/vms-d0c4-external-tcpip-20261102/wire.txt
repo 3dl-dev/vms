@@ -1,0 +1,219 @@
+18:13:54.134331 ARP, Request who-has 10.0.3.1 tell 10.0.3.15, length 28
+18:13:54.134380 ARP, Reply 10.0.3.1 is-at 72:96:eb:4f:6e:93, length 28
+18:13:54.134889 IP 10.0.3.15.59820 > 192.168.77.1.23: Flags [S], seq 2128323785, win 64240, options [mss 1460,sackOK,TS val 1230911969 ecr 0,nop,wscale 6], length 0
+18:13:54.134928 IP 192.168.77.1.23 > 10.0.3.15.59820: Flags [S.], seq 2327942034, ack 2128323786, win 65160, options [mss 1460,sackOK,TS val 2464746723 ecr 1230911969,nop,wscale 7], length 0
+18:13:54.137453 IP 10.0.3.15.59820 > 192.168.77.1.23: Flags [.], ack 1, win 1004, options [nop,nop,TS val 1230911972 ecr 2464746723], length 0
+18:13:54.137957 IP 192.168.77.1.23 > 10.0.3.15.59820: Flags [P.], seq 1:13, ack 1, win 510, options [nop,nop,TS val 2464746726 ecr 1230911972], length 12 [telnet DO ECHO, DO NAWS, WILL ECHO, WILL SUPPRESS GO AHEAD]
+18:13:54.147524 IP 10.0.3.15.59820 > 192.168.77.1.23: Flags [.], ack 13, win 1004, options [nop,nop,TS val 1230911977 ecr 2464746726], length 0
+18:13:54.147558 IP 192.168.77.1.23 > 10.0.3.15.59820: Flags [P.], seq 13:24, ack 1, win 510, options [nop,nop,TS val 2464746736 ecr 1230911977], length 11
+18:13:54.154056 IP 10.0.3.15.59820 > 192.168.77.1.23: Flags [.], ack 24, win 1004, options [nop,nop,TS val 1230911989 ecr 2464746736], length 0
+18:13:54.187371 IP 10.0.3.15.59820 > 192.168.77.1.23: Flags [P.], seq 1:13, ack 24, win 1004, options [nop,nop,TS val 1230912022 ecr 2464746736], length 12 [telnet WONT ECHO, WONT NAWS, DO ECHO, DO SUPPRESS GO AHEAD]
+18:13:54.187409 IP 192.168.77.1.23 > 10.0.3.15.59820: Flags [.], ack 13, win 510, options [nop,nop,TS val 2464746776 ecr 1230912022], length 0
+18:13:57.385714 IP 10.0.3.15.59820 > 192.168.77.1.23: Flags [P.], seq 13:40, ack 24, win 1004, options [nop,nop,TS val 1230915220 ecr 2464746776], length 27
+18:13:57.385766 IP 192.168.77.1.23 > 10.0.3.15.59820: Flags [.], ack 40, win 510, options [nop,nop,TS val 2464749974 ecr 1230915220], length 0
+18:13:57.387289 IP 192.168.77.1.23 > 10.0.3.15.59820: Flags [P.], seq 24:26, ack 40, win 510, options [nop,nop,TS val 2464749975 ecr 1230915220], length 2
+18:13:57.432063 IP 10.0.3.15.59820 > 192.168.77.1.23: Flags [.], ack 26, win 1004, options [nop,nop,TS val 1230915266 ecr 2464749975], length 0
+18:13:57.432113 IP 192.168.77.1.23 > 10.0.3.15.59820: Flags [P.], seq 26:75, ack 40, win 510, options [nop,nop,TS val 2464750020 ecr 1230915266], length 49
+18:13:57.432517 IP 10.0.3.15.59820 > 192.168.77.1.23: Flags [.], ack 75, win 1004, options [nop,nop,TS val 1230915267 ecr 2464750020], length 0
+18:13:57.662534 IP 10.0.3.15.59820 > 192.168.77.1.23: Flags [P.], seq 40:46, ack 75, win 1004, options [nop,nop,TS val 1230915496 ecr 2464750020], length 6
+18:13:57.662826 IP 192.168.77.1.23 > 10.0.3.15.59820: Flags [P.], seq 75:81, ack 46, win 510, options [nop,nop,TS val 2464750251 ecr 1230915496], length 6
+18:13:57.663423 IP 10.0.3.15.59820 > 192.168.77.1.23: Flags [.], ack 81, win 1004, options [nop,nop,TS val 1230915498 ecr 2464750251], length 0
+18:13:57.705016 IP 192.168.77.1.23 > 10.0.3.15.59820: Flags [F.], seq 81, ack 46, win 510, options [nop,nop,TS val 2464750293 ecr 1230915498], length 0
+18:13:57.737232 IP 10.0.3.15.59820 > 192.168.77.1.23: Flags [F.], seq 46, ack 82, win 1004, options [nop,nop,TS val 1230915571 ecr 2464750293], length 0
+18:13:57.737263 IP 192.168.77.1.23 > 10.0.3.15.59820: Flags [.], ack 47, win 510, options [nop,nop,TS val 2464750325 ecr 1230915571], length 0
+18:13:58.981444 IP 10.0.3.15.53810 > 192.168.77.1.23: Flags [S], seq 3124794916, win 64240, options [mss 1460,sackOK,TS val 1663064681 ecr 0,nop,wscale 6], length 0
+18:13:58.981488 IP 192.168.77.1.23 > 10.0.3.15.53810: Flags [S.], seq 3132955697, ack 3124794917, win 65160, options [mss 1460,sackOK,TS val 2464751570 ecr 1663064681,nop,wscale 7], length 0
+18:13:58.982218 IP 10.0.3.15.53810 > 192.168.77.1.23: Flags [.], ack 1, win 1004, options [nop,nop,TS val 1663064682 ecr 2464751570], length 0
+18:13:58.985601 IP 192.168.77.1.23 > 10.0.3.15.53810: Flags [P.], seq 1:13, ack 1, win 510, options [nop,nop,TS val 2464751574 ecr 1663064682], length 12 [telnet DO ECHO, DO NAWS, WILL ECHO, WILL SUPPRESS GO AHEAD]
+18:13:58.987655 IP 10.0.3.15.53810 > 192.168.77.1.23: Flags [.], ack 13, win 1004, options [nop,nop,TS val 1663064687 ecr 2464751574], length 0
+18:13:58.987686 IP 192.168.77.1.23 > 10.0.3.15.53810: Flags [P.], seq 13:24, ack 1, win 510, options [nop,nop,TS val 2464751576 ecr 1663064687], length 11
+18:13:58.987924 IP 10.0.3.15.53810 > 192.168.77.1.23: Flags [.], ack 24, win 1004, options [nop,nop,TS val 1663064688 ecr 2464751576], length 0
+18:13:59.014118 IP 10.0.3.15.53810 > 192.168.77.1.23: Flags [P.], seq 1:13, ack 24, win 1004, options [nop,nop,TS val 1663064709 ecr 2464751576], length 12 [telnet WONT ECHO, WONT NAWS, DO ECHO, DO SUPPRESS GO AHEAD]
+18:13:59.014156 IP 192.168.77.1.23 > 10.0.3.15.53810: Flags [.], ack 13, win 510, options [nop,nop,TS val 2464751602 ecr 1663064709], length 0
+18:14:02.543754 IP 10.0.3.15.53810 > 192.168.77.1.23: Flags [F.], seq 13, ack 24, win 1004, options [nop,nop,TS val 1663068243 ecr 2464751602], length 0
+18:14:02.543873 IP 192.168.77.1.23 > 10.0.3.15.53810: Flags [F.], seq 24, ack 14, win 510, options [nop,nop,TS val 2464755132 ecr 1663068243], length 0
+18:14:02.545621 IP 10.0.3.15.53810 > 192.168.77.1.23: Flags [.], ack 25, win 1004, options [nop,nop,TS val 1663068245 ecr 2464755132], length 0
+18:14:02.976448 IP 10.0.3.15.49800 > 192.168.77.1.21: Flags [S], seq 1208742174, win 64240, options [mss 1460,sackOK,TS val 2315083352 ecr 0,nop,wscale 6], length 0
+18:14:02.976491 IP 192.168.77.1.21 > 10.0.3.15.49800: Flags [S.], seq 2011787596, ack 1208742175, win 65160, options [mss 1460,sackOK,TS val 2464755565 ecr 2315083352,nop,wscale 7], length 0
+18:14:02.977907 IP 10.0.3.15.49800 > 192.168.77.1.21: Flags [.], ack 1, win 1004, options [nop,nop,TS val 2315083356 ecr 2464755565], length 0
+18:14:02.978777 IP 192.168.77.1.21 > 10.0.3.15.49800: Flags [P.], seq 1:27, ack 1, win 510, options [nop,nop,TS val 2464755567 ecr 2315083356], length 26: FTP: 220 Operation successful
+18:14:02.979630 IP 10.0.3.15.49800 > 192.168.77.1.21: Flags [.], ack 27, win 1004, options [nop,nop,TS val 2315083358 ecr 2464755567], length 0
+18:14:02.980164 IP 10.0.3.15.49800 > 192.168.77.1.21: Flags [P.], seq 1:17, ack 27, win 1004, options [nop,nop,TS val 2315083359 ecr 2464755567], length 16: FTP: USER anonymous
+18:14:02.980193 IP 192.168.77.1.21 > 10.0.3.15.49800: Flags [.], ack 17, win 510, options [nop,nop,TS val 2464755568 ecr 2315083359], length 0
+18:14:02.980984 IP 192.168.77.1.21 > 10.0.3.15.49800: Flags [P.], seq 27:53, ack 17, win 510, options [nop,nop,TS val 2464755569 ecr 2315083359], length 26: FTP: 230 Operation successful
+18:14:02.985155 IP 10.0.3.15.49800 > 192.168.77.1.21: Flags [P.], seq 17:25, ack 53, win 1004, options [nop,nop,TS val 2315083364 ecr 2464755569], length 8: FTP: TYPE I
+18:14:02.985252 IP 192.168.77.1.21 > 10.0.3.15.49800: Flags [P.], seq 53:79, ack 25, win 510, options [nop,nop,TS val 2464755573 ecr 2315083364], length 26: FTP: 200 Operation successful
+18:14:02.996941 IP 10.0.3.15.49800 > 192.168.77.1.21: Flags [P.], seq 25:31, ack 79, win 1004, options [nop,nop,TS val 2315083376 ecr 2464755573], length 6: FTP: PASV
+18:14:02.997496 IP 192.168.77.1.21 > 10.0.3.15.49800: Flags [P.], seq 79:114, ack 31, win 510, options [nop,nop,TS val 2464755586 ecr 2315083376], length 35: FTP: 227 PASV ok (192,168,77,1,135,43)
+18:14:03.005138 IP 10.0.3.15.46520 > 192.168.77.1.34603: Flags [S], seq 2444916520, win 64240, options [mss 1460,sackOK,TS val 3804872189 ecr 0,nop,wscale 6], length 0
+18:14:03.005178 IP 192.168.77.1.34603 > 10.0.3.15.46520: Flags [S.], seq 3344959030, ack 2444916521, win 65160, options [mss 1460,sackOK,TS val 2464755593 ecr 3804872189,nop,wscale 7], length 0
+18:14:03.005850 IP 10.0.3.15.46520 > 192.168.77.1.34603: Flags [.], ack 1, win 1004, options [nop,nop,TS val 3804872189 ecr 2464755593], length 0
+18:14:03.005897 IP 10.0.3.15.49800 > 192.168.77.1.21: Flags [P.], seq 31:54, ack 114, win 1004, options [nop,nop,TS val 2315083384 ecr 2464755586], length 23: FTP: RETR no-such-file.bin
+18:14:03.006339 IP 192.168.77.1.21 > 10.0.3.15.49800: Flags [P.], seq 114:125, ack 54, win 510, options [nop,nop,TS val 2464755594 ecr 2315083384], length 11: FTP: 550 Error
+18:14:03.007334 IP 10.0.3.15.46520 > 192.168.77.1.34603: Flags [F.], seq 1, ack 1, win 1004, options [nop,nop,TS val 3804872191 ecr 2464755593], length 0
+18:14:03.007387 IP 10.0.3.15.49800 > 192.168.77.1.21: Flags [F.], seq 54, ack 125, win 1004, options [nop,nop,TS val 2315083386 ecr 2464755594], length 0
+18:14:03.007538 IP 192.168.77.1.34603 > 10.0.3.15.46520: Flags [R.], seq 1, ack 2, win 510, options [nop,nop,TS val 2464755596 ecr 3804872191], length 0
+18:14:03.007578 IP 192.168.77.1.21 > 10.0.3.15.49800: Flags [F.], seq 125, ack 55, win 510, options [nop,nop,TS val 2464755596 ecr 2315083386], length 0
+18:14:03.011054 IP 10.0.3.15.49800 > 192.168.77.1.21: Flags [.], ack 126, win 1004, options [nop,nop,TS val 2315083390 ecr 2464755596], length 0
+18:14:03.175618 IP 10.0.3.15.49808 > 192.168.77.1.21: Flags [S], seq 307177520, win 64240, options [mss 1460,sackOK,TS val 1289683453 ecr 0,nop,wscale 6], length 0
+18:14:03.175662 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [S.], seq 3161444307, ack 307177521, win 65160, options [mss 1460,sackOK,TS val 2464755764 ecr 1289683453,nop,wscale 7], length 0
+18:14:03.176884 IP 10.0.3.15.49808 > 192.168.77.1.21: Flags [.], ack 1, win 1004, options [nop,nop,TS val 1289683454 ecr 2464755764], length 0
+18:14:03.177646 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [P.], seq 1:27, ack 1, win 510, options [nop,nop,TS val 2464755766 ecr 1289683454], length 26: FTP: 220 Operation successful
+18:14:03.178456 IP 10.0.3.15.49808 > 192.168.77.1.21: Flags [.], ack 27, win 1004, options [nop,nop,TS val 1289683456 ecr 2464755766], length 0
+18:14:03.181763 IP 10.0.3.15.49808 > 192.168.77.1.21: Flags [P.], seq 1:17, ack 27, win 1004, options [nop,nop,TS val 1289683459 ecr 2464755766], length 16: FTP: USER anonymous
+18:14:03.181798 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [.], ack 17, win 510, options [nop,nop,TS val 2464755770 ecr 1289683459], length 0
+18:14:03.182224 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [P.], seq 27:53, ack 17, win 510, options [nop,nop,TS val 2464755770 ecr 1289683459], length 26: FTP: 230 Operation successful
+18:14:03.183398 IP 10.0.3.15.49808 > 192.168.77.1.21: Flags [P.], seq 17:25, ack 53, win 1004, options [nop,nop,TS val 1289683461 ecr 2464755770], length 8: FTP: TYPE I
+18:14:03.183496 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [P.], seq 53:79, ack 25, win 510, options [nop,nop,TS val 2464755772 ecr 1289683461], length 26: FTP: 200 Operation successful
+18:14:03.184641 IP 10.0.3.15.49808 > 192.168.77.1.21: Flags [P.], seq 25:31, ack 79, win 1004, options [nop,nop,TS val 1289683462 ecr 2464755772], length 6: FTP: PASV
+18:14:03.184800 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [P.], seq 79:114, ack 31, win 510, options [nop,nop,TS val 2464755773 ecr 1289683462], length 35: FTP: 227 PASV ok (192,168,77,1,151,37)
+18:14:03.189066 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [S], seq 1481944121, win 64240, options [mss 1460,sackOK,TS val 3040738928 ecr 0,nop,wscale 6], length 0
+18:14:03.189122 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [S.], seq 1258381434, ack 1481944122, win 65160, options [mss 1460,sackOK,TS val 2464755777 ecr 3040738928,nop,wscale 7], length 0
+18:14:03.190538 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 1, win 1004, options [nop,nop,TS val 3040738928 ecr 2464755777], length 0
+18:14:03.192885 IP 10.0.3.15.49808 > 192.168.77.1.21: Flags [P.], seq 31:46, ack 114, win 1004, options [nop,nop,TS val 1289683471 ecr 2464755773], length 15: FTP: RETR seed.bin
+18:14:03.193081 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [P.], seq 114:173, ack 46, win 510, options [nop,nop,TS val 2464755781 ecr 1289683471], length 59: FTP: 150 Opening BINARY connection for seed.bin (131072 bytes)
+18:14:03.193139 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 1:4097, ack 1, win 510, options [nop,nop,TS val 2464755781 ecr 3040738928], length 4096
+18:14:03.193153 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 4097:6993, ack 1, win 510, options [nop,nop,TS val 2464755781 ecr 3040738928], length 2896
+18:14:03.193164 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 6993:11337, ack 1, win 510, options [nop,nop,TS val 2464755781 ecr 3040738928], length 4344
+18:14:03.193175 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 11337:14233, ack 1, win 510, options [nop,nop,TS val 2464755781 ecr 3040738928], length 2896
+18:14:03.194443 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 4097, win 1132, options [nop,nop,TS val 3040738933 ecr 2464755781], length 0
+18:14:03.194474 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 14233:22921, ack 1, win 510, options [nop,nop,TS val 2464755783 ecr 3040738933], length 8688
+18:14:03.194492 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 6993, win 1210, options [nop,nop,TS val 3040738933 ecr 2464755781], length 0
+18:14:03.194518 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 11337, win 1164, options [nop,nop,TS val 3040738933 ecr 2464755781], length 0
+18:14:03.194526 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 22921:35953, ack 1, win 510, options [nop,nop,TS val 2464755783 ecr 3040738933], length 13032
+18:14:03.195114 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [P.], seq 173:199, ack 46, win 510, options [nop,nop,TS val 2464755783 ecr 1289683471], length 26: FTP: 226 Operation successful
+18:14:03.195222 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 14233, win 1134, options [nop,nop,TS val 3040738933 ecr 2464755781], length 0
+18:14:03.196374 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 22921, win 1042, options [nop,nop,TS val 3040738934 ecr 2464755783], length 0
+18:14:03.196404 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 35953:46089, ack 1, win 510, options [nop,nop,TS val 2464755785 ecr 3040738934], length 10136
+18:14:03.196416 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 46089:60569, ack 1, win 510, options [nop,nop,TS val 2464755785 ecr 3040738934], length 14480
+18:14:03.196642 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 35953, win 900, options [nop,nop,TS val 3040738934 ecr 2464755783], length 0
+18:14:03.196659 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 60569:77945, ack 1, win 510, options [nop,nop,TS val 2464755785 ecr 3040738934], length 17376
+18:14:03.196670 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 77945:86633, ack 1, win 510, options [nop,nop,TS val 2464755785 ecr 3040738934], length 8688
+18:14:03.199439 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 46089, win 793, options [nop,nop,TS val 3040738936 ecr 2464755785], length 0
+18:14:03.199476 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 86633:96841, ack 1, win 510, options [nop,nop,TS val 2464755788 ecr 3040738936], length 10208
+18:14:03.202378 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [P.], seq 173:199, ack 46, win 510, options [nop,nop,TS val 2464755791 ecr 1289683471], length 26: FTP: 226 Operation successful
+18:14:03.202853 IP 10.0.3.15.49808 > 192.168.77.1.21: Flags [.], ack 199, win 1003, options [nop,nop,TS val 1289683481 ecr 2464755781,nop,nop,sack 1 {173:199}], length 0
+18:14:03.206380 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [.], seq 96769:96841, ack 1, win 510, options [nop,nop,TS val 2464755795 ecr 3040738936], length 72
+18:14:03.241508 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 96841, win 247, options [nop,nop,TS val 3040738976 ecr 2464755785,nop,nop,sack 1 {96769:96841}], length 0
+18:14:03.241552 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 96841:112649, ack 1, win 510, options [nop,nop,TS val 2464755830 ecr 3040738976], length 15808
+18:14:03.260379 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [.], seq 111321:112649, ack 1, win 510, options [nop,nop,TS val 2464755849 ecr 3040738976], length 1328
+18:14:03.282919 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 112649, win 0, options [nop,nop,TS val 3040739022 ecr 2464755830,nop,nop,sack 1 {111321:112649}], length 0
+18:14:03.503379 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [.], ack 1, win 510, options [nop,nop,TS val 2464756092 ecr 3040739022], length 0
+18:14:03.506136 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 112649, win 0, options [nop,nop,TS val 3040739245 ecr 2464755830], length 0
+18:14:03.935377 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [.], ack 1, win 510, options [nop,nop,TS val 2464756524 ecr 3040739245], length 0
+18:14:04.816468 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [.], ack 1, win 510, options [nop,nop,TS val 2464757405 ecr 3040739245], length 0
+18:14:04.817426 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 112649, win 0, options [nop,nop,TS val 3040740556 ecr 2464755830], length 0
+18:14:06.542508 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [.], ack 1, win 510, options [nop,nop,TS val 2464759131 ecr 3040740556], length 0
+18:14:06.547449 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 112649, win 0, options [nop,nop,TS val 3040742283 ecr 2464755830], length 0
+18:14:09.998376 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [.], ack 1, win 510, options [nop,nop,TS val 2464762587 ecr 3040742283], length 0
+18:14:09.998849 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 112649, win 0, options [nop,nop,TS val 3040745738 ecr 2464755830], length 0
+18:14:14.090235 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 112649, win 1210, options [nop,nop,TS val 3040749829 ecr 2464755830], length 0
+18:14:14.090264 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 112649:115593, ack 1, win 510, options [nop,nop,TS val 2464766678 ecr 3040749829], length 2944
+18:14:14.090279 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 115593:122833, ack 1, win 510, options [nop,nop,TS val 2464766678 ecr 3040749829], length 7240
+18:14:14.090284 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [P.], seq 122833:125729, ack 1, win 510, options [nop,nop,TS val 2464766678 ecr 3040749829], length 2896
+18:14:14.096575 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 115593, win 1261, options [nop,nop,TS val 3040749830 ecr 2464766678], length 0
+18:14:14.096626 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [FP.], seq 125729:131073, ack 1, win 510, options [nop,nop,TS val 2464766685 ecr 3040749830], length 5344
+18:14:14.096665 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 122833, win 1185, options [nop,nop,TS val 3040749835 ecr 2464766678], length 0
+18:14:14.096699 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 125729, win 1154, options [nop,nop,TS val 3040749835 ecr 2464766678], length 0
+18:14:14.119380 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [FP.], seq 130073:131073, ack 1, win 510, options [nop,nop,TS val 2464766708 ecr 3040749835], length 1000
+18:14:14.119789 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [.], ack 131074, win 1093, options [nop,nop,TS val 3040749859 ecr 2464766685,nop,nop,sack 1 {130073:131074}], length 0
+18:14:17.618077 IP 10.0.3.15.34534 > 192.168.77.1.38693: Flags [F.], seq 1, ack 131074, win 1261, options [nop,nop,TS val 3040753357 ecr 2464766685], length 0
+18:14:17.618129 IP 192.168.77.1.38693 > 10.0.3.15.34534: Flags [.], ack 2, win 510, options [nop,nop,TS val 2464770206 ecr 3040753357], length 0
+18:14:17.618171 IP 10.0.3.15.49808 > 192.168.77.1.21: Flags [P.], seq 46:52, ack 199, win 1003, options [nop,nop,TS val 1289697896 ecr 2464755781], length 6: FTP: QUIT
+18:14:17.618988 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [P.], seq 199:225, ack 52, win 510, options [nop,nop,TS val 2464770207 ecr 1289697896], length 26: FTP: 221 Operation successful
+18:14:17.619126 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [F.], seq 225, ack 52, win 510, options [nop,nop,TS val 2464770207 ecr 1289697896], length 0
+18:14:17.620258 IP 10.0.3.15.49808 > 192.168.77.1.21: Flags [.], ack 225, win 1003, options [nop,nop,TS val 1289697898 ecr 2464770207], length 0
+18:14:17.620309 IP 10.0.3.15.49808 > 192.168.77.1.21: Flags [F.], seq 52, ack 226, win 1003, options [nop,nop,TS val 1289697898 ecr 2464770207], length 0
+18:14:17.620328 IP 192.168.77.1.21 > 10.0.3.15.49808: Flags [.], ack 53, win 510, options [nop,nop,TS val 2464770208 ecr 1289697898], length 0
+18:14:18.327473 IP 10.0.3.15.50580 > 192.168.77.1.21: Flags [S], seq 1534373269, win 64240, options [mss 1460,sackOK,TS val 3681743695 ecr 0,nop,wscale 6], length 0
+18:14:18.327520 IP 192.168.77.1.21 > 10.0.3.15.50580: Flags [S.], seq 1324561789, ack 1534373270, win 65160, options [mss 1460,sackOK,TS val 2464770916 ecr 3681743695,nop,wscale 7], length 0
+18:14:18.335683 IP 10.0.3.15.50580 > 192.168.77.1.21: Flags [.], ack 1, win 1004, options [nop,nop,TS val 3681743706 ecr 2464770916], length 0
+18:14:18.336525 IP 192.168.77.1.21 > 10.0.3.15.50580: Flags [P.], seq 1:27, ack 1, win 510, options [nop,nop,TS val 2464770925 ecr 3681743706], length 26: FTP: 220 Operation successful
+18:14:18.340320 IP 10.0.3.15.50580 > 192.168.77.1.21: Flags [.], ack 27, win 1004, options [nop,nop,TS val 3681743713 ecr 2464770925], length 0
+18:14:18.340402 IP 10.0.3.15.50580 > 192.168.77.1.21: Flags [P.], seq 1:17, ack 27, win 1004, options [nop,nop,TS val 3681743713 ecr 2464770925], length 16: FTP: USER anonymous
+18:14:18.340435 IP 192.168.77.1.21 > 10.0.3.15.50580: Flags [.], ack 17, win 510, options [nop,nop,TS val 2464770929 ecr 3681743713], length 0
+18:14:18.340594 IP 192.168.77.1.21 > 10.0.3.15.50580: Flags [P.], seq 27:53, ack 17, win 510, options [nop,nop,TS val 2464770929 ecr 3681743713], length 26: FTP: 230 Operation successful
+18:14:18.345136 IP 10.0.3.15.50580 > 192.168.77.1.21: Flags [P.], seq 17:25, ack 53, win 1004, options [nop,nop,TS val 3681743718 ecr 2464770929], length 8: FTP: TYPE I
+18:14:18.345258 IP 192.168.77.1.21 > 10.0.3.15.50580: Flags [P.], seq 53:79, ack 25, win 510, options [nop,nop,TS val 2464770933 ecr 3681743718], length 26: FTP: 200 Operation successful
+18:14:18.357467 IP 10.0.3.15.50580 > 192.168.77.1.21: Flags [P.], seq 25:31, ack 79, win 1004, options [nop,nop,TS val 3681743720 ecr 2464770933], length 6: FTP: PASV
+18:14:18.357646 IP 192.168.77.1.21 > 10.0.3.15.50580: Flags [P.], seq 79:115, ack 31, win 510, options [nop,nop,TS val 2464770946 ecr 3681743720], length 36: FTP: 227 PASV ok (192,168,77,1,163,137)
+18:14:18.358285 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [S], seq 2597588335, win 64240, options [mss 1460,sackOK,TS val 2341544784 ecr 0,nop,wscale 6], length 0
+18:14:18.358324 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [S.], seq 522165716, ack 2597588336, win 65160, options [mss 1460,sackOK,TS val 2464770946 ecr 2341544784,nop,wscale 7], length 0
+18:14:18.358896 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [.], ack 1, win 1004, options [nop,nop,TS val 2341544785 ecr 2464770946], length 0
+18:14:18.360004 IP 10.0.3.15.50580 > 192.168.77.1.21: Flags [P.], seq 31:46, ack 115, win 1004, options [nop,nop,TS val 3681743733 ecr 2464770946], length 15: FTP: STOR back.bin
+18:14:18.360239 IP 192.168.77.1.21 > 10.0.3.15.50580: Flags [P.], seq 115:136, ack 46, win 510, options [nop,nop,TS val 2464770948 ecr 3681743733], length 21: FTP: 150 Ok to send data
+18:14:18.390993 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 1:4097, ack 1, win 1004, options [nop,nop,TS val 2341544817 ecr 2464770946], length 4096
+18:14:18.391042 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 4097, win 574, options [nop,nop,TS val 2464770979 ecr 2341544817], length 0
+18:14:18.405414 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 4097:8193, ack 1, win 1004, options [nop,nop,TS val 2341544831 ecr 2464770979], length 4096
+18:14:18.405462 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 8193, win 638, options [nop,nop,TS val 2464770994 ecr 2341544831], length 0
+18:14:18.410514 IP 10.0.3.15.50580 > 192.168.77.1.21: Flags [.], ack 136, win 1004, options [nop,nop,TS val 3681743783 ecr 2464770948], length 0
+18:14:18.429146 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 8193:12289, ack 1, win 1004, options [nop,nop,TS val 2341544855 ecr 2464770994], length 4096
+18:14:18.429194 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 12289, win 702, options [nop,nop,TS val 2464771017 ecr 2341544855], length 0
+18:14:18.447039 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 12289:16385, ack 1, win 1004, options [nop,nop,TS val 2341544873 ecr 2464771017], length 4096
+18:14:18.447084 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 16385, win 766, options [nop,nop,TS val 2464771035 ecr 2341544873], length 0
+18:14:18.464953 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 16385:20481, ack 1, win 1004, options [nop,nop,TS val 2341544891 ecr 2464771035], length 4096
+18:14:18.464999 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 20481, win 797, options [nop,nop,TS val 2464771053 ecr 2341544891], length 0
+18:14:18.476797 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 20481:24577, ack 1, win 1004, options [nop,nop,TS val 2341544903 ecr 2464771053], length 4096
+18:14:18.476839 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 24577, win 797, options [nop,nop,TS val 2464771065 ecr 2341544903], length 0
+18:14:18.494441 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 24577:28673, ack 1, win 1004, options [nop,nop,TS val 2341544920 ecr 2464771065], length 4096
+18:14:18.494481 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 28673, win 797, options [nop,nop,TS val 2464771083 ecr 2341544920], length 0
+18:14:18.510099 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 28673:32769, ack 1, win 1004, options [nop,nop,TS val 2341544936 ecr 2464771083], length 4096
+18:14:18.510158 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 32769, win 797, options [nop,nop,TS val 2464771098 ecr 2341544936], length 0
+18:14:18.521486 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 32769:36865, ack 1, win 1004, options [nop,nop,TS val 2341544944 ecr 2464771098], length 4096
+18:14:18.521533 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 36865, win 797, options [nop,nop,TS val 2464771110 ecr 2341544944], length 0
+18:14:18.536801 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 36865:40961, ack 1, win 1004, options [nop,nop,TS val 2341544963 ecr 2464771110], length 4096
+18:14:18.536850 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 40961, win 797, options [nop,nop,TS val 2464771125 ecr 2341544963], length 0
+18:14:18.551317 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 40961:45057, ack 1, win 1004, options [nop,nop,TS val 2341544977 ecr 2464771125], length 4096
+18:14:18.551378 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 45057, win 797, options [nop,nop,TS val 2464771139 ecr 2341544977], length 0
+18:14:18.588667 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 45057:49153, ack 1, win 1004, options [nop,nop,TS val 2341545014 ecr 2464771139], length 4096
+18:14:18.588715 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 49153, win 797, options [nop,nop,TS val 2464771177 ecr 2341545014], length 0
+18:14:18.617264 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 49153:53249, ack 1, win 1004, options [nop,nop,TS val 2341545038 ecr 2464771177], length 4096
+18:14:18.617307 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 53249, win 797, options [nop,nop,TS val 2464771205 ecr 2341545038], length 0
+18:14:18.648463 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 53249:57345, ack 1, win 1004, options [nop,nop,TS val 2341545073 ecr 2464771205], length 4096
+18:14:18.648511 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 57345, win 797, options [nop,nop,TS val 2464771237 ecr 2341545073], length 0
+18:14:18.675530 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 57345:61441, ack 1, win 1004, options [nop,nop,TS val 2341545097 ecr 2464771237], length 4096
+18:14:18.675619 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 61441, win 797, options [nop,nop,TS val 2464771264 ecr 2341545097], length 0
+18:14:18.705053 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 61441:65537, ack 1, win 1004, options [nop,nop,TS val 2341545130 ecr 2464771264], length 4096
+18:14:18.705096 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 65537, win 797, options [nop,nop,TS val 2464771293 ecr 2341545130], length 0
+18:14:18.730459 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 65537:69633, ack 1, win 1004, options [nop,nop,TS val 2341545156 ecr 2464771293], length 4096
+18:14:18.730502 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 69633, win 797, options [nop,nop,TS val 2464771319 ecr 2341545156], length 0
+18:14:18.756917 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 69633:73729, ack 1, win 1004, options [nop,nop,TS val 2341545180 ecr 2464771319], length 4096
+18:14:18.756960 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 73729, win 797, options [nop,nop,TS val 2464771345 ecr 2341545180], length 0
+18:14:18.779553 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 73729:77825, ack 1, win 1004, options [nop,nop,TS val 2341545199 ecr 2464771345], length 4096
+18:14:18.779596 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 77825, win 797, options [nop,nop,TS val 2464771368 ecr 2341545199], length 0
+18:14:18.797408 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 77825:81921, ack 1, win 1004, options [nop,nop,TS val 2341545223 ecr 2464771368], length 4096
+18:14:18.797442 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 81921, win 797, options [nop,nop,TS val 2464771386 ecr 2341545223], length 0
+18:14:18.838883 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 81921:86017, ack 1, win 1004, options [nop,nop,TS val 2341545265 ecr 2464771386], length 4096
+18:14:18.838924 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 86017, win 797, options [nop,nop,TS val 2464771427 ecr 2341545265], length 0
+18:14:18.877078 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 86017:90113, ack 1, win 1004, options [nop,nop,TS val 2341545303 ecr 2464771427], length 4096
+18:14:18.877134 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 90113, win 797, options [nop,nop,TS val 2464771465 ecr 2341545303], length 0
+18:14:18.908474 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 90113:94209, ack 1, win 1004, options [nop,nop,TS val 2341545332 ecr 2464771465], length 4096
+18:14:18.908523 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 94209, win 797, options [nop,nop,TS val 2464771497 ecr 2341545332], length 0
+18:14:18.932182 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 94209:98305, ack 1, win 1004, options [nop,nop,TS val 2341545358 ecr 2464771497], length 4096
+18:14:18.932228 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 98305, win 797, options [nop,nop,TS val 2464771520 ecr 2341545358], length 0
+18:14:18.952505 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 98305:102401, ack 1, win 1004, options [nop,nop,TS val 2341545376 ecr 2464771520], length 4096
+18:14:18.952543 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 102401, win 797, options [nop,nop,TS val 2464771541 ecr 2341545376], length 0
+18:14:18.974626 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 102401:106497, ack 1, win 1004, options [nop,nop,TS val 2341545400 ecr 2464771541], length 4096
+18:14:18.974670 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 106497, win 797, options [nop,nop,TS val 2464771563 ecr 2341545400], length 0
+18:14:18.995205 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 106497:110593, ack 1, win 1004, options [nop,nop,TS val 2341545421 ecr 2464771563], length 4096
+18:14:18.995249 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 110593, win 797, options [nop,nop,TS val 2464771583 ecr 2341545421], length 0
+18:14:19.012523 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 110593:114689, ack 1, win 1004, options [nop,nop,TS val 2341545434 ecr 2464771583], length 4096
+18:14:19.012559 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 114689, win 797, options [nop,nop,TS val 2464771601 ecr 2341545434], length 0
+18:14:19.036455 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 114689:118785, ack 1, win 1004, options [nop,nop,TS val 2341545459 ecr 2464771601], length 4096
+18:14:19.036496 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 118785, win 797, options [nop,nop,TS val 2464771625 ecr 2341545459], length 0
+18:14:19.045224 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 118785:122881, ack 1, win 1004, options [nop,nop,TS val 2341545471 ecr 2464771625], length 4096
+18:14:19.045263 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 122881, win 797, options [nop,nop,TS val 2464771633 ecr 2341545471], length 0
+18:14:19.058235 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 122881:126977, ack 1, win 1004, options [nop,nop,TS val 2341545484 ecr 2464771633], length 4096
+18:14:19.058272 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 126977, win 797, options [nop,nop,TS val 2464771646 ecr 2341545484], length 0
+18:14:19.084684 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [P.], seq 126977:131073, ack 1, win 1004, options [nop,nop,TS val 2341545510 ecr 2464771646], length 4096
+18:14:19.084723 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [.], ack 131073, win 797, options [nop,nop,TS val 2464771673 ecr 2341545510], length 0
+18:14:19.084820 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [F.], seq 131073, ack 1, win 1004, options [nop,nop,TS val 2341545511 ecr 2464771646], length 0
+18:14:19.084856 IP 192.168.77.1.41865 > 10.0.3.15.54012: Flags [F.], seq 1, ack 131074, win 797, options [nop,nop,TS val 2464771673 ecr 2341545511], length 0
+18:14:19.084883 IP 192.168.77.1.21 > 10.0.3.15.50580: Flags [P.], seq 136:162, ack 46, win 510, options [nop,nop,TS val 2464771673 ecr 3681743783], length 26: FTP: 226 Operation successful
+18:14:19.085333 IP 10.0.3.15.54012 > 192.168.77.1.41865: Flags [.], ack 2, win 1004, options [nop,nop,TS val 2341545511 ecr 2464771673], length 0
+18:14:19.092043 IP 10.0.3.15.50580 > 192.168.77.1.21: Flags [.], ack 162, win 1004, options [nop,nop,TS val 3681744459 ecr 2464771673], length 0
+18:14:19.092095 IP 10.0.3.15.50580 > 192.168.77.1.21: Flags [P.], seq 46:52, ack 162, win 1004, options [nop,nop,TS val 3681744460 ecr 2464771673], length 6: FTP: QUIT
+18:14:19.092696 IP 192.168.77.1.21 > 10.0.3.15.50580: Flags [P.], seq 162:188, ack 52, win 510, options [nop,nop,TS val 2464771681 ecr 3681744460], length 26: FTP: 221 Operation successful
+18:14:19.092831 IP 192.168.77.1.21 > 10.0.3.15.50580: Flags [F.], seq 188, ack 52, win 510, options [nop,nop,TS val 2464771681 ecr 3681744460], length 0
+18:14:19.099517 IP 10.0.3.15.50580 > 192.168.77.1.21: Flags [F.], seq 52, ack 189, win 1004, options [nop,nop,TS val 3681744468 ecr 2464771681], length 0
+18:14:19.099559 IP 192.168.77.1.21 > 10.0.3.15.50580: Flags [.], ack 53, win 510, options [nop,nop,TS val 2464771688 ecr 3681744468], length 0

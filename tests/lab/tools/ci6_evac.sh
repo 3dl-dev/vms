@@ -36,6 +36,15 @@
 #    ($2$DUA1: on the VAXes) as VDA100:, and carries SYS$SYSTEM:EVACWL.EXE
 #    (tests/lab/ci6/mk_evacwl_native.sh). fire checks EVACWL.EXE.
 #
+# CLOCKS (rd vms-6731): C3 compares timestamps written by different nodes, and
+# each node's clock free-runs (OVMX is a TCG guest with no RTC sync or NTP,
+# the VAXes run under SIMH). Just before the workload, fire sets every node's
+# clock from the pod's the way an operator does, DCL SET TIME=<time> on each
+# console (lab-console.sh stamp computes <time> in the pod at the write), then
+# reads each back with F$TIME() into $CAP/clock.txt and aborts the run as a
+# SETUP FAULT if any node is off by more than CI6_CLOCK_TOL (0.30 s). The
+# probe repeats (PREEVAC) just before the STOP; the grader re-checks both.
+#
 # CI6_SHARED=1 fires on the vms-5fa bed instead (an ASYM_MSCP=1 pod, the
 # share subcommand's volume): $2$DUA<CI6_VAX_UNIT>: is VAX1's alone, so OVMX
 # and VAX2 reach it only through VAX1's MSCP server. STEP 0 mounts it /SYSTEM
@@ -134,6 +143,39 @@ stage_mar() {
 	send "$n" "$m :== \$SYS\$LOGIN:$m.EXE"
 	send "$n" "DIRECTORY/SIZE SYS\$LOGIN:$m.EXE"
 	[ "$DRY" = 1 ] || since "$n" | grep -q "$m.EXE;" || die "$m did not build on $n"
+}
+
+# ---- node clocks (rd vms-6731) ---------------------------------------------
+CLK=$CAP/clock.txt
+# clock_probe <console> <NODE> <TAG>: F$TIME() on the node, timed by the pod's
+# clock; one clock.txt line. Echoes the probe's DT (hundredths) for a lead.
+clock_probe() {
+	local out
+	if [ "$DRY" = 1 ]; then echo "STAMP $1: CI6CLK $3 $2 F\$TIME()" >&2; echo 0; return 0; fi
+	out=$(timeout 90 "$LC" stamp "$POD" "$1" 0 "CI6CLK $3 $2 +[ 0-9]?[0-9]-[A-Z]{3}-[0-9]{4} " \
+		"WRITE SYS\$OUTPUT \"CI6CLK $3 $2 \",F\$TIME()")
+	echo "$3 $2 ${out:-WRITE - SEEN - DT - LINE -}" >> "$CLK"
+	tl "CLOCK $3 $2 ${out:-no read-back}" >&2
+	set -- $out
+	case "${6:-}" in ''|*[!0-9]*) echo 0;; *) echo "$6";; esac
+}
+# align_clocks: SET TIME on every node from the pod clock, then gate on the
+# read-back. The SET TIME line carries the pod time plus the node's console
+# delay as measured by its PRE probe, so the time is right when DCL runs it.
+align_clocks() {
+	local n N lead
+	for n in vax1 vax2 "$OCON"; do
+		N=$(echo "$n" | tr a-z A-Z)
+		lead=$(clock_probe "$n" "$N" PRE)
+		if [ "$DRY" = 1 ]; then echo "STAMP $n: SET TIME=%NOW%"
+		else timeout 90 "$LC" stamp "$POD" "$n" "$lead" - 'SET TIME=%NOW%' >/dev/null || die "lab-console stamp to $n failed"
+			sleep 3
+		fi
+		clock_probe "$n" "$N" ALIGN >/dev/null
+	done
+	[ "$DRY" = 1 ] && return 0
+	python3 -I "$HERE/ci6_evac_grade.py" --clock "$CAP" | tee -a "$TL"
+	[ "${PIPESTATUS[0]}" = 0 ] || die "SETUP FAULT: node clocks not aligned (clock.txt); C3 would compare misaligned clocks"
 }
 
 # ovmx_mscp_dev <vax-unit>: the OVMX name of a unit VAX1 serves. FC-P7.1 names
@@ -335,6 +377,10 @@ send "$OCON" "DEFINE/SYSTEM EVAC\$DATA $ODEV[$DIR]"
 send vax1 'SHOW DEVICE $2$DUA1:' 5
 fi
 
+# ---- CLOCKS: every node's clock set from the pod's, just before the workload --
+tl "CLOCKS SET TIME on VAX1, VAX2, $OVMX from the pod clock; tolerance ${CI6_CLOCK_TOL:-0.30} s"
+align_clocks
+
 # ---- STEP 1: OVMX standby takes NL first (directory + master), converts at 90 s
 tl "STEP 1 $OVMX: EVACWL STANDBY $NLARG (spawned)"
 send "$OCON" 'CREATE SYS$LOGIN:OVSTBY.COM' 2
@@ -354,6 +400,7 @@ send vax1 "DIRECTORY/SIZE=ALL $VDEV[$DIR]EVAC.DAT" 5
 tl "SNAPSHOT VAX1 workload running, $OVMX standby converting behind it"
 
 # ---- STEP 3: evacuate -----------------------------------------------------------
+for n in vax1 vax2 "$OCON"; do clock_probe "$n" "$(echo "$n" | tr a-z A-Z)" PREEVAC >/dev/null; done
 tl "STEP 3 EVACUATE: STOP EVACVAX1 on VAX1"
 send vax1 'STOP EVACVAX1' 5
 if [ "$SHARED" = 1 ]; then	# the volume is already OVMX's too: no handoff

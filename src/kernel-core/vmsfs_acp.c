@@ -43,6 +43,7 @@
 #include "vms_prot.h"        /* vms_prot_check: the executive's one protection decision */
 #include "vms_mscp_cl.h"     /* rd vms-4822: served units' blocks, from the class driver */
 #include "vms_acp_cache.h"   /* rd vms-943: the ACP's header/directory block cache */
+#include "vms_f11b_ser.h"     /* rd vms-d63: the XQP per-file serialization lock */
 
 /* The served-volume projection restates the unit-name width so it can compile
  * in the host rung too (vms_acp_serve.h's own note). THIS file sees both, so
@@ -209,6 +210,12 @@ struct vms_acp_chan {
      * taken by the executive for RMS (VMS_IOCTL_ACP_FLOCK) and released with
      * the access: 0 = none held. */
     uint32_t         flock_lkid;
+    /* rd vms-d63: the HEADER counter of the file's F11B$s value block under
+     * which win[]/acc_efblk/acc_ffbyte were read off the disk. A later
+     * operation that is granted a DIFFERENT counter knows another node changed
+     * the header meanwhile, and re-reads it before using the window or EOF. */
+    uint32_t         acc_hdr_seq;
+    uint8_t          acc_hdr_seq_valid;
     uint32_t         win_n;             /* extents in win[] */
     struct acp_win_ext win[ACP_WINDOW_MAX];
     /*
@@ -582,6 +589,85 @@ static void acp_vol_resnam_kind(const struct vms_acp_volume *vol, char kind,
 static void acp_vol_resnam(const struct vms_acp_volume *vol, char *out, size_t outsz)
 {
     acp_vol_resnam_kind(vol, 's', out, outsz);
+}
+
+/*
+ * rd vms-d63: THE XQP's PER-FILE SERIALIZATION LOCK, held across one ACP
+ * operation on one file. vms_f11b_ser.h says what it is and what its value
+ * block carries; vms_lock.c (vms_lock_acp_file_ser) takes it. Here:
+ *   - acp_fser_take before the operation reads the file's header, so the
+ *     header it reads is the one the granted counters describe;
+ *   - the operation marks what it changed (hdr_changed / data_changed);
+ *   - acp_fser_release writes the next counters -- the first holder's
+ *     (0,0) -> (1,1), +1 on the header counter for a header write, +1 on the
+ *     data counter for a directory-contents write -- with the $DEQ, which is
+ *     how a VAX holding the file's header in its cache learns to re-read it.
+ * A volume with no label has no cluster-wide name to lock (the same refusal
+ * acp_vol_resnam_kind's fallback makes for serialization): nothing is taken,
+ * and the operation proceeds as before. Neither is anything taken when the
+ * volume holds no standing lock (vol_lkid 0: the DLM refused this volume at
+ * MOUNT, which is a cluster-registration fact the rest of the ACP already
+ * lives with).
+ */
+struct acp_fser {
+    uint32_t par_lkid;
+    uint32_t lkid;
+    uint8_t  vb[VMS_F11B_SER_VALBLK_LEN];
+    uint8_t  held;
+    uint8_t  hdr_changed;
+    uint8_t  data_changed;
+};
+
+static uint32_t acp_fser_take(struct vms_proc *proc,
+                              const struct vms_acp_volume *vol,
+                              uint32_t fidnum, struct acp_fser *fs)
+{
+    char vres[32];
+    uint32_t st;
+
+    memset(fs, 0, sizeof(*fs));
+    if (vol == NULL || fidnum == 0u || vol->vol_lkid == 0u ||
+        acp_label_is_blank(vol->volname))
+        return SS__NORMAL;
+    acp_vol_resnam_kind(vol, 'v', vres, sizeof(vres));
+    st = vms_lock_acp_file_ser(proc, vres, (uint32_t)strlen(vres), fidnum,
+                               fs->vb, &fs->par_lkid, &fs->lkid);
+    if (st != SS__NORMAL)
+        return st;
+    fs->held = 1u;
+    return SS__NORMAL;
+}
+
+/* Release with the next counters; returns the header counter written (what a
+ * channel caching the header is now valid against), 0 when nothing was held. */
+static uint32_t acp_fser_release(struct vms_proc *proc, struct acp_fser *fs)
+{
+    uint32_t seq;
+
+    if (!fs->held)
+        return 0u;
+    vms_f11b_ser_next(fs->vb, fs->hdr_changed, fs->data_changed);
+    seq = vms_f11b_ser_hdr_seq(fs->vb);
+    (void)vms_lock_acp_file_ser_release(proc, fs->par_lkid, fs->lkid, fs->vb);
+    fs->held = 0u;
+    return seq;
+}
+
+/* A change that has already been made, announced: take the lock, mark it,
+ * release it. For the IO$_CREATE/DELETE/MODIFY paths, whose several files are
+ * not held across the operation (see rd vms-d63's follow-up note at
+ * acp_fileop). */
+static void acp_fser_announce(struct vms_proc *proc,
+                              const struct vms_acp_volume *vol,
+                              uint32_t fidnum, int hdr, int data)
+{
+    struct acp_fser fs;
+
+    if (acp_fser_take(proc, vol, fidnum, &fs) != SS__NORMAL)
+        return;
+    fs.hdr_changed = (uint8_t)(hdr ? 1 : 0);
+    fs.data_changed = (uint8_t)(data ? 1 : 0);
+    (void)acp_fser_release(proc, &fs);
 }
 
 /* Caller holds proc->chan_lock. */
@@ -2435,6 +2521,8 @@ long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg)
         uint16_t out_version = args.version;
         uint32_t file_fid_num;
         uint32_t status;
+        uint32_t hdr_seq = 0;           /* rd vms-d63 */
+        int hdr_seq_valid = 0;
         int want_write = (args.acctl & VMS_ACP_ACCTL_WRITE) != 0;
 
         s = exec_zalloc(sizeof(*s));
@@ -2485,8 +2573,23 @@ long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg)
             file_fid_num = ods2_fid_number(&file_fid);
         }
 
-        /* Read + validate the file's own header. */
-        status = acp_read_header(vol, file_fid_num, s->filehdr, &s->fh);
+        /* Read + validate the file's own header -- under the file's F11B$s
+         * lock (rd vms-d63), so the header counter recorded on the channel
+         * below is the one THIS header is valid against. The lock is the
+         * XQP's for the read only; the access itself holds nothing. */
+        {
+            struct acp_fser fs;
+
+            status = acp_fser_take(proc, vol, file_fid_num, &fs);
+            if (status != SS__NORMAL) {
+                exec_free(s);
+                args.status = status;
+                goto out;
+            }
+            status = acp_read_header(vol, file_fid_num, s->filehdr, &s->fh);
+            hdr_seq_valid = fs.held;
+            hdr_seq = acp_fser_release(proc, &fs);
+        }
         if (status != SS__NORMAL) {
             exec_free(s);
             args.status = status;
@@ -2547,6 +2650,8 @@ long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg)
         ch->acc_fid_nmx   = file_fid.fid_nmx;
         ch->acc_efblk     = ods2_recattr_efblk(&s->fh.fh2_recattr);
         ch->acc_ffbyte    = s->fh.fh2_recattr.fat_ffbyte;
+        ch->acc_hdr_seq   = hdr_seq;
+        ch->acc_hdr_seq_valid = (uint8_t)(hdr_seq_valid ? 1 : 0);
         ch->win_n = wb.n;
         memcpy(ch->win, window, wb.n * sizeof(window[0]));
         exec_unlock(&proc->chan_lock);
@@ -2723,6 +2828,7 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
     int was_write = 0, was_counted = 0;
     uint32_t fid_num = 0, hdr_lbn = 0, bmaj = 0, bmin = 0;
     uint32_t flock_lkid = 0;
+    struct vms_acp_volume *dvol = NULL;  /* pinned by the channel's refcnt */
 
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
@@ -2748,7 +2854,9 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
         ch->file_accessed = 0;
         ch->acc_write = 0;
         ch->acc_counted = 0;
+        ch->acc_hdr_seq_valid = 0;
         ch->win_n = 0;
+        dvol = ch->vol;
         status = SS__NORMAL;
     }
     exec_unlock(&proc->chan_lock);
@@ -2765,9 +2873,16 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
      * at the close). The block I/O runs without the channel lock. */
     if (was_write && hdr_lbn != 0) {
         uint8_t *hdr = exec_zalloc(ACP_BLOCK_SIZE);
+        struct acp_fser fs;             /* rd vms-d63 */
+        uint32_t fst;
 
+        memset(&fs, 0, sizeof(fs));
         if (!hdr) {
             status = SS__INSFMEM;
+        } else if ((fst = acp_fser_take(proc, dvol, fid_num, &fs)) !=
+                   SS__NORMAL) {
+            status = fst;
+            exec_free(hdr);
         } else {
             if (acp_bdev_read(bmaj, bmin, hdr_lbn, hdr, ACP_BLOCK_SIZE) != 0 ||
                 acp_fh2_self_fidnum(hdr) != fid_num ||
@@ -2777,12 +2892,16 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
                 ods2_fh2_reseal(hdr);
                 if (acp_bdev_write(bmaj, bmin, hdr_lbn, hdr, ACP_BLOCK_SIZE) != 0)
                     status = SS__DEVNOTMOUNT;
+                else
+                    fs.hdr_changed = 1u;    /* the revision is a header change */
             }
+            (void)acp_fser_release(proc, &fs);
             exec_free(hdr);
         }
     }
 #else
     (void)was_write; (void)fid_num; (void)hdr_lbn; (void)bmaj; (void)bmin;
+    (void)dvol;
 #endif
 
     args.status = status;
@@ -2995,6 +3114,9 @@ struct acp_chan_snap {
     uint32_t           idx_lbn;         /* INDEXF.SYS file-1 header base */
     uint32_t           hdr_lbn;         /* this file's primary header (INDEXF-mapped) */
     uint32_t           volsize;
+    uint32_t           hdr_seq;         /* rd vms-d63: ch->acc_hdr_seq */
+    int                hdr_seq_valid;
+    uint32_t           cluster;         /* SCB cluster factor: blocks per bitmap bit (vms-563) */
     uint32_t           win_n;
     struct acp_win_ext win[ACP_WINDOW_MAX];
 };
@@ -3027,6 +3149,9 @@ static uint32_t acp_chan_snapshot(struct vms_proc *proc, uint32_t chan,
         snap->idx_lbn       = ch->vol->idx_lbn;
         snap->hdr_lbn       = acp_hdr_lbn(ch->vol, snap->fid_num);
         snap->volsize       = ch->vol->volsize;
+        snap->hdr_seq       = ch->acc_hdr_seq;
+        snap->hdr_seq_valid = ch->acc_hdr_seq_valid;
+        snap->cluster       = ch->vol->cluster ? ch->vol->cluster : 1u;
         snap->win_n         = ch->win_n;
         memcpy(snap->win, ch->win, ch->win_n * sizeof(ch->win[0]));
         status = SS__NORMAL;
@@ -3051,6 +3176,56 @@ static uint32_t acp_win_hiblk(const struct acp_win_ext *win, uint32_t n)
         return 0;
     return win[n - 1].start_vbn + win[n - 1].count - 1u;
 }
+
+#if defined(OVMX_ODS2_KERNEL)
+/*
+ * rd vms-d63: ANOTHER NODE CHANGED THIS FILE'S HEADER since the channel read
+ * it (the F11B$s header counter moved), or the channel never read it under a
+ * counter at all. Re-read the header from the disk and take ITS window and
+ * EOF -- onto the snapshot the transfer is about to use, and onto the channel
+ * for the transfers after it. `hdr` is a block-sized scratch buffer.
+ */
+static uint32_t acp_chan_refresh_from_disk(struct vms_proc *proc, uint32_t chan,
+                                           struct acp_chan_snap *snap,
+                                           uint8_t *hdr)
+{
+    struct acp_winbuild wb;
+    struct acp_win_ext window[ACP_WINDOW_MAX];
+    ods2_fh2_t fh;
+    struct vms_acp_chan *ch;
+
+    if (snap->hdr_lbn == 0 ||
+        acp_bdev_read(snap->backing_major, snap->backing_minor, snap->hdr_lbn,
+                      hdr, ACP_BLOCK_SIZE) != 0 ||
+        acp_fh2_self_fidnum(hdr) != snap->fid_num ||
+        ods2_fh2_parse(hdr, ACP_BLOCK_SIZE, &fh) != ODS2_OK)
+        return SS__DEVNOTMOUNT;     /* torn/wrong header: never use garbage */
+    wb.win = window; wb.max = ACP_WINDOW_MAX; wb.n = 0; wb.next_vbn = 1;
+    wb.overflow = 0;
+    if (ods2_fh2_map_walk(hdr, acp_winbuild_cb, &wb, NULL) != ODS2_OK)
+        return SS__DEVNOTMOUNT;
+    if (wb.overflow)
+        return SS__DEVICEFULL;      /* more extents than this window maps */
+
+    snap->efblk  = ods2_recattr_efblk(&fh.fh2_recattr);
+    snap->ffbyte = fh.fh2_recattr.fat_ffbyte;
+    snap->win_n  = wb.n;
+    memcpy(snap->win, window, wb.n * sizeof(window[0]));
+
+    exec_lock(&proc->chan_lock);
+    ch = acp_chan_find_locked(proc, chan);
+    if (ch && ch->file_accessed &&
+        ((uint32_t)ch->acc_fid_num | ((uint32_t)ch->acc_fid_nmx << 16)) ==
+            snap->fid_num) {
+        ch->acc_efblk  = snap->efblk;
+        ch->acc_ffbyte = snap->ffbyte;
+        ch->win_n      = wb.n;
+        memcpy(ch->win, window, wb.n * sizeof(window[0]));
+    }
+    exec_unlock(&proc->chan_lock);
+    return SS__NORMAL;
+}
+#endif
 
 /*
  * IO$_READVBLK: read `length` bytes starting at {VBN, offset} through the
@@ -3213,220 +3388,128 @@ static uint32_t acp_fh2_self_fidnum(const uint8_t *hdr)
 }
 
 /*
- * acp_bitmap_alloc - allocate `need` CONTIGUOUS free blocks from the volume's
- * BITMAP.SYS storage bitmap and return the run's start LBN. Reads BITMAP.SYS's
- * FH2 (FID 2, header at idx_lbn+1), builds its VBN->LBN window (VBN1 = SCB,
- * VBN2.. = the storage bitmap data blocks), scans whole-volume bit N (== LBN N,
- * cluster factor 1) for a run of `need` set (FREE) bits, and clears them (marks
- * ALLOCATED) on disk. SS$_DEVICEFULL if no such run exists; SS$_DEVNOTMOUNT on a
- * block-read/write or map failure. Every bitmap FORMAT fact is the codec's
- * (ods2_sbm_* / ods2_fh2_map_walk); this only sequences the raw block I/O.
+ * acp_bitmap_alloc - allocate at least `need` CONTIGUOUS blocks, in whole
+ * clusters, from the volume's BITMAP.SYS storage bitmap; return the run's
+ * start LBN and the blocks allocated. Reads BITMAP.SYS's FH2 (FID 2, header at
+ * idx_lbn+1) and builds its VBN->LBN window (VBN1 = SCB, VBN2.. = the bitmap
+ * data blocks); the codec (ods2_sbm_alloc) does the search and the bit <->
+ * LBN arithmetic: bit N is CLUSTER N, LBNs N*cluster.. (rd vms-563 -- the
+ * ACP used to take bit N for LBN N and, on a cluster-factor-3 volume, wrote a
+ * file's data a third of the way down the disk from the blocks it allocated).
+ * SS$_DEVICEFULL if no run exists; SS$_DEVNOTMOUNT on a block-read/write or
+ * map failure.
  *
- * CONCURRENCY (design §4.7): the allocate/read-modify-write span is NOT yet
- * serialized against a second concurrent writer -- the VMS-authentic mechanism
- * is the per-volume DLM synchronization lock (vms-233), a LATER rung. Single-
- * writer is acceptable for now and stated rather than faked (CLAUDE.md Rule 10):
- * no in-kernel flock stand-in is built; the DLM lock supersedes this.
+ * `hint` (rd vms-465): an extension asks for the blocks right after the
+ * file's last extent, so a growing file stays one extent when they are free
+ * (the XQP's contiguous-best-try). `room` (>= need): when those are taken the
+ * run is placed where `room` free blocks follow it, so the file keeps growing
+ * there in one extent. See ods2_sbm_alloc.
+ *
+ * Serialized against other writers by the per-volume DLM lock the callers
+ * hold (vms-233).
  */
-static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
-                                    struct acp_rw_scratch *s,
-                                    uint32_t need, uint32_t hint, uint32_t room,
-                                    uint32_t *lbn_out);
+struct acp_sbm_ctx {
+    const struct acp_chan_snap *snap;
+    const struct acp_win_ext   *bmwin;
+    uint32_t                    nwin;
+};
 
-static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
-                                 struct acp_rw_scratch *s,
-                                 uint32_t need, uint32_t *lbn_out)
+static int acp_sbm_read(void *ctx, uint32_t bmvbn, void *blk)
 {
-    return acp_bitmap_alloc_at(snap, s, need, 0, need, lbn_out);
+    const struct acp_sbm_ctx *c = (const struct acp_sbm_ctx *)ctx;
+    uint32_t lbn = acp_window_map_vbn(c->bmwin, c->nwin, bmvbn);
+
+    if (lbn == 0)
+        return 1;                           /* past the bitmap's coverage */
+    return acp_bdev_read(c->snap->backing_major, c->snap->backing_minor,
+                         lbn, blk, ACP_BLOCK_SIZE) != 0 ? -1 : 0;
 }
 
-/*
- * acp_bitmap_alloc_at - a run of `need` free blocks from BITMAP.SYS, searched
- * from LBN `hint` first (rd vms-465): an extension asks for the blocks right
- * after the file's last extent, so a growing file stays one extent when they
- * are free -- the XQP's contiguous-best-try -- and the search reads the one
- * bitmap block it starts in instead of every block from LBN 1 up to the free
- * space. When nothing is free from the hint on, the search wraps to LBN 1 and
- * runs up to the hint (first fit). hint 0 is a plain first-fit search.
- *
- * `room` (>= need; rd vms-465): when the blocks at the hint are taken, the run
- * is placed where `room` free blocks follow it (see the search order below),
- * so the file can keep growing there in one extent instead of filling the
- * holes other files left one by one (a 20 MB assembler output written in 64 KB pieces
- * across the holes of deleted temporaries outgrew the channel window's
- * ACP_WINDOW_MAX extents: SS$_DEVICEFULL, "I/O error" in the compiler). Only
- * when no such stretch exists does it take the first run of `need`.
- */
-
-/* Find `len` consecutive free blocks in [lo, hi); 1 and *start when found, 0
- * when not, -1 on an I/O error. */
-static int acp_bitmap_find_run(const struct acp_chan_snap *snap, struct acp_rw_scratch *s,
-                               const struct acp_win_ext *bmwin, uint32_t nwin,
-                               uint32_t lo, uint32_t hi, uint32_t len, uint32_t *start)
+static int acp_sbm_write(void *ctx, uint32_t bmvbn, const void *blk)
 {
-    uint32_t b, run_start = 0, run_len = 0, cur_bmvbn = 0;
-    int loaded = 0;
+    const struct acp_sbm_ctx *c = (const struct acp_sbm_ctx *)ctx;
+    uint32_t lbn = acp_window_map_vbn(c->bmwin, c->nwin, bmvbn);
 
-    for (b = lo; b < hi; b++) {
-        uint32_t bmvbn = 2u + b / ODS2_SBM_BITS_PER_BLOCK;
-
-        if (!loaded || bmvbn != cur_bmvbn) {
-            uint32_t lbn = acp_window_map_vbn(bmwin, nwin, bmvbn);
-
-            if (lbn == 0)
-                return 0;                   /* past the bitmap's coverage */
-            if (acp_bdev_read(snap->backing_major, snap->backing_minor,
-                              lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
-                return -1;
-            cur_bmvbn = bmvbn;
-            loaded = 1;
-        }
-        /* A whole longword of the bitmap at once where it can be: 32
-         * allocated blocks are skipped, 32 free ones join the run
-         * (rd vms-465: the search crossed a million bits one call each). */
-        if ((b % 32u) == 0 && b + 32u <= hi) {
-            uint32_t wi = (b % ODS2_SBM_BITS_PER_BLOCK) / 32u;
-            const uint8_t *wp = s->bmblk + (size_t)wi * 4u;
-            uint32_t w = (uint32_t)wp[0] | ((uint32_t)wp[1] << 8) |
-                         ((uint32_t)wp[2] << 16) | ((uint32_t)wp[3] << 24);
-            if (w == 0u) {
-                run_len = 0;
-                b += 31u;
-                continue;
-            }
-            if (w == 0xFFFFFFFFu && len - run_len >= 32u) {
-                if (run_len == 0)
-                    run_start = b;
-                run_len += 32u;
-                b += 31u;
-                if (run_len == len) {
-                    *start = run_start;
-                    return 1;
-                }
-                continue;
-            }
-        }
-        if (ods2_sbm_block_bit_free(s->bmblk, b % ODS2_SBM_BITS_PER_BLOCK)) {
-            if (run_len == 0)
-                run_start = b;
-            if (++run_len == len) {
-                *start = run_start;
-                return 1;
-            }
-        } else {
-            run_len = 0;
-        }
-    }
-    return 0;
+    if (lbn == 0)
+        return -1;
+    return acp_bdev_write(c->snap->backing_major, c->snap->backing_minor,
+                          lbn, blk, ACP_BLOCK_SIZE) != 0 ? -1 : 0;
 }
 
-static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
-                                    struct acp_rw_scratch *s,
-                                    uint32_t need, uint32_t hint, uint32_t room,
-                                    uint32_t *lbn_out)
+/* Read BITMAP.SYS's header into s->bmhdr and build its window into `bmwin`. */
+static uint32_t acp_sbm_open(const struct acp_chan_snap *snap, struct acp_rw_scratch *s,
+                             struct acp_win_ext *bmwin, struct acp_sbm_ctx *ctx,
+                             ods2_sbm_io_t *io)
 {
     struct acp_winbuild wb;
-    struct acp_win_ext  bmwin[ACP_WINDOW_MAX];
-    uint32_t bmhdr_lbn;
-    uint32_t run_start = 0;
-    uint32_t i;
-    int found = 0, tryroom;
 
-    if (need == 0)
-        return SS__BADPARAM;
-
-    /* BITMAP.SYS (FID 2) primary header, the INDEXF arithmetic (idx_lbn base). */
-    bmhdr_lbn = snap->idx_lbn + (ODS2_FID_BITMAP - 1u);
     if (acp_bdev_read(snap->backing_major, snap->backing_minor,
-                                 bmhdr_lbn, s->bmhdr, ACP_BLOCK_SIZE) != 0)
+                      snap->idx_lbn + (ODS2_FID_BITMAP - 1u), s->bmhdr, ACP_BLOCK_SIZE) != 0)
         return SS__DEVNOTMOUNT;             /* cannot read BITMAP.SYS header */
-
     wb.win = bmwin;
     wb.max = ACP_WINDOW_MAX;
     wb.n = 0;
     wb.next_vbn = 1;
     wb.overflow = 0;
-    if (ods2_fh2_map_walk(s->bmhdr, acp_winbuild_cb, &wb, NULL) != ODS2_OK ||
-        wb.n == 0)
+    if (ods2_fh2_map_walk(s->bmhdr, acp_winbuild_cb, &wb, NULL) != ODS2_OK || wb.n == 0)
         return SS__DEVNOTMOUNT;
+    ctx->snap = snap;
+    ctx->bmwin = bmwin;
+    ctx->nwin = wb.n;
+    io->ctx = ctx;
+    io->volsize = snap->volsize;
+    io->cluster = snap->cluster;
+    io->read = acp_sbm_read;
+    io->write = acp_sbm_write;
+    return SS__NORMAL;
+}
 
-    if (hint < 1 || hint >= snap->volsize)
-        hint = 1;
-    if (room < need)
-        room = need;
-    if (room > snap->volsize / 16u)
-        room = need > snap->volsize / 16u ? need : snap->volsize / 16u;
-    /* 1. the blocks at the hint itself (the file's own continuation) */
-    if (hint > 1 && hint + need <= snap->volsize) {
-        found = acp_bitmap_find_run(snap, s, bmwin, wb.n, hint, hint + need, need, &run_start);
-        if (found < 0)
-            return SS__DEVNOTMOUNT;
-    }
-    /* 2. a free stretch of twice `room`, the run placed in its middle: the
-     *    `room` blocks after it stay free for this file to grow into, and the
-     *    `room` before it for whichever file the stretch's first blocks follow
-     *    (two files growing side by side each find their own continuation
-     *    free instead of leapfrogging one another a block at a time);
-     * 3. a stretch of `room`, the run at its start; 4. the first run of
-     *    `need` (a run may not wrap). Each from the hint on, then from LBN 1.
-     *    Bit 0 (LBN 0, the boot block) is never a data block; the reserved
-     *    region is already marked used in the bitmap, so the scan simply
-     *    skips it. */
-    for (tryroom = (room > need) ? 2 : 0; !found && tryroom >= 0; tryroom--) {
-        uint32_t len = tryroom == 2 ? 2u * room : tryroom == 1 ? room : need;
+static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
+                                    struct acp_rw_scratch *s,
+                                    uint32_t need, uint32_t hint, uint32_t room,
+                                    uint32_t *lbn_out, uint32_t *count_out)
+{
+    struct acp_win_ext bmwin[ACP_WINDOW_MAX];
+    struct acp_sbm_ctx ctx;
+    ods2_sbm_io_t io;
+    uint32_t lbn = 0, count = 0, i, st;
+    ods2_status_t ost;
 
-        if (len > snap->volsize)
-            continue;
-        found = acp_bitmap_find_run(snap, s, bmwin, wb.n, hint, snap->volsize, len, &run_start);
-        if (!found && hint > 1)
-            found = acp_bitmap_find_run(snap, s, bmwin, wb.n, 1u,
-                                        hint + len < snap->volsize ? hint + len : snap->volsize,
-                                        len, &run_start);
-        if (found < 0)
-            return SS__DEVNOTMOUNT;
-        if (found && tryroom == 2)
-            run_start += room;
-    }
-    if (!found)
+    if (need == 0)
+        return SS__BADPARAM;
+    st = acp_sbm_open(snap, s, bmwin, &ctx, &io);
+    if (st != SS__NORMAL)
+        return st;
+    ost = ods2_sbm_alloc(&io, s->bmblk, need, hint, room, &lbn, &count);
+    if (ost == ODS2_ERR_NOSPACE)
         return SS__DEVICEFULL;              /* no contiguous free run -- honest */
-
-    /* Mark the run allocated (bit -> 0): one read-modify-write per bitmap
-     * block the run touches. */
-    for (i = 0; i < need; ) {
-        uint32_t bit = run_start + i;
-        uint32_t bmvbn = 2u + bit / ODS2_SBM_BITS_PER_BLOCK;
-        uint32_t lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
-
-        if (lbn == 0 ||
-            acp_bdev_read(snap->backing_major, snap->backing_minor,
-                                     lbn, s->bmblk, ACP_BLOCK_SIZE) != 0) {
-            return SS__DEVNOTMOUNT;
-        }
-        do {
-            ods2_sbm_block_alloc(s->bmblk, (run_start + i) % ODS2_SBM_BITS_PER_BLOCK);
-            i++;
-        } while (i < need && 2u + (run_start + i) / ODS2_SBM_BITS_PER_BLOCK == bmvbn);
-        if (acp_bdev_write(snap->backing_major, snap->backing_minor,
-                                      lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
-            return SS__DEVNOTMOUNT;
-    }
+    if (ost != ODS2_OK || lbn == 0 || count < need || lbn + count > snap->volsize)
+        return SS__DEVNOTMOUNT;
 
     /*
      * Zero-fill the freshly allocated run on disk so a caller's write that does
-     * not fully cover it (a partial tail, or a gap between old EOF and the write
-     * position) never exposes stale on-device content -- the data-write loop
-     * then overwrites whatever it does cover. (s->blk is reused as the zero
-     * source; the write loop re-fills it per block afterwards.)
+     * not fully cover it (a partial tail, a gap between old EOF and the write
+     * position, or the rest of the last cluster) never exposes stale
+     * on-device content. (s->blk is reused as the zero source; the write loop
+     * re-fills it per block afterwards.)
      */
     memset(s->blk, 0, ACP_BLOCK_SIZE);
-    for (i = 0; i < need; i++) {
+    for (i = 0; i < count; i++) {
         if (acp_bdev_write(snap->backing_major, snap->backing_minor,
-                                      run_start + i, s->blk, ACP_BLOCK_SIZE) != 0)
+                           lbn + i, s->blk, ACP_BLOCK_SIZE) != 0)
             return SS__DEVNOTMOUNT;
     }
 
-    *lbn_out = run_start;
+    *lbn_out = lbn;
+    *count_out = count;
     return SS__NORMAL;
+}
+
+static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
+                                 struct acp_rw_scratch *s,
+                                 uint32_t need, uint32_t *lbn_out, uint32_t *count_out)
+{
+    return acp_bitmap_alloc_at(snap, s, need, 0, need, lbn_out, count_out);
 }
 #endif /* OVMX_ODS2_KERNEL */
 
@@ -3452,8 +3535,12 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
     uint32_t ext_lbn = 0, ext_count = 0; /* the run newly allocated by an extend */
     uint32_t wr_lkid = 0;               /* vms-233 DLM volume lock (0 = not held) */
     char     wr_resnam[32];
+    struct vms_acp_volume *wvol = NULL; /* pinned by the channel's refcnt */
+    struct acp_fser fser;               /* rd vms-d63: the file's F11B$s lock */
+    uint32_t fser_chan_fid = 0;
 
     wr_resnam[0] = '\0';
+    memset(&fser, 0, sizeof(fser));
 
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
@@ -3493,18 +3580,58 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
         struct vms_acp_chan *lch;
         exec_lock(&proc->chan_lock);
         lch = acp_chan_find_locked(proc, args.chan);
-        if (lch && lch->vol)
+        if (lch && lch->vol) {
             acp_vol_resnam(lch->vol, wr_resnam, sizeof(wr_resnam));
+            wvol = lch->vol;
+        }
         exec_unlock(&proc->chan_lock);
     }
     if (wr_resnam[0]) {
-        status = vms_lock_acp_vol_ex(proc, wr_resnam, &wr_lkid);   /* vms-233: EX $ENQ, per-volume sync */
+        int wr_intr = 0;
+
+        status = vms_lock_acp_vol_ex(proc, wr_resnam, &wr_lkid, &wr_intr);   /* vms-233: EX $ENQ, per-volume sync */
+        if (wr_intr) {
+            /* A signal ended the wait (rd vms-b6e). Nothing has been written
+             * yet, so the I/O is simply re-issued once it is delivered. */
+            exec_free(s);
+            return -ERESTARTSYS;
+        }
         if (status != SS__NORMAL) {
             args.status = status;           /* SS$_UNSUPPORTED (remote master) etc. */
             exec_free(s);
             goto out;
         }
     }
+
+    /*
+     * rd vms-d63: THE FILE'S OWN SERIALIZATION LOCK, which is what another
+     * node's XQP takes for this file. Held until `out`; its release carries
+     * the header counter +1 when this write changed the header (EOF, or an
+     * extend), so a VAX caching the header re-reads it rather than writing
+     * at its old EOF over these records.
+     *
+     * AND THE OTHER DIRECTION: if the granted header counter is not the one
+     * this channel's window and EOF were read under, ANOTHER node changed the
+     * header since -- re-read it, and use the disk's window and EOF.
+     */
+    status = acp_fser_take(proc, wvol, snap->fid_num, &fser);
+    if (status != SS__NORMAL) {
+        args.status = status;
+        exec_free(s);
+        goto out;
+    }
+    fser_chan_fid = snap->fid_num;
+#if defined(OVMX_ODS2_KERNEL)
+    if (fser.held && (!snap->hdr_seq_valid ||
+                      vms_f11b_ser_hdr_seq(fser.vb) != snap->hdr_seq)) {
+        status = acp_chan_refresh_from_disk(proc, args.chan, snap, s->hdr);
+        if (status != SS__NORMAL) {
+            args.status = status;
+            exec_free(s);
+            goto out;
+        }
+    }
+#endif
 
     /* Local window we can extend for mapping the writes (channel copy + at most
      * one new extent). */
@@ -3522,12 +3649,13 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
     if (last_vbn > old_hiblk) {
 #if defined(OVMX_ODS2_KERNEL)
         uint32_t need = last_vbn - old_hiblk;
-        uint32_t alloc_lbn = 0;
+        uint32_t alloc_lbn = 0, alloc_n = 0;
         /* contiguous-best-try: the blocks right after the file's last extent */
         uint32_t hint = lwin_n ? lwin[lwin_n - 1u].lbn + lwin[lwin_n - 1u].count : 0u;
 
         /* room to grow: as much again as the file holds already (rd vms-465) */
-        status = acp_bitmap_alloc_at(snap, s, need, hint, need + old_hiblk, &alloc_lbn);
+        status = acp_bitmap_alloc_at(snap, s, need, hint, need + old_hiblk,
+                                     &alloc_lbn, &alloc_n);
         if (status != SS__NORMAL) {
             args.status = status;           /* SS$_DEVICEFULL / SS$_DEVNOTMOUNT */
             exec_free(s);
@@ -3548,7 +3676,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
         if (lwin_n > 0 &&
             lwin[lwin_n - 1].lbn + lwin[lwin_n - 1].count == alloc_lbn &&
             lwin[lwin_n - 1].start_vbn + lwin[lwin_n - 1].count == old_hiblk + 1u) {
-            lwin[lwin_n - 1].count += need;
+            lwin[lwin_n - 1].count += alloc_n;
         } else {
             if (lwin_n >= ACP_WINDOW_MAX) {
                 args.status = SS__DEVICEFULL;   /* window full -- cannot map more */
@@ -3557,13 +3685,16 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
             }
             lwin[lwin_n].start_vbn = old_hiblk + 1u;
             lwin[lwin_n].lbn       = alloc_lbn;
-            lwin[lwin_n].count     = need;
+            lwin[lwin_n].count     = alloc_n;
             lwin_n++;
         }
-        new_hiblk = last_vbn;
-        extended  = need;
+        /* Whole clusters are allocated and mapped (vms-563): HIBLK moves by
+         * the run's size, which on a cluster-factor-N volume is `need`
+         * rounded up to a multiple of N, never by `need` alone. */
+        new_hiblk = old_hiblk + alloc_n;
+        extended  = alloc_n;
         ext_lbn   = alloc_lbn;              /* the newly allocated run, for the */
-        ext_count = need;                   /* on-disk FH2 map + channel window */
+        ext_count = alloc_n;                /* on-disk FH2 map + channel window */
 #else
         /* Codec-free overlay: no accessed file ever reaches here (ACCESS
          * refuses without the codec), so an extend is unreachable. Refuse. */
@@ -3665,6 +3796,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
             exec_free(s);
             goto out;
         }
+        fser.hdr_changed = 1u;          /* rd vms-d63: the header changed */
     }
 #endif
 
@@ -3710,6 +3842,23 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
     VMS_IO_COUNT(&proc->io_direct, 1u);   /* JPI$_DIRIO (rd vms-bd71) */
 
 out:
+    /* rd vms-d63: the file's lock first (it was taken second), with the
+     * counters this write leaves; the channel's window and EOF -- updated
+     * above under the lock -- are valid against the header counter written. */
+    if (fser.held) {
+        uint32_t seq = acp_fser_release(proc, &fser);
+        struct vms_acp_chan *ch;
+
+        exec_lock(&proc->chan_lock);
+        ch = acp_chan_find_locked(proc, args.chan);
+        if (ch && ch->file_accessed &&
+            ((uint32_t)ch->acc_fid_num | ((uint32_t)ch->acc_fid_nmx << 16))
+                == fser_chan_fid) {
+            ch->acc_hdr_seq = seq;
+            ch->acc_hdr_seq_valid = 1u;
+        }
+        exec_unlock(&proc->chan_lock);
+    }
     vms_lock_acp_vol_release(proc, wr_lkid);   /* vms-233: release the volume lock (no-op if 0) */
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
@@ -3782,6 +3931,7 @@ static void acp_snap_from_vol(struct acp_chan_snap *snap, struct vms_acp_volume 
     snap->backing_minor = vol->backing_minor;
     snap->idx_lbn       = vol->idx_lbn;
     snap->volsize       = vol->volsize;
+    snap->cluster       = vol->cluster ? vol->cluster : 1u;
 }
 
 /*
@@ -3843,63 +3993,44 @@ static uint32_t acp_fid_free(struct vms_acp_volume *vol, uint32_t fidnum,
 }
 
 /*
- * acp_free_file_blocks - free every data block in a file's FH2 retrieval map
- * back to the volume's storage bitmap (BITMAP.SYS), for IO$_DELETE / a
- * MODIFY truncate. Builds the file's extent list and BITMAP.SYS window, then
- * RMWs the affected bitmap blocks (SET bit == FREE). `first_freed_vbn` (1-based)
- * skips extents wholly before it, so a truncate frees only blocks past the new
- * allocation; pass 1 to free the whole file.
+ * acp_free_file_blocks - free a file's data blocks in its FH2 retrieval map
+ * back to the volume's storage bitmap (BITMAP.SYS), for IO$_DELETE / a MODIFY
+ * truncate. `first_freed_vbn` (1-based) keeps the blocks before it, so a
+ * truncate frees only past the new allocation; pass 1 to free the whole file.
+ * The codec turns each LBN range into the CLUSTERS it covers (bit N ==
+ * cluster N, rd vms-563) and frees only clusters wholly inside the range.
  */
 static uint32_t acp_free_file_blocks(struct vms_acp_volume *vol,
                                      const uint8_t *filehdr,
                                      struct acp_fileop_scratch *sc,
                                      uint32_t first_freed_vbn)
 {
-    struct acp_winbuild wb, bwb;
+    struct acp_winbuild wb;
     struct acp_win_ext fex[ACP_WINDOW_MAX], bmwin[ACP_WINDOW_MAX];
-    uint32_t bmhdr_lbn, e, k, cur_bmvbn = 0xFFFFFFFFu, cur_bmlbn = 0;
-    int loaded = 0;
+    struct acp_sbm_ctx ctx;
+    ods2_sbm_io_t io;
+    uint32_t e, st;
 
     wb.win = fex; wb.max = ACP_WINDOW_MAX; wb.n = 0; wb.next_vbn = 1; wb.overflow = 0;
     if (ods2_fh2_map_walk(filehdr, acp_winbuild_cb, &wb, NULL) != ODS2_OK || wb.overflow)
         return SS__DEVNOTMOUNT;
 
-    bmhdr_lbn = vol->idx_lbn + (ODS2_FID_BITMAP - 1u);
-    if (acp_bdev_read(vol->backing_major, vol->backing_minor,
-                                 bmhdr_lbn, sc->rw.bmhdr, ACP_BLOCK_SIZE) != 0)
-        return SS__DEVNOTMOUNT;
-    bwb.win = bmwin; bwb.max = ACP_WINDOW_MAX; bwb.n = 0; bwb.next_vbn = 1; bwb.overflow = 0;
-    if (ods2_fh2_map_walk(sc->rw.bmhdr, acp_winbuild_cb, &bwb, NULL) != ODS2_OK || bwb.n == 0)
-        return SS__DEVNOTMOUNT;
+    acp_snap_from_vol(&sc->snap, vol);
+    st = acp_sbm_open(&sc->snap, &sc->rw, bmwin, &ctx, &io);
+    if (st != SS__NORMAL)
+        return st;
 
     for (e = 0; e < wb.n; e++) {
-        for (k = 0; k < fex[e].count; k++) {
-            uint32_t vbn = fex[e].start_vbn + k;
-            uint32_t L = fex[e].lbn + k;
-            uint32_t bmvbn = 2u + L / ODS2_SBM_BITS_PER_BLOCK;
+        uint32_t vbn0 = fex[e].start_vbn, skip = 0;
 
-            if (vbn < first_freed_vbn)
-                continue;                    /* keep blocks before the truncate point */
-            if (!loaded || bmvbn != cur_bmvbn) {
-                if (loaded &&
-                    acp_bdev_write(vol->backing_major, vol->backing_minor,
-                                              cur_bmlbn, sc->rw.bmblk, ACP_BLOCK_SIZE) != 0)
-                    return SS__DEVNOTMOUNT;
-                cur_bmlbn = acp_window_map_vbn(bmwin, bwb.n, bmvbn);
-                if (cur_bmlbn == 0 ||
-                    acp_bdev_read(vol->backing_major, vol->backing_minor,
-                                             cur_bmlbn, sc->rw.bmblk, ACP_BLOCK_SIZE) != 0)
-                    return SS__DEVNOTMOUNT;
-                cur_bmvbn = bmvbn;
-                loaded = 1;
-            }
-            ods2_sbm_block_free(sc->rw.bmblk, L % ODS2_SBM_BITS_PER_BLOCK);
-        }
+        if (vbn0 + fex[e].count <= first_freed_vbn)
+            continue;                        /* wholly before the truncate point */
+        if (vbn0 < first_freed_vbn)
+            skip = first_freed_vbn - vbn0;
+        if (ods2_sbm_free_range(&io, sc->rw.bmblk, fex[e].lbn + skip,
+                                fex[e].count - skip) != ODS2_OK)
+            return SS__DEVNOTMOUNT;
     }
-    if (loaded &&
-        acp_bdev_write(vol->backing_major, vol->backing_minor,
-                                  cur_bmlbn, sc->rw.bmblk, ACP_BLOCK_SIZE) != 0)
-        return SS__DEVNOTMOUNT;
     return SS__NORMAL;
 }
 
@@ -3954,7 +4085,7 @@ static uint32_t acp_idx_extend(struct vms_acp_volume *vol, struct acp_fileop_scr
         return SS__DEVICEFULL;
     }
     acp_snap_from_vol(&sc->snap, vol);
-    st = acp_bitmap_alloc(&sc->snap, &sc->rw, n, &lbn);
+    st = acp_bitmap_alloc(&sc->snap, &sc->rw, n, &lbn, &n);   /* n: whole clusters */
     if (st != SS__NORMAL) {
         exec_free(hdr);
         return st;
@@ -4028,7 +4159,8 @@ static uint32_t acp_dir_used_blocks(const uint8_t *dirhdr, uint32_t alloc)
  */
 static uint32_t acp_dir_write_grown_map(struct vms_acp_volume *vol,
                                         uint8_t *dirhdr, uint32_t dir_hdr_lbn,
-                                        const uint32_t *lbns, unsigned nblk)
+                                        const uint32_t *lbns, unsigned nblk,
+                                        unsigned nused)
 {
     unsigned mpoff = dirhdr[offsetof(ods2_fh2_t, fh2_mpoffset)];
     uint8_t *mp = dirhdr + (size_t)mpoff * 2u;
@@ -4045,7 +4177,8 @@ static uint32_t acp_dir_write_grown_map(struct vms_acp_volume *vol,
             return SS__DEVICEFULL;          /* map area full */
         b += run;
     }
-    (void)ods2_fh2_set_eof(dirhdr, nblk, nblk + 1u, 0);   /* [F15]/[F17] dir EOF */
+    /* nblk blocks are mapped (whole clusters, vms-563); nused hold entries. */
+    (void)ods2_fh2_set_eof(dirhdr, nblk, nused + 1u, 0);   /* [F15]/[F17] dir EOF */
     ods2_fh2_reseal(dirhdr);
     if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                   dir_hdr_lbn, dirhdr, ACP_BLOCK_SIZE) != 0)
@@ -4136,7 +4269,7 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
     if (out_nblk > nblk && out_nblk > dl.alloc) {
         uint32_t run_lbn = 0, extra = out_nblk - dl.alloc, k;
         acp_snap_from_vol(&sc->snap, vol);
-        status = acp_bitmap_alloc(&sc->snap, &sc->rw, extra, &run_lbn);
+        status = acp_bitmap_alloc(&sc->snap, &sc->rw, extra, &run_lbn, &extra);
         if (status != SS__NORMAL)
             goto done;
         for (k = 0; k < extra; k++) {
@@ -4161,7 +4294,7 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
     if (out_nblk > nblk && out_nblk > dl.alloc) {
         status = acp_dir_write_grown_map(vol, dirhdr,
                                          acp_hdr_lbn(vol, dir_fidnum),
-                                         dl.lbn, out_nblk);
+                                         dl.lbn, dl.n, out_nblk);
     } else if (out_nblk > nblk) {
         (void)ods2_fh2_set_eof(dirhdr, dl.alloc, out_nblk + 1u, 0);
         ods2_fh2_reseal(dirhdr);
@@ -4210,6 +4343,7 @@ static uint32_t acp_access_from_header(struct vms_proc *proc, uint32_t chan,
     ch->acc_fid_nmx   = fid.fid_nmx;
     ch->acc_efblk     = ods2_recattr_efblk(&fh->fh2_recattr);
     ch->acc_ffbyte    = fh->fh2_recattr.fat_ffbyte;
+    ch->acc_hdr_seq_valid = 0;          /* rd vms-d63: no counter read for it */
     ch->win_n = wb.n;
     memcpy(ch->win, window, wb.n * sizeof(window[0]));
     exec_unlock(&proc->chan_lock);
@@ -4682,6 +4816,16 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
         struct acp_fileop_scratch *sc = exec_zalloc(sizeof(*sc));
         uint32_t status;
         uint32_t fop_lkid = 0;          /* vms-233 DLM volume lock (0 = not held) */
+        /*
+         * rd vms-d63: the files this operation changed, ANNOUNCED on their
+         * F11B$s locks once it has succeeded -- the directory's contents (the
+         * data counter) and the file's header (the header counter) -- so a
+         * VAX caching either re-reads it. Announced after the fact, not held
+         * across the operation: this path touches up to three files, and
+         * holding several XQP locks in an order a VAX may not share is a
+         * cross-node deadlock this item does not open (rd vms-d63 follow-up).
+         */
+        uint32_t ann_dir = 0, ann_dir2 = 0, ann_file = 0;
 
         if (!sc)
             return -ENOMEM;
@@ -4700,7 +4844,16 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
         {
             char fop_resnam[32];
             acp_vol_resnam(vol, fop_resnam, sizeof(fop_resnam));
-            status = vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid);   /* vms-233: EX $ENQ, per-volume sync */
+            int fop_intr = 0;
+
+            status = vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid, &fop_intr);   /* vms-233: EX $ENQ, per-volume sync */
+            if (fop_intr) {
+                /* A signal ended the wait (rd vms-b6e): nothing has been
+                 * touched, so the operation is re-issued once it is
+                 * delivered. */
+                exec_free(sc);
+                return -ERESTARTSYS;
+            }
             if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
         }
 
@@ -4842,7 +4995,8 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
             alloc_count = is_dir ? (ap->exsz > 1u ? ap->exsz : 1u) : ap->exsz;
             if (alloc_count > 0) {
                 acp_snap_from_vol(&sc->snap, vol);
-                status = acp_bitmap_alloc(&sc->snap, &sc->rw, alloc_count, &alloc_lbn);
+                status = acp_bitmap_alloc(&sc->snap, &sc->rw, alloc_count, &alloc_lbn,
+                                          &alloc_count);   /* whole clusters (vms-563) */
                 if (status != SS__NORMAL) {
                     (void)acp_fid_free(vol, new_fidnum, sc->ibblk);  /* roll back the FID */
                     ap->status = status;
@@ -5029,6 +5183,8 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                    sc->filehdr + offsetof(ods2_fh2_t, fh2_recattr),
                    sizeof(ap->attr.recattr));
             ap->status = SS__NORMAL;
+            ann_dir = did_num;              /* rd vms-d63: a new entry */
+            ann_file = new_fidnum;          /* ...and a new header */
             goto free_sc;
         }
 
@@ -5084,6 +5240,8 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                 ap->status = acp_acl_op(proc, vol, sc, file_fidnum, ap);
                 ap->fid_num = file_fid.fid_num;
                 ap->fid_nmx = file_fid.fid_nmx;
+                if (ap->status & 1)
+                    ann_file = file_fidnum; /* rd vms-d63: the ACL is the header's */
                 goto free_sc;
             }
             /*
@@ -5157,6 +5315,8 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                 ap->fid_nmx = file_fid.fid_nmx;
                 ap->out_version = rver;
                 ap->status = SS__NORMAL;
+                ann_dir = did_num;          /* rd vms-d63: an entry removed */
+                ann_file = file_fidnum;     /* ...and the header invalidated */
                 goto free_sc;
             }
 
@@ -5262,6 +5422,9 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                 ap->fid_nmx = file_fid.fid_nmx;
                 ap->out_version = new_version;
                 ap->status = SS__NORMAL;
+                ann_dir = did_num;          /* rd vms-d63: the entry moved out */
+                ann_dir2 = cross_dir ? tdid_num : 0u;   /* ...and in */
+                ann_file = file_fidnum;     /* ...and the back link changed */
                 goto free_sc;
             }
 
@@ -5275,24 +5438,31 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
 
                 /* EXTEND (FIB$L_EXSZ): allocate + append a retrieval pointer. */
                 if (ap->exsz > 0) {
-                    uint32_t run_lbn = 0;
+                    uint32_t run_lbn = 0, run_n = 0;
                     acp_snap_from_vol(&sc->snap, vol);
-                    status = acp_bitmap_alloc(&sc->snap, &sc->rw, ap->exsz, &run_lbn);
+                    status = acp_bitmap_alloc(&sc->snap, &sc->rw, ap->exsz, &run_lbn, &run_n);
                     if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
-                    if (ods2_fh2_map_append(sc->filehdr, run_lbn, ap->exsz) != ODS2_OK) {
+                    if (ods2_fh2_map_append(sc->filehdr, run_lbn, run_n) != ODS2_OK) {
                         ap->status = SS__DEVICEFULL;   /* FH2 map area full */
                         goto free_sc;
                     }
-                    new_hiblk = old_hiblk + ap->exsz;
+                    new_hiblk = old_hiblk + run_n;     /* whole clusters (vms-563) */
                     touched = 1;
                 }
 
                 /* TRUNCATE (to trunc_efblk): free the blocks past it, shrink. */
                 if (ap->trunc_efblk > 0 && ap->trunc_efblk <= new_hiblk) {
-                    /* Free allocation strictly past the new EOF block. */
-                    if (ap->trunc_efblk < new_hiblk) {
+                    /* Keep whole clusters (vms-563): the allocation shrinks to
+                     * the new EOF block rounded up to the cluster factor, so a
+                     * cluster that still holds data is never freed. */
+                    uint32_t keep = ods2_sbm_round_blocks(ap->trunc_efblk,
+                                                          vol->cluster ? vol->cluster : 1u);
+                    if (keep > new_hiblk)
+                        keep = new_hiblk;
+                    /* Free allocation strictly past the kept blocks. */
+                    if (keep < new_hiblk) {
                         status = acp_free_file_blocks(vol, sc->filehdr, sc,
-                                                      ap->trunc_efblk + 1u);
+                                                      keep + 1u);
                         if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
                         /* Rewrite the map to cover only [1, trunc_efblk]. */
                         {
@@ -5301,7 +5471,7 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                             unsigned mpoff = sc->filehdr[offsetof(ods2_fh2_t, fh2_mpoffset)];
                             uint8_t *mp = sc->filehdr + (size_t)mpoff * 2u;
                             size_t mapcap = ods2_fh2_map_end(sc->filehdr) - (size_t)mpoff * 2u;   /* stop below the ACL */
-                            uint32_t want = ap->trunc_efblk, e;
+                            uint32_t want = keep, e;
 
                             wb.win = fex; wb.max = ACP_WINDOW_MAX; wb.n = 0;
                             wb.next_vbn = 1; wb.overflow = 0;
@@ -5321,7 +5491,7 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                             }
                         }
                     }
-                    new_hiblk = ap->trunc_efblk;
+                    new_hiblk = keep;
                     new_efblk = ap->trunc_efblk;
                     new_ffbyte = ap->trunc_ffbyte;
                     touched = 1;
@@ -5386,11 +5556,22 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                 ap->new_efblk = new_efblk;
                 ap->new_ffbyte = new_ffbyte;
                 ap->status = SS__NORMAL;
+                ann_file = file_fidnum;     /* rd vms-d63: the header changed */
                 goto free_sc;
             }
         }
 
 free_sc:
+        if (ap->status & 1) {
+            /* rd vms-d63: announced while the volume-sync lock is still held,
+             * so no other OVMX writer slips in between change and notice. */
+            if (ann_dir)
+                acp_fser_announce(proc, vol, ann_dir, 0, 1);
+            if (ann_dir2)
+                acp_fser_announce(proc, vol, ann_dir2, 0, 1);
+            if (ann_file)
+                acp_fser_announce(proc, vol, ann_file, 1, 0);
+        }
         vms_lock_acp_vol_release(proc, fop_lkid);   /* vms-233: release the volume lock (no-op if 0) */
         if (sc->aclheap)
             exec_free(sc->aclheap);

@@ -194,7 +194,12 @@ rm -f /ods2_sysvol.img
 sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img || exit 4
 
 echo "--- re-staging the initramfs ---"
-cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
+# WITHOUT its DWARF, exactly as the image build stages it (tests/qemu/Dockerfile):
+# the debug sections are ~18 MB, and a defect run that put them back pushed the
+# unpacked initramfs over the 512 MB guest's budget -- the guest ran out of
+# RAM-backed rootfs, suites could not write their files, and every control hung
+# to the 50-minute shard wall (#1994 merge group, 2026-11-03).
+objcopy --strip-debug /src/kernel/vms.ko /initramfs/lib/modules/vms.ko || exit 4
 # Absence is FATAL, never skipped, exactly as in the image build: a missing
 # subject would turn the SHOW SYSTEM and RUN/DETACHED assertions into no-ops
 # with the job still green.
@@ -307,6 +312,16 @@ if [ "$n_imgact" -lt 2 ]; then
 fi
 ( cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz ) || exit 4
 echo "Re-staged initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
+# The same INITRAMFS BUDGET the image build enforces (its value is read from
+# /initramfs.budget, which that build writes): an over-budget defect image
+# fails here, by name, instead of hanging the guest.
+budget=$(cat /initramfs.budget) || { echo "FATAL: /initramfs.budget missing (the image build writes it)"; exit 4; }
+bytes=$(gzip -dc /initramfs.cpio.gz | wc -c)
+echo "Re-staged initramfs unpacked: $bytes bytes (budget $budget)"
+if [ "$bytes" -gt "$budget" ]; then
+    echo "FATAL: the re-staged initramfs is $bytes bytes, over the $budget-byte budget"
+    exit 4
+fi
 
 # Per-facility negative controls run the ENTIRE suite set in ONE VM per defect
 # (check 5's isolation attribution must see every suite, so suites cannot be

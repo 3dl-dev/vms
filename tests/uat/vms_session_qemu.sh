@@ -232,15 +232,15 @@ SYSTEM_CMDS+=('SHOW SYMBOL IDENT_CURPRIV')
 SYSTEM_CMDS+=('IDENT_AUTHPRIV = F$GETJPI("","AUTHPRIV")')
 SYSTEM_CMDS+=('SHOW SYMBOL IDENT_AUTHPRIV')
 
-# SET TIME (vms-768): its privilege gate is OPER, which SYSTEM holds, so DCL's
-# gate admits this session. The clock itself is then set with settimeofday(2),
-# which the substrate refuses for the non-root process LOGINOUT dropped to --
-# an honest refusal, but not VMS behaviour (real VMS sets the time). The
-# executive $SETIME that would make it VMS behaviour is rd vms-189;
-# until then this pins the honest refusal AFTER the gate, and GUEST (no OPER)
-# pins the gate's own refusal.
+# SET TIME (vms-642): DCL SET TIME is the executive's $SETIME, which requires
+# OPER and LOG_IO. SYSTEM holds both, so the system time CHANGES -- as on VMS --
+# and the SHOW TIME right after it must read the new date from the executive's
+# time cell. GUEST (no OPER/LOG_IO) is refused by the executive with
+# SS$_NOPRIV. No substrate clock is touched.
 SYSTEM_CMDS+=('SET TIME 1-JAN-2030:00:00:00')
 IDX_TIME_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
+SYSTEM_CMDS+=('SHOW TIME')
+IDX_TIME_SHOW=$(( ${#SYSTEM_CMDS[@]} - 1 ))
 
 USER_CMDS=(
     'TYPE SYS$MANAGER:LOGIN.COM'
@@ -993,19 +993,20 @@ check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'NOSETPRV'
 # NOTE (vms-e5d7): SET PROCESS/PRIVILEGES no longer consults
 # enforced_privs_held() -- the executive authorizes it now, and the old DCL
 # pre-gate was removed (it wrongly refused enabling an already-authorized
-# privilege, docs/oracle/vax73-privileges.md §3/§8). The one remaining
-# enforced_privs_held() gate exercised here is SET TIME's OPER check: SYSTEM
-# passes it, GUEST is refused by it (both asserted below), so a gate that
-# always grants or always refuses reddens one side. SET PROCESS/PRIORITY has
+# privilege, docs/oracle/vax73-privileges.md §3/§8). SET TIME has no DCL
+# gate either since vms-642 -- the executive's $SETIME checks OPER+LOG_IO:
+# SYSTEM's SET TIME takes effect, GUEST's is refused (both asserted below), so
+# a check that always grants or always refuses reddens one side. SET PROCESS/PRIORITY has
 # no DCL gate since vms-768 -- the executive's $SETPRI decides, and the PRIB
 # readbacks (6 for SYSTEM, clamped 4 for GUEST) prove it decided.
 check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'NOPRIV'
 
-# SET TIME for SYSTEM (see the SYSTEM_CMDS block above): the OPER gate admits
-# it (its refusal text must be ABSENT), and the substrate's refusal to set the
-# clock for a non-root process is what remains, reported honestly.
-check_not_response 'SET TIME 1-JAN-2030:00:00:00' 'no privilege for SET TIME'
-check_response 'SET TIME 1-JAN-2030:00:00:00' 'insufficient OS privilege'
+# SET TIME for SYSTEM (see the SYSTEM_CMDS block above): $SETIME succeeds --
+# no error of any severity -- and the system time is now 1-JAN-2030, read back
+# by the SHOW TIME that follows it (anchored by position: SHOW TIME also runs
+# earlier in this session).
+check_not_response 'SET TIME 1-JAN-2030:00:00:00' 'NOPRIV|-[EFW]-'
+check_response_at "$IDX_TIME_SHOW" '1-JAN-2030'
 
 # THE OTHER SIDE OF EACH GATE: GUEST (SYSUAF TMPMBX only) holds neither OPER
 # nor ALTPRI. On OpenVMS VAX V7.3 a raise above the authorized priority
@@ -1015,7 +1016,7 @@ check_response 'SET TIME 1-JAN-2030:00:00:00' 'insufficient OS privilege'
 check_response 'SHOW SYMBOL GUEST_OPER' 'GUEST_OPER = "FALSE"'
 check_not_response 'SET PROCESS/PRIORITY=7' 'NOPRIV|ALTPRI|-E-|-F-'
 check_response 'SHOW SYMBOL GUEST_PRIB' 'GUEST_PRIB = "?4"?( |$)'
-check_response 'SET TIME 2-JAN-2030:00:00:00' 'no privilege for SET TIME'
+check_response 'SET TIME 2-JAN-2030:00:00:00' 'SYSTEM-F-NOPRIV'
 
 # THE SUBPROCESS INHERITS THE CREATOR'S IDENTITY (vms-19e9).
 #

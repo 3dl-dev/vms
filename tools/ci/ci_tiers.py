@@ -21,6 +21,7 @@ Prints `key=value` lines (GITHUB_OUTPUT format):
   decnet          true|false
   vax_boot        true|false
   vax_acceptance  true|false
+  tcpip_net       true|false
   negctl_select   ALL | (empty = none) | space-separated defect names
 
 negctl_select is a PATH-TO-FACILITY map that FAILS CLOSED: a changed path that
@@ -97,6 +98,11 @@ TIERS = {
         ".github/workflows/ci-changes.yml",
         "tools/cross-alpha/run-syssvc-tests-alpha.sh",
         "tools/cross-alpha/alpha-syssvc-baseline.txt",
+        # The ptrace syscall audits carry per-arch register reads (#if
+        # __alpha__) that only this tier executes. vms-0a7's new audit read
+        # Alpha registers with PTRACE_GETREGSET (absent on Linux/Alpha), the
+        # queue never ran it, and main stayed red ~26h.
+        "tests/qemu/test_syssvc_*audit*.c",
         "tools/cross-alpha/build-vmsko-alpha.sh",
         "tools/cross-alpha/Dockerfile",
         "tools/ci/ci_tiers.py",
@@ -171,6 +177,26 @@ TIERS = {
         # DECnet / NETACP (DECNETD, NCP, the NET: device) and its startup
         "src/vmsdecnet/**",
         "distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/STARTNET.COM",
+    ],
+    # TCP/IP on a booted distro (ci-release-e2e tcpip-daytime-boot-e2e, rd
+    # vms-d0c4): the inbound DAYTIME proof, the config-survives-reboot proof and
+    # the EXTERNAL-peer proof (TELNET/FTP over the NIC to real servers outside
+    # the VM). In the queue when the BGn: driver, the TCP/IP client/server
+    # engines, the DCL verbs that drive them, or the test overlay are touched.
+    "tcpip_net": [
+        ".github/workflows/ci-release-e2e.yml",
+        ".github/workflows/ci-changes.yml",
+        "tools/ci/ci_tiers.py",
+        "src/vmstcpip/**",
+        "src/kernel-core/vms_bg*",
+        "src/kernel/vms_bg*",
+        "src/kernel/exec_kbackend_linux.h",
+        "src/libvms/syssvc/sys_qio.c",
+        "src/vmsdcl/dcl_cmd_misc.c",
+        "src/vmsdcl/dcl_terminal.c",
+        "distro/rootfs-test-tcpip/**",
+        "tests/qemu/run_tcpip_*_e2e.sh",
+        "tests/qemu/test_tcpip_*_e2e.sh",
     ],
     # Keystroke oracle: the console, terminal driver and boot path.
     "keystroke": [
@@ -308,18 +334,18 @@ def changed_files(repo, base):
 def decide(event, ref, files, table_fn):
     res = {"heavy_release": "false", "alpha_selfhost_tier": "false",
            "keystroke": "false", "decnet": "false", "vax_boot": "false",
-           "vax_acceptance": "false", "alpha_syssvc": "false", "negctl_select": ""}
+           "vax_acceptance": "false", "alpha_syssvc": "false", "tcpip_net": "false", "negctl_select": ""}
     if is_full(event, ref):
         return {"heavy_release": "true", "alpha_selfhost_tier": "true",
                 "keystroke": "true", "decnet": "true", "vax_boot": "true",
-                "vax_acceptance": "true", "alpha_syssvc": "true", "negctl_select": "ALL"}
+                "vax_acceptance": "true", "alpha_syssvc": "true", "tcpip_net": "true", "negctl_select": "ALL"}
     if event == "push":
         return res  # the queue already tested this exact tree
     if files is None:  # could not compute: fail closed (queue / PR only)
         if event == "merge_group":
             return {"heavy_release": "true", "alpha_selfhost_tier": "true",
                     "keystroke": "true", "decnet": "true", "vax_boot": "true",
-                    "vax_acceptance": "true", "alpha_syssvc": "true", "negctl_select": "ALL"}
+                    "vax_acceptance": "true", "alpha_syssvc": "true", "tcpip_net": "true", "negctl_select": "ALL"}
         return res
     if event == "merge_group":
         res["alpha_selfhost_tier"] = "true" if matches_any(files, TIERS["alpha_selfhost_tier"]) else "false"
@@ -329,6 +355,7 @@ def decide(event, ref, files, table_fn):
         res["vax_boot"] = "true" if matches_any(files, TIERS["vax_boot"]) else "false"
         res["vax_acceptance"] = "true" if matches_any(files, TIERS["vax_acceptance"]) else "false"
         res["alpha_syssvc"] = "true" if matches_any(files, TIERS["alpha_syssvc"]) else "false"
+        res["tcpip_net"] = "true" if matches_any(files, TIERS["tcpip_net"]) else "false"
         try:
             res["negctl_select"] = negctl_select(files, table_fn())
         except Exception as e:  # noqa: BLE001 -- fail closed
@@ -359,7 +386,7 @@ def main():
         print("ci_tiers: cannot compute changed files (%s)" % e, file=sys.stderr)
     res = decide(a.event, a.ref, files, lambda: defect_table(a.repo))
     for k in ("heavy_release", "alpha_selfhost_tier", "keystroke", "decnet", "vax_boot",
-              "vax_acceptance", "alpha_syssvc", "negctl_select"):
+              "vax_acceptance", "alpha_syssvc", "tcpip_net", "negctl_select"):
         print("%s=%s" % (k, res[k]))
 
 

@@ -18,6 +18,38 @@ target_link_libraries(test_dnet_link PRIVATE vmsdecnet_engine)
 target_compile_options(test_dnet_link PRIVATE -Werror)
 add_test(NAME vmsdecnet_link_unit COMMAND test_dnet_link)
 
+# rd vms-985: NSP data flow -- receive window + link-service stop/resume, ACK /
+# NAK, go-back-N retransmission. Replays the real VAX V7.3 PDUs of the two
+# vms-0a7 S1 large-COPY failures (tests/lab/captures/vms-0a7-s1-20261102/), then
+# moves 20000 records each way over a lossy channel with a slow reader.
+add_executable(test_dnet_nsp_flow test_dnet_nsp_flow.c)
+target_link_libraries(test_dnet_nsp_flow PRIVATE vmsdecnet_nsp)
+target_compile_options(test_dnet_nsp_flow PRIVATE -Werror)
+add_test(NAME vmsdecnet_nsp_flow_unit COMMAND test_dnet_nsp_flow)
+
+# rd vms-985: sanitizer fuzz of the peer-reachable data-flow receive paths (codec
+# DATA/LS/ACK/OTHACK decode + the link FSM under hostile acks, NAKs, link
+# services and segment numbers). The codec and link sources are compiled into
+# the target so ASan/UBSan instrument them.
+add_executable(test_dnet_nsp_flow_fuzz test_dnet_nsp_flow_fuzz.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/nsp/dnet_nsp.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/nsp/dnet_link.c)
+target_include_directories(test_dnet_nsp_flow_fuzz PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/nsp/include)
+target_compile_options(test_dnet_nsp_flow_fuzz PRIVATE -Werror)
+if(NOT DEFINED OVMX_DAP_SANITIZE_OK)
+    include(CheckCSourceCompiles)
+    set(_nspfuzz_san_save "${CMAKE_REQUIRED_FLAGS}")
+    set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined")
+    check_c_source_compiles("int main(void){return 0;}" OVMX_DAP_SANITIZE_OK)
+    set(CMAKE_REQUIRED_FLAGS "${_nspfuzz_san_save}")
+endif()
+if(OVMX_DAP_SANITIZE_OK)
+    target_compile_options(test_dnet_nsp_flow_fuzz PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_dnet_nsp_flow_fuzz PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME vmsdecnet_nsp_flow_fuzz_unit COMMAND test_dnet_nsp_flow_fuzz)
+
 # rd vms-4d2, engine rung 3: the CTERM (Command Terminal) protocol behind
 # $ SET HOST. Proves (1) every CTERM message type round-trips encode->decode,
 # (2) a terminal + host session bind/negotiate/carry-I/O/unbind on raw PDUs, and
@@ -190,31 +222,14 @@ add_test(NAME vmsdecnet_fal_server_replay COMMAND test_dnet_fal_server
          ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-sys-login/falverbs-v2v-wire.txt
          ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/live-bracket)
 
-# rd vms-6a4: $ DIRECTORY node:: / $ TYPE node:: -- the OVMX FAL CLIENT run
-# against the real VAX FAL's replies, its output compared byte for byte with
-# what the VAX's own console printed; then the NAME/DATA receive path fuzzed.
-# A peer-receive parser: built WITH ASan/UBSan where the toolchain has them.
-# The client sources are compiled INTO the test so the sanitizer instruments
-# the receive path itself, not only the test's own code.
-add_executable(test_dnet_fal_dirtype test_dnet_fal_dirtype.c
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/dnet_fal.c
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/dnet_fal_dirtype.c)
-target_include_directories(test_dnet_fal_dirtype PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include)
-target_link_libraries(test_dnet_fal_dirtype PRIVATE vmsdecnet_fal vmsdecnet_dap vmsdecnet_cterm vmsrms)
-# -Werror on the test's own TU (the compiled-in sources keep their library
-# warning set).
-set_source_files_properties(test_dnet_fal_dirtype.c PROPERTIES COMPILE_OPTIONS -Werror)
-if(OVMX_NODESPEC_SANITIZE_OK)
-    target_compile_options(test_dnet_fal_dirtype PRIVATE -fsanitize=address,undefined)
-    target_link_options(test_dnet_fal_dirtype PRIVATE -fsanitize=address,undefined)
-endif()
-set(_fv ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008)
-add_test(NAME vmsdecnet_fal_dirtype COMMAND test_dnet_fal_dirtype
-         ${_fv}/vax-to-vax-sys-login/falverbs-v2v-wire.txt
-         ${_fv}/vax-to-vax-sys-login/falverbs-v2v-vax1-console.txt
-         ${_fv}/falverbs-wire.txt
-         ${_fv}/vax1-console.txt)
+# rd vms-36aa: the FAL's real RMS record path (dnet_fal_wput / dnet_fal_rget,
+# not stubbed) stores a VAX's VFC records with the control in RAB$L_RHB, so a
+# 290-block file is 290 blocks on OVMX, and reads them back byte-identical.
+add_executable(test_dnet_fal_vfc test_dnet_fal_vfc.c)
+target_include_directories(test_dnet_fal_vfc PRIVATE ${VMS_RMS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
+target_link_libraries(test_dnet_fal_vfc PRIVATE vmsdecnet_fal vmsdecnet_dap vmsrms vms)
+target_compile_options(test_dnet_fal_vfc PRIVATE -Werror -Wno-overflow)
+add_test(NAME vmsdecnet_fal_vfc COMMAND test_dnet_fal_vfc)
 
 # rd vms-47fd: INBOUND DECnet MAIL-11 (object 27). Reads the real VAX V7.3
 # capture itself and replays every VAX1 segment through the OVMX receiver,

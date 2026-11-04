@@ -106,8 +106,9 @@ endfunction()
 file(GLOB QEMU_SYSSVC_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_syssvc_*.c)
 # Some suites are registered only where what they test can exist (below).
 # test_syssvc_crtl_static proves the C RTL file layer of a STATIC image (and
-# test_syssvc_crtl_time its clock and time zone, vms-593, and
-# test_syssvc_crtl_signal its signals, vms-931), which
+# test_syssvc_crtl_time its clock and time zone, vms-593,
+# test_syssvc_crtl_signal its signals, vms-931, and
+# test_syssvc_crtl_devfd its terminal and mailbox descriptors, vms-a66e), which
 # exists only where the build links it (OVMX_CRTL_FD_STATIC: tests/qemu/
 # Dockerfile, over the x86_64 musl system-call funnel src/crtl-musl-x86_64). A
 # build without that layer -- the Alpha rig, a host build -- has nothing for the
@@ -117,7 +118,7 @@ option(OVMX_CRTL_FD_STATIC "link the C RTL file layer over RMS into static C ima
 foreach(_src ${QEMU_SYSSVC_SOURCES})
     get_filename_component(_name ${_src} NAME_WE)
     if((_name STREQUAL "test_syssvc_crtl_static" OR _name STREQUAL "test_syssvc_crtl_time"
-        OR _name STREQUAL "test_syssvc_crtl_signal")
+        OR _name STREQUAL "test_syssvc_crtl_signal" OR _name STREQUAL "test_syssvc_crtl_devfd")
        AND NOT OVMX_CRTL_FD_STATIC)
         continue()
     endif()
@@ -148,6 +149,15 @@ endforeach()
 if(TARGET test_syssvc_va)
     target_sources(test_syssvc_va PRIVATE
         ${CMAKE_SOURCE_DIR}/src/vmslink/ovmx_decc_vm.c)
+endif()
+
+# test_syssvc_crtl_exec (rd vms-e70f): the DEC C RTL's exec*/wait/getpid over
+# $CREPRC and the executive (crtl_exec.c), the code DECC$SHR's entries run.
+if(TARGET test_syssvc_crtl_exec)
+    target_sources(test_syssvc_crtl_exec PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_exec.c)
+    target_include_directories(test_syssvc_crtl_exec PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms)
 endif()
 
 # test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
@@ -477,6 +487,7 @@ endforeach()
 if(OVMX_CRTL_FD_STATIC)
     add_library(ovmx_crtl_fd_static OBJECT
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_fd.c
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_devfd.c
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_filespec.c
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_time.c
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_signal.c)
@@ -486,7 +497,7 @@ if(OVMX_CRTL_FD_STATIC)
         ${VMS_INCLUDE_DIR} ${VMS_RMS_INCLUDE_DIR}
         ${CMAKE_SOURCE_DIR}/src/vmsrms
         ${CMAKE_SOURCE_DIR}/src/crtl-musl-x86_64/include)
-    foreach(_t ${_corpus_rt_targets} test_syssvc_crtl_static test_syssvc_crtl_time test_syssvc_crtl_signal)
+    foreach(_t ${_corpus_rt_targets} test_syssvc_crtl_static test_syssvc_crtl_time test_syssvc_crtl_signal test_syssvc_crtl_devfd)
         if(TARGET ${_t})
             target_sources(${_t} PRIVATE $<TARGET_OBJECTS:ovmx_crtl_fd_static>)
             target_compile_definitions(${_t} PRIVATE OVMX_CRTLFD_STATIC)

@@ -40,7 +40,18 @@ int main(void)
     printf("=== test_create_uid ===\n");
 
     uint64_t before = 0, after = 0;
-    sys$gettim(&before);
+    /* The time in a uid is the system time, the executive's (rd vms-642). With
+     * no /dev/vms there is none to read: $CREATE_UID says so (SS$_NOSUCHDEV)
+     * rather than stamping the host clock. Every check below runs against a
+     * real executive, where tests/qemu/test_syssvc_systime.c also moves the
+     * system time and finds the next uid's timestamp moved with it. */
+    if (sys$gettim(&before) == SS$_NOSUCHDEV) {
+        CHECK(sys$create_uid(uids[0]) == SS$_NOSUCHDEV,
+              "no executive: $CREATE_UID is SS$_NOSUCHDEV, not a host-clock uid");
+        CHECK(sys$create_uid(NULL) == SS$_ACCVIO, "a NULL buffer is refused with SS$_ACCVIO");
+        printf("=== test_create_uid: %d passed, %d failed ===\n", pass, fail);
+        return fail > 0 ? 1 : 0;
+    }
     int ok = 1;
     for (int i = 0; i < N; i++)
         if (!(sys$create_uid(uids[i]) & 1)) { ok = 0; break; }

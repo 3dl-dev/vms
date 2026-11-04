@@ -386,6 +386,25 @@ struct vms_dlm_rm_ops {
 	 * the hang and ran once quorum returned).
 	 */
 	int (*rb_quorum_hang)(void *ctx);
+	/*
+	 * THE DIRECTORY RE-REGISTRATION'S DOORS (rd vms-fdeb) -- OPTIONAL as a
+	 * pair; unbound, nothing is re-registered (`dr_unbound` counts it).
+	 *
+	 * `dr_next`  vms_lock_dlm_dirreg_next: the next ROOT resource THIS node
+	 *            masters whose directory node, by the weight vector in force,
+	 *            is ANOTHER member and has not been told of it since the
+	 *            transition discarded every entry -- not among `skip`. Fills
+	 *            the identity (hash included: a resource whose hash is not
+	 *            known is never yielded) and that directory node's CSID.
+	 * `dr_told`  vms_lock_dlm_dirreg_told: that directory answered, so it
+	 *            holds the entry now and only it may be told to remove it
+	 *            (rd vms-c55's dir_told_csid). 1 when the engine recorded it.
+	 */
+	int (*dr_next)(void *ctx, const struct vms_dlm_res_ident *skip,
+		       uint32_t n_skip, struct vms_dlm_res_ident *out,
+		       uint32_t *dir_csid);
+	int (*dr_told)(void *ctx, const struct vms_dlm_res_ident *id,
+		       uint32_t dir_csid);
 };
 
 /* ==========================================================================
@@ -584,6 +603,49 @@ struct vms_dlm_rm_tree {
 /* ==========================================================================
  * THE MACHINE. No globals, no clock, no allocation: the caller owns it.
  * ========================================================================== */
+/* ==========================================================================
+ * THE DIRECTORY RE-REGISTRATION (rd vms-fdeb) -- a MASTER's op-0x0d.
+ *
+ * Phase 1 of every transition discards all directory information cluster-wide
+ * (Davis pp. 6-33, 7-40/7-41) and each master re-registers its own resources at
+ * their directory nodes. Measured over every committed capture
+ * (tests/lab/captures, tools/cluster/dlm_dirreg_census.py and the vms-fdeb
+ * capture README):
+ *
+ *   WHEN   after the coordinator's release 4 (its 01/0c with step 4): 18 of 18
+ *          real sender-transitions, coordinator and participant alike, at
+ *          every LOCKDIRWT the lab ran.
+ *   HOLD   a participant's step report 5 goes only once every record it sent
+ *          is answered (5 of 5 visible reports, 0 outstanding at each); a
+ *          coordinator's release 5 likewise (spec SS4(p)).
+ *   WHAT   one record per ROOT resource the sender masters, to entry
+ *          [(hash >> 16) mod n] of the vector -- the resource's directory node
+ *          (434 of 434 in the vms-8219 L2 run); none for a resource the
+ *          sender directs itself.
+ *   BODY   vms_dlm_dir_reg_build: identity + hash, zero elsewhere.
+ *   ANSWER 82/0d, the request echoed with body[34] = 0xf9 (1487 of 1487 real
+ *          answers). A real sender has up to ~5 records in flight (modal 4).
+ *
+ * VMS_DLM_DR_WINDOW records go out at once; an answer frees its slot and the
+ * next resource goes. An answer is matched on its sender (the directory node
+ * the slot was sent to) and the full echoed identity. Anything else is not
+ * ours and is left alone.
+ * ========================================================================== */
+#define VMS_DLM_DR_REL_STEP 4u
+#define VMS_DLM_DR_WINDOW   4u
+
+enum vms_dlm_dr_state {
+	VMS_DLM_DR_ST_FREE  = 0,
+	VMS_DLM_DR_ST_AWAIT = 1   /* sent; waiting for the directory's 82/0d */
+};
+
+struct vms_dlm_dr_slot {
+	uint8_t  state;                  /* enum vms_dlm_dr_state           */
+	uint8_t  pad[3];
+	uint32_t dst;                    /* the directory node it went to   */
+	struct vms_dlm_res_ident id;     /* what it registered              */
+};
+
 struct vms_dlm_rm {
 	const struct vms_dlm_rm_ops *ops;
 	struct vms_dlm_rm_tree tree[VMS_DLM_RM_TREES];
@@ -687,6 +749,23 @@ struct vms_dlm_rm {
 				     /* window open (rd vms-5d6)              */
 	uint32_t rb_in_installed;    /* survivors' records installed + 0xfa   */
 	uint32_t rb_in_refused;      /* ...refused by the engine: unanswered  */
+
+	/* THE DIRECTORY RE-REGISTRATION (rd vms-fdeb). */
+	struct vms_dlm_dr_slot dr[VMS_DLM_DR_WINDOW];
+	uint8_t  dr_open;            /* 1 from release 4 to the next release  */
+	uint8_t  dr_stopped;         /* 1 once this window sends no more      */
+	uint8_t  dr_pad[2];
+	uint32_t dr_opened_ms;       /* when the open window opened           */
+	uint32_t dr_windows_opened;  /* release-4 windows opened              */
+	uint32_t dr_sent;            /* op-0x0d records really on the wire    */
+	uint32_t dr_send_failed;     /* ...refused by the way out: STOPPED    */
+	uint32_t dr_answers;         /* 82/0d 0xf9 answers matched            */
+	uint32_t dr_told;            /* ...that the engine recorded as told   */
+	uint32_t dr_answers_odd;     /* matched 82/0d not stamped 0xf9: STOP  */
+	uint32_t dr_expired;         /* records unanswered for RECNXINTERVAL  */
+	uint32_t dr_abandoned;       /* records in flight when a window shut  */
+	uint32_t dr_unbound;         /* releases with the doors unbound       */
+	uint32_t dr_codec_failures;  /* identities the builder refused        */
 };
 
 /* ==========================================================================
@@ -823,6 +902,30 @@ void vms_dlm_rm_rb_window_close(struct vms_dlm_rm *f);
 int vms_dlm_rm_rb_window_open(const struct vms_dlm_rm *f);
 uint32_t vms_dlm_rm_rb_outstanding(const struct vms_dlm_rm *f);
 uint32_t vms_dlm_rm_rb_expire(struct vms_dlm_rm *f, uint32_t now_ms,
+			      uint32_t limit_ms);
+
+/*
+ * THE DIRECTORY RE-REGISTRATION'S ENTRY POINTS (rd vms-fdeb; section above).
+ *
+ * `vms_dlm_rm_dr_barrier_released`: the barrier released `step`. Release 4
+ * opens the window and the records go out NOW; any other release shuts it.
+ * `vms_dlm_rm_dr_close`: a transition began or ended -- shut, slots freed.
+ * `vms_dlm_rm_dr_answer`: an inbound frame; 1 when it was the directory's
+ * answer to one of OUR records (consumed), 0 otherwise (route it on).
+ * `vms_dlm_rm_dr_outstanding`: records on the wire and unanswered -- what the
+ * barrier holds this node's next frame on.
+ * `vms_dlm_rm_dr_expire`: with the window open longer than `limit_ms` (0 never),
+ * every record still unanswered is given up, counted, and the window STOPS so
+ * the barrier goes on. Returns how many.
+ */
+void vms_dlm_rm_dr_barrier_released(struct vms_dlm_rm *f, uint32_t step,
+				    uint32_t now_ms);
+void vms_dlm_rm_dr_close(struct vms_dlm_rm *f);
+int vms_dlm_rm_dr_answer(struct vms_dlm_rm *f, uint32_t from_csid,
+			 uint8_t category, uint8_t opcode,
+			 const uint8_t *body, uint32_t len);
+uint32_t vms_dlm_rm_dr_outstanding(const struct vms_dlm_rm *f);
+uint32_t vms_dlm_rm_dr_expire(struct vms_dlm_rm *f, uint32_t now_ms,
 			      uint32_t limit_ms);
 
 /* How many rebuild slots are in `st`; and the rebuild's stopped total. */

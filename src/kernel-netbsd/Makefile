@@ -48,6 +48,7 @@ SRCS=		vms_netbsd.c \
 		vms_eflag.c \
 		vms_ast.c \
 		vms_access.c \
+		vms_systime.c \
 		vms_mbx.c \
 		vms_proctab.c \
 		vms_lock.c \

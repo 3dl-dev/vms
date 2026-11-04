@@ -224,14 +224,13 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # -O2 (vms-e839): at -O0 the port compiler leaves a varargs function's
     # second named argument in the stack word OTS$HOME_ARGS writes the argument
     # count to, so decc$$execl32 & co. would read their arg0 as the count.
-    # vms-1f8: the created task is made a subprocess by the EXECUTIVE before it
-    # runs (KIF_SVC_CREPRC_PCB), reached through libvmssys's transport seam --
-    # kif_transport_linux.c over the EVAX-native callsys trampolines
-    # (arch/alpha/syscall_vms.c), the same two TUs LIBVMSSYS$SHR builds for
-    # alpha. They define no decc$ universal, so the vector is unchanged.
+    # vms-e70f: exec*() creates the subprocess through SYS$CREPRC (crtl_exec.c,
+    # the RMS-backed pass below, bound weak here); this TU no longer reaches the
+    # executive itself.
     LIBVMSSYS_DIR_VF="$(CDPATH= cd "$(dirname "$0")/../libvmssys" && pwd)"
+    # shellcheck disable=SC2086
     "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
-        $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -I"$LIBVMSSYS_DIR_VF" -o "$ALPHA_VFORK_OBJ" \
+        $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -o "$ALPHA_VFORK_OBJ" \
         "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_vfork.c"
     # vms-bc53: the C RTL heap's address space -- mallocng's glue (musl-arch
     # src/malloc/mallocng/glue.h) calls ovmx$vm_expreg/ovmx$vm_deltva, which ask
@@ -338,7 +337,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         # shellcheck disable=SC2086
         # -O2: decc$fgetname is varargs with two named arguments (vms-e839).
         "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
-            -I"$RMS_SRC_DIR" -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
+            -I"$RMS_SRC_DIR" -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" -I"$IMGACT_INC" $ALPHA_MUSL_INC \
             -o "$FD_OBJ" "$RMS_SRC_DIR/crtl_rms_fd.c"
         "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_fd_main \
             || { echo "mk_decc_shr: FAIL crtl_rms_fd.c did not define ovmx_crtl_fd_main" >&2; exit 2; }
@@ -386,6 +385,28 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         "$NM" --defined-only "$SIG_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_signal_hook \
             || { echo "mk_decc_shr: FAIL crtl_signal.c did not define ovmx_crtl_signal_hook" >&2; exit 2; }
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $SIG_OBJ"
+        # vms-a66e: the C RTL's terminal and mailbox descriptors (crtl_devfd.c):
+        # stdin/stdout/stderr on a terminal are $QIO on a channel to it, pipe()
+        # is a mailbox pair; the hook above offers every call to it first. Its
+        # system services ($ASSIGN/$QIOW/$CREMBX/$GETDVI/$TRNLNM) are LIBVMS$SHR's
+        # (--use ALPHA_CRTL_VMS_USE below).
+        DEVFD_OBJ="$VENEER_DIR/crtl_devfd.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            -I"$RMS_SRC_DIR" -I"$RMS_INC" $ALPHA_MUSL_INC \
+            -o "$DEVFD_OBJ" "$RMS_SRC_DIR/crtl_devfd.c"
+        for _df in ovmx_crtl_devfd_call ovmx_crtl_devfd_bind_stdio ovmx_crtl_devfd_rundown; do
+            "$NM" --defined-only "$DEVFD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF "$_df" \
+                || { echo "mk_decc_shr: FAIL crtl_devfd.c did not define $_df" >&2; exit 2; }
+        done
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $DEVFD_OBJ"
+        # DEC C getname(): a descriptor's file or device name; new, so at the tail.
+        "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_getname \
+            || { echo "mk_decc_shr: FAIL crtl_rms_fd.c did not define ovmx_crtl_getname" >&2; exit 2; }
+        case ",$VEC,${PASS2_TAIL:-}," in
+            *',decc$getname'[=/]*) echo "mk_decc_shr: FAIL decc\$getname is already in the vector" >&2; exit 2;;
+        esac
+        echo "mk_decc_shr: C RTL terminals and pipes over VMS channels wired (vms-a66e): crtl_devfd.c"
         # vms-4ba3: DEC C fgetname, from the same layer (an RMS stream's
         # resultant spec); new to this pass, so it goes at the vector tail.
         "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF 'decc$fgetname' \
@@ -480,6 +501,42 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
             *',decc$__posix_exit'[=/]*) echo "mk_decc_shr: FAIL decc\$__posix_exit is already in the vector" >&2; exit 2;;
         esac
         PASS2_TAIL="${PASS2_TAIL:-},decc\$__posix_exit/ovmx_crtl_posix_exit=PROCEDURE"
+        # vms-e70f: the DEC C subprocess functions over the executive
+        # (src/vmsrms/crtl_exec.c): exec*() in a vfork context creates the
+        # subprocess with SYS$CREPRC (ovmx_decc_vfork.c calls it weak), wait() and
+        # waitpid() collect its completion from the executive, getpid() is the VMS
+        # PID. decc$wait/decc$waitpid/decc$getpid are rebound IN PLACE (vms-b14);
+        # decc$__vms_waitpid (_VMS_WAIT: the completion code itself) is new at the
+        # tail. The completion notification and termination record are
+        # LIBVMSSYS$SHR's (vms_kif_spawn_notify/getexit_pid, as LIB$SPAWN/NOWAIT
+        # uses them), so this pass also links --use ALPHA_CRTL_SYS_USE.
+        [ -n "${ALPHA_CRTL_SYS_USE:-}" ] && [ -f "$ALPHA_CRTL_SYS_USE" ] \
+            || { echo "mk_decc_shr: FAIL ALPHA_CRTL_SYS_USE (LIBVMSSYS\$SHR, for the subprocess completion) not given or not found" >&2; exit 2; }
+        EXEC_OBJ="$VENEER_DIR/crtl_exec.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            -I"$RMS_INC" -I"$RMS_SRC_DIR" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
+            -o "$EXEC_OBJ" "$RMS_SRC_DIR/crtl_exec.c"
+        for _ex in ovmx_crtl_exec_create ovmx_crtl_exec_replace ovmx_crtl_wait ovmx_crtl_waitpid ovmx_crtl_vms_waitpid ovmx_crtl_getpid ovmx_crtl_exec_context; do
+            "$NM" --defined-only "$EXEC_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF "$_ex" \
+                || { echo "mk_decc_shr: FAIL crtl_exec.c did not define $_ex" >&2; exit 2; }
+        done
+        for _pair in wait:ovmx_crtl_wait waitpid:ovmx_crtl_waitpid getpid:ovmx_crtl_getpid; do
+            _n=${_pair%%:*}; _f=${_pair#*:}
+            case ",$VEC," in
+                *",decc\$$_n=PROCEDURE,"*) ;;
+                *) echo "mk_decc_shr: FAIL decc\$$_n is not a PROCEDURE universal to rebind" >&2; exit 2;;
+            esac
+            VEC=$(printf '%s' ",$VEC," | sed "s/,decc\\\$$_n=PROCEDURE,/,decc\$$_n\/$_f=PROCEDURE,/; s/^,//; s/,\$//")
+        done
+        case ",$VEC,${PASS2_TAIL:-}," in
+            *',decc$__vms_waitpid'[=/]*) echo "mk_decc_shr: FAIL decc\$__vms_waitpid is already in the vector" >&2; exit 2;;
+        esac
+        PASS2_TAIL="${PASS2_TAIL:-},decc\$__vms_waitpid/ovmx_crtl_vms_waitpid=PROCEDURE"
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $EXEC_OBJ"
+        echo "mk_decc_shr: DEC C subprocess functions wired (vms-e70f): exec*() -> SYS\$CREPRC, decc\$wait/waitpid/__vms_waitpid -> the executive's completion, decc\$getpid -> the VMS PID (--use $ALPHA_CRTL_SYS_USE)"
+        # vms-a66e: DEC C getname() (crtl_rms_fd.c), after every earlier tail entry.
+        PASS2_TAIL="${PASS2_TAIL:-},decc\$getname/ovmx_crtl_getname=PROCEDURE"
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $SYS_OBJ"
         echo "mk_decc_shr: DEC C system() wired (vms-65a): decc\$system -> ovmx_crtl_system (LIB\$SPAWN, --use $ALPHA_CRTL_VMS_USE); exit/__posix_exit record \$STATUS (vms-599)"
     fi
@@ -602,6 +659,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # this must name an ALREADY-BUILT LIBVMSRMS$SHR.EXE.
     [ -n "${ALPHA_CRTL_RMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_RMS_USE"
     [ -n "${ALPHA_CRTL_VMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_VMS_USE"
+    [ -n "${ALPHA_CRTL_SYS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_SYS_USE"
     [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
     # shellcheck disable=SC2086
     "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" "$ALPHA_VM_OBJ" "$ALPHA_KIFX_OBJ" "$ALPHA_KIFS_OBJ" "$ALPHA_STAT_OBJ" ${ALPHA_VENEER_OBJ:-}

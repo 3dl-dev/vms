@@ -8,7 +8,7 @@
  *   - STM:   Stream records delimited by CR-LF
  *   - FIX:   Fixed-length records
  *   - VAR:   Variable-length records with 2-byte count prefix
- *   - VFC:   Variable with fixed control area
+ *   - VFC:   Variable with fixed control area (the control in RAB$L_RHB)
  */
 
 #include <stdio.h>
@@ -212,12 +212,14 @@ static uint32_t rms_seq_get_record(struct FAB *fab, struct RAB *rab)
                 return RMS$_RTB;
             }
 
-            /* Read and discard the fixed control area */
+            /* The fixed control area goes to the record header buffer,
+             * RAB$L_RHB, when the caller supplied one (VMS RMS Reference,
+             * $GET); with RHB 0 it is read past. Never into UBF. */
             if (fsz > 0) {
                 char ctrl[256];
-                uint8_t to_read = (fsz <= sizeof(ctrl)) ? fsz : (uint8_t)sizeof(ctrl);
-                n = rms_io_read_exact(fd, ctrl, to_read);
-                if (n < to_read) return RMS$_RER;
+                n = rms_io_read_exact(fd, ctrl, fsz);
+                if (n < fsz) return RMS$_RER;
+                if (rab->rab$l_rhb) memcpy(rab->rab$l_rhb, ctrl, fsz);
             }
 
             /* Read the data portion */
@@ -385,9 +387,11 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
             uint16_t total = (uint16_t)(fsz + len);
             if (rms_io_write_exact(fd, &total, 2) < 0) return RMS$_WER;
 
-            /* Write fixed control area (zeroed) */
+            /* The fixed control area comes from RAB$L_RHB (VMS RMS
+             * Reference, $PUT); with RHB 0 it is written as zeroes. */
             char ctrl[256];
             memset(ctrl, 0, sizeof(ctrl));
+            if (rab->rab$l_rhb) memcpy(ctrl, rab->rab$l_rhb, fsz);
             if (rms_io_write_exact(fd, ctrl, fsz) < 0) return RMS$_WER;
 
             /* Write data */

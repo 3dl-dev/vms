@@ -245,6 +245,7 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 
 	dq_bzero(&req, (uint32_t)sizeof(req));
 	req.mode            = (uint8_t)p->lkmode;
+	req.req_flags       = p->req_flags;   /* rd vms-d63: body[28:30] */
 	req.req_lkid = p->req_lkid;      /* our own executive handle */
 	req.master_lkid     = p->master_lkid;   /* 0 until the master named it */
 	req.req_pid         = p->req_pid;       /* ...and who is asking until then */
@@ -257,16 +258,18 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 	req.parent_own_lkid    = p->parent_own_lkid;
 	req.parent_master_lkid = p->parent_master_lkid;
 	/*
-	 * ...and A SUB REQUEST CARRIES NO DIRECTORY HASH. The hash indexes the
-	 * directory, only ROOT resources are in the directory, and this request
-	 * is addressed to the master the parent named -- so there is no lookup
-	 * for a hash to serve. A real sub request does carry four bytes at
-	 * body[128:132], and what selects them is NOT a function of the name this
-	 * executive can learn or compute (Rule 8), so writing anything but zero
-	 * would be minting one. The deviation is recorded in frame-grounding.tsv.
+	 * ...and THE RESOURCE'S HASH, body[128:132], ROOT OR SUB (rd vms-d63). On a
+	 * root it indexes the directory. On a sub request -- addressed to the
+	 * master the parent named -- it is how that MASTER finds the sub-RSB: OVMX
+	 * sent zero there and a real VAX master answered every F11B$s request with
+	 * a resource of its own making, never the one its XQP holds (vms-5fa r5,
+	 * SDA 0 of 600). The value is the engine's (vms_dlm_sub_name_hash_proven
+	 * of the sub's identity and its root parent's held value, 28,532 of 28,532
+	 * real sub requests -- tools/cluster/dlm_sub_hash_census.py); the engine
+	 * marks it unknown when it holds none, and then nothing is written.
 	 */
-	req.dir_hash        = (p->parent_own_lkid != 0u) ? 0u : p->dir_hash;
-	req.dir_hash_valid  = (p->parent_own_lkid != 0u) ? 0u : p->dir_hash_known;
+	req.dir_hash        = p->dir_hash;
+	req.dir_hash_valid  = p->dir_hash_known;
 	req.name_len        = dq_name_from_post(p, req.name);
 	/*
 	 * The identity that qualifies the name, body[44:46] + body[46] (rd
@@ -307,11 +310,10 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
  *   - NO DIRECTORY HASH. A release is addressed to the MASTER, which the lock
  *     database names; a directory index is what you carry when you do not know
  *     who to ask.
- *   - NO VALUE BLOCK, and this one is a GAP rather than a shape: a release
- *     that wrote the LVB has no grounded field to carry it here (the value
- *     block is grounded at body[36:52] of an op-0x06 only, and that opcode has
- *     no builder because the four bytes ahead of the block are unpinned).
- *     Unchanged by this item, and stated rather than hidden.
+ *   - NO VALUE BLOCK unless the release WRITES one (rd vms-d63): then the
+ *     LKB's block rides at body[36:52] with the cell 1, the form a real
+ *     XQP's F11B$s release has (struct vms_dlm_deq). A release that writes
+ *     nothing carries none, as before.
  */
 static enum dlm_req_status dq_build_deq(struct dlm_req_fsm *f,
 					const struct vms_dlm_proxy_post *p)
@@ -326,6 +328,16 @@ static enum dlm_req_status dq_build_deq(struct dlm_req_fsm *f,
 	 * p->lkmode there, which is how a release of an EX lock carried a 5
 	 * that no real release has ever carried; the builder now writes the
 	 * measured cell itself, so there is nothing to plumb. */
+	/* rd vms-d63: a release that WRITES the value block (the engine says
+	 * so -- dlm_proxy_fill_post's write_valblk, read off the LKB) carries
+	 * the LKB's block, as a real XQP's release of its F11B$s lock does. */
+	if (p->write_valblk) {
+		uint32_t i;
+
+		d.write_valblk = 1u;
+		for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
+			d.valblk[i] = p->valblk[i];
+	}
 
 	dq_bzero(f->txframe, (uint32_t)sizeof(f->txframe));
 	if (vms_dlm_deq_build(&d, f->txframe, (uint32_t)sizeof(f->txframe),
@@ -2194,6 +2206,14 @@ static void relq_record_from_post(struct dlm_relq_rec *rec,
 	rec->master_lkid = p->master_lkid;
 	rec->dst_csid    = p->dst_csid;
 	rec->mode        = (uint8_t)p->lkmode;
+	/* rd vms-d63: the written value block rides with the release. */
+	if (p->write_valblk) {
+		uint32_t i;
+
+		rec->write_valblk = 1u;
+		for (i = 0u; i < VMS_DLM_VALBLK_LEN; i++)
+			rec->valblk[i] = p->valblk[i];
+	}
 }
 
 enum dlm_req_status dlm_relq_stage(struct dlm_relq *q,
@@ -2254,6 +2274,13 @@ static void relq_post_from_record(struct vms_dlm_proxy_post *out,
 	out->req_lkid    = rec->req_lkid;
 	out->master_lkid = rec->master_lkid;
 	out->lkmode      = rec->mode;
+	if (rec->write_valblk) {               /* rd vms-d63 */
+		uint32_t i;
+
+		out->write_valblk = 1u;
+		for (i = 0u; i < VMS_DLM_VALBLK_LEN; i++)
+			out->valblk[i] = rec->valblk[i];
+	}
 }
 
 enum dlm_req_status dlm_relq_claim(struct dlm_relq *q, uint32_t slot,

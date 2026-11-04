@@ -189,6 +189,12 @@ uint32_t vms_ldwv_generation(const struct vms_ldwv *v);
  * test (p. 6-31) and the order self-check's predicate (SS5). */
 int vms_ldwv_is_ours(const struct vms_ldwv *v, uint16_t hash16);
 
+/* Nonzero iff `hash16` indexes an entry of the OTHER system `csid` -- iff, by
+ * this node's vector, `csid` is the directory for that hash (rd vms-966e). 0
+ * for csid 0 (that is this node, and vms_ldwv_is_ours asks it) and for an
+ * unbuilt vector, which names nobody. */
+int vms_ldwv_names(const struct vms_ldwv *v, uint16_t hash16, vms_csid_t csid);
+
 /* THE ALL-OVMX GATE (vms-3e3, rung A"). Nonzero iff this vector is authoritative
  * and EVERY member is proven-OVMX. The one call that decides whether OVMX's own
  * directory hash may be grounded for a name never seen on the wire, and whether

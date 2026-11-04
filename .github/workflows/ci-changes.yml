@@ -93,6 +93,9 @@ on:
       alpha_syssvc:
         description: 'alpha_syssvc (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.alpha_syssvc }}
+      tcpip_net:
+        description: 'tcpip_net (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.tcpip_net }}
       negctl_select:
         description: 'negctl_select (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.negctl_select }}
@@ -140,6 +143,7 @@ jobs:
       vax_boot: ${{ steps.tiers.outputs.vax_boot }}
       vax_acceptance: ${{ steps.tiers.outputs.vax_acceptance }}
       alpha_syssvc: ${{ steps.tiers.outputs.alpha_syssvc }}
+      tcpip_net: ${{ steps.tiers.outputs.tcpip_net }}
       negctl_select: ${{ steps.tiers.outputs.negctl_select }}
     steps:
       - name: Checkout
@@ -315,6 +319,11 @@ jobs:
               - 'tests/qemu/test_tcpip_daytime_boot_e2e.sh'
               - 'tests/qemu/run_tcpip_reboot_e2e.sh'
               - 'tests/qemu/test_tcpip_reboot_e2e.sh'
+              - 'tests/qemu/run_tcpip_external_boot_e2e.sh'
+              - 'tests/qemu/test_tcpip_external_boot_e2e.sh'
+              - 'src/kernel-core/vms_bg*'
+              - 'src/kernel/vms_bg*'
+              - 'src/vmsdcl/dcl_cmd_misc.c'
               - 'tests/integration/test_tcpip_posture_guard.sh'
             release:
               - '.github/workflows/**'
@@ -367,6 +376,7 @@ jobs:
               - 'src/vmsdcl/**'
               - 'src/kernel-core/vms_tt.c'
               - 'src/kernel-core/vms_tt.h'
+              - 'src/kernel-core/vms_tt_oper.h'
               - 'tools/vms_login.c'
               - 'tools/loginout_display.c'
               - 'src/vmslink/mk_loginout.sh'

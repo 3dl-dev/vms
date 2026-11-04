@@ -439,30 +439,27 @@ assert_p32() {
 }
 
 assert_vfork() {
-  # vms-fb4: vfork()+execv() created a subprocess running an image with
-  # arguments; its output came back over the child-context pipe, the parent's
-  # stdout was restored, waitpid() collected it; sentinel 7.
+  # vms-fb4 / vms-e70f: vfork()+execv() created a SUBPROCESS through SYS$CREPRC
+  # running an image with arguments; its output came back over the child-context
+  # pipe, the parent's stdout was restored; $GETJPI answered the PID vfork()
+  # returned while the child lived, the child's getpid() was that VMS PID, and
+  # DECC$__VMS_WAITPID collected the child's ERROR completion %X1035A00A (main
+  # returned 1; the child's own activation seam shows it); the parent then exited
+  # with it, so DCL's $STATUS for the parent is %X1035A00A.
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
-  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
-  port_ok=$(grep -qaF 'OVMX vfork test: pid_ok=1 exited=1 piped=1 buf=CHILD-ARGS-OK ' "$log" && echo 1 || echo 0)
+  local port_ok seam st_hex st_ok=0
+  port_ok=$(grep -qaE 'OVMX vfork test: pid_ok=1 piped=1 jpi=1 getpid=1 vmswait=1 status=1035A00A ' "$log" && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
-  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
-  if [ -n "$mile_hex" ]; then
-    mile_dec=$(( mile_hex ))
-    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
-      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
-      [ "$sentinel" -eq 7 ] && mile_ok=1
-    fi
-  fi
+  st_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  [ -n "$st_hex" ] && [ $(( st_hex )) -eq $(( 0x1035A00A )) ] && grep -qaF 'WRITE-STATUS=%X1035A00A' "$log" && st_ok=1
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
-  echo "  (a) vfork/exec/wait          : port_ok=$port_ok (want 1)"
-  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
-  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
-  echo "  (c) no activation err         : ok=$err_ok"
-  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  echo "  (a) vfork/exec/\$GETJPI/getpid/wait : port_ok=$port_ok (want 1)"
+  echo "  (b) parent \$STATUS = child's       : ${seam:-<ABSENT>} (want 0x1035a00a, and DCL WRITE-STATUS=%X1035A00A; ok=$st_ok)"
+  echo "  (c) no activation err              : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -969,7 +966,11 @@ assert_crtlsig() {
            "^CRTLSIG: mask held=1 then action=1$" \
            "^CRTLSIG: alarm action=1 pause=-1 errno=EINTR seen-ASTFLT=1$" \
            "^CRTLSIG: kill own-VMS-PID rc=0 action=1$"; do
-    tr -d '\r' < "$log" | grep >/dev/null -aE "$l" || { echo "  assert_crtlsig: no line matching '$l'" >&2; return 1; }
+    tr -d '\r' < "$log" | grep >/dev/null -aE "$l" || {
+      echo "  assert_crtlsig: no line matching '$l'" >&2
+      # the raw bytes of every CRTLSIG line, so an invisible byte is seen
+      grep -a "CRTLSIG" "$log" | od -c | head -60 >&2
+      return 1; }
   done
   return 0
 }
@@ -1040,6 +1041,23 @@ assert_crtlfd() {
     || { echo "  assert_crtlfd: the F\$TIME stamps or the image's time() are missing" >&2; return 1; }
   [ "$(printf '%s\n' "$_d1" "$_u" "$_d2" | LC_ALL=C sort | tr '\n' '|')" = "$_d1|$_u|$_d2|" ] \
     || { echo "  assert_crtlfd: time() $_u is not the system time (F\$TIME $_d1 .. $_d2)" >&2; return 1; }
+  # vms-a66e: the C RTL's terminal and pipe descriptors are VMS channels. stdout
+  # is a channel to the console terminal (getname names OPA0:); pipe() is a
+  # mailbox that SHOW DEVICE, run by system() while the pipe is open, finds in
+  # the executive's device table; one message per write, end of file on close;
+  # /proc is not a C RTL name.
+  local _dv _mb _sd
+  _dv=$(tr -d '\r' < "$log")
+  printf '%s\n' "$_dv" | grep >/dev/null -aE "^CFDDEV: stdout=_?OPA0: isatty=1$" \
+    || { echo "  assert_crtlfd: stdout is not a channel to the terminal (getname(1) is not OPA0:)" >&2; return 1; }
+  _mb=$(printf '%s\n' "$_dv" | grep -aoE "^CFDDEV: pipe=_?MBA[0-9]+: messages=abc\|defg$" | grep -oE "MBA[0-9]+:" | head -1)
+  [ -n "$_mb" ] || { echo "  assert_crtlfd: pipe() is not a mailbox carrying one message per write" >&2; return 1; }
+  _sd=$(printf '%s\n' "$_dv" | awk '/^CFDDEV: === SHOW DEVICE /{f=1;next} /^CFDDEV: === END SHOW DEVICE/{f=0} f{print}')
+  printf '%s\n' "$_sd" | grep >/dev/null -a "NOSUCHDEV" && { echo "  assert_crtlfd: SHOW DEVICE does not know the pipe's mailbox" >&2; return 1; }
+  printf '%s\n' "$_sd" | grep >/dev/null -aE "(^|[ _])$_mb" \
+    || { echo "  assert_crtlfd: SHOW DEVICE did not list the pipe's mailbox $_mb" >&2; return 1; }
+  printf '%s\n' "$_dv" | grep >/dev/null -aE "^CFDDEV: eof=yes proc=ENOENT$" \
+    || { echo "  assert_crtlfd: pipe end-of-file or the /proc refusal is wrong" >&2; return 1; }
   return 0
 }
 
@@ -1268,8 +1286,15 @@ run_boot_a() {
       # OVMX_IMGACT_SEAM=1: surface the EXECUTIVE-recorded completion $STATUS per
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
+      # i8042.noaux i8042.nokbd: the clipper machine has PS/2 ports OVMX never
+      # uses (the console is ttyS0). Probed, the kernel announces the mouse
+      # LATE, while startup images run, and with ignore_loglevel that line lands
+      # on the console in the middle of the output of an image: a terminal record
+      # (implied carriage control, LF before / CR after) is open until the LF
+      # of the next record, so the kernel line joined it and an anchored gate grep
+      # missed a correct line (crtl-sig-gate, 2026-11-03). Silenced at source.
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m '"${BOOT_MEM_MB:-1024}"' -vga none -nic none \
-          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 i8042.noaux i8042.nokbd OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
           -drive file=modgpA.img,format=raw,if=virtio \
           -nographic -no-reboot '"${BOOT_QEMU_EXTRA:-}"' <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!
@@ -1364,6 +1389,12 @@ run_boot_a() {
               echo "LOGIN-RUN: SYSTEM/MANAGER login did not reach the banner" >> modgpA.raw
           fi
       fi
+      # A guest that is gone before the harness is done exited on its own:
+      # record how, so a console that stops mid-boot says why.
+      if ! kill -0 "$QP" 2>/dev/null; then
+          QRC=0; wait "$QP" 2>/dev/null || QRC=$?
+          echo "BOOT-HARNESS: qemu-system-alpha exited by itself after ${W}s, status $QRC (vmlinux-boot $(stat -c %s vmlinux-boot) bytes)" >> modgpA.raw
+      fi
       exec 6>&-
       sleep 3            # let STDRV/LOGINOUT flush the last seam + prompt
       kill "$QP" 2>/dev/null || true
@@ -1371,7 +1402,9 @@ run_boot_a() {
       rm -f "$FIFO"
       grep -avE "TSUNAMI machine check|tsunami_(read|write)" modgpA.raw > modgpA.log || true
     '
+  local _boot_rc=$?
   set -e
+  [ "$_boot_rc" -eq 0 ] || echo "[modgp-activation] boot container exited with status $_boot_rc" >&2
   docker rm -f "$cname" >/dev/null 2>&1 || true
   # BOOT_KEEP_IMG=1: keep the disk the boot wrote (a cc1build shard's objects are read off it)
   [ -n "${BOOT_KEEP_IMG:-}" ] || rm -f "$WORK/modgpA.img"
@@ -1388,6 +1421,10 @@ run_boot_a() {
       log "P0 layout confirmed: ${p0img}.EXE and its shareables activated in P0 (base ${JOINT_LINK_BASE:-0x10000})"
     else
       grep -aE "OVMX-SEAM:" "$WORK/modgpA.log" | sed 's/^/  /' || true
+      # No seam line at all = the image never ran: show the console tail so the
+      # CI log says where the boot stopped (a timeout, a bugcheck, a DCL error).
+      grep -aqE "OVMX-SEAM:" "$WORK/modgpA.log" \
+        || { echo "  -- console tail (no OVMX-SEAM line) --"; tail -n 80 "$WORK/modgpA.log" | sed 's/^/  | /'; }
       die "P0 image (base ${JOINT_LINK_BASE:-0x10000}) but the activation seam does not report p0=1 (an image or shareable landed outside P0)"
     fi
   fi
@@ -2928,15 +2965,17 @@ PYEOF3
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
     _st=$(mktemp -d); _fails=0
-    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 exited=1 piped=1 buf=CHILD-ARGS-OK argc=1' \
-      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
-    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 exited=1 piped=0 buf=CHILD-ARGS-BAD argc=1' \
-      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/noargs.log"
+    export JOINT_USE_LIBVMS=1           # vms-e70f: the parent asks $GETJPI (LIBVMS$SHR)
+    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 piped=1 jpi=1 getpid=1 vmswait=1 status=1035A00A argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x1035a00a p0=1' > "$_st/pass.log"
+    echo 'VENEER-PROOF: WRITE-STATUS=%X1035A00A SEVERITY=2' >> "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 piped=1 jpi=0 getpid=0 vmswait=0 status=FFFFFFFF argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x00000003 p0=1' > "$_st/noargs.log"
     printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
       'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
     echo "-- vfork selftest 1/3: child ran with its arguments, output piped back, reaped must PASS --"
     if assert_vfork "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
-    echo "-- vfork selftest 2/3: a child that did not receive its arguments must FAIL --"
+    echo "-- vfork selftest 2/3: a child the executive does not know (substrate pid, no VMS status) must FAIL --"
     if assert_vfork "$_st/noargs.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
     echo "-- vfork selftest 3/3: a crash must FAIL --"
     if assert_vfork "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
@@ -2950,8 +2989,9 @@ PYEOF3
     grep -aE "OVMX vfork|IMGACT|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_vfork "$WORK/modgpA.log"; then
       echo ""
-      echo "PASS: DEC C vfork()+execv() created a subprocess running an image off the ODS-2"
-      echo "      volume with arguments; output piped back, parent stdout restored, reaped."
+      echo "PASS: DEC C vfork()+execv() created a subprocess through SYS\$CREPRC running an image"
+      echo "      off the ODS-2 volume with arguments; \$GETJPI and getpid() agree on its VMS PID;"
+      echo "      its error completion came back through wait and DCL \$STATUS."
       exit 0
     fi
     echo "FAIL: DEC C vfork/exec did not work. Full log: $WORK/modgpA.log"
@@ -3346,12 +3386,26 @@ EOF
       echo "CRTLTIME-DCL: 2026-11-02 17:40:13.52"
       echo "CRTLTIME: utc=2026-11-02 17:40:14 zone=IST +0530 jan=2026-01-15 17:30 IST +0530 ctime=Thu Jan 15 17:30:00 2026"
       echo "CRTLTIME: utc=2026-11-02 17:40:15 zone=EST -0500 jan=2026-01-15 07:00 EST -0500 ctime=Thu Jan 15 07:00:00 2026"
+      printf 'CFDDEV: stdout=_OPA0: isatty=1\r\n'
+      echo "CFDDEV: pipe=_MBA7: messages=abc|defg"
+      echo "CFDDEV: === SHOW DEVICE _MBA7: ==="
+      echo "Device                  Device           Error"
+      echo " Name                   Status           Count"
+      echo "MBA7:                   Online               0"
+      echo "CFDDEV: === END SHOW DEVICE (1) ==="
+      echo "CFDDEV: eof=yes proc=ENOENT"
     } > "$_st/pass.log"
     # vms-593 negative controls: the differential is not followed (musl's UTC), the
     # TZ variable is read, and a time() that is not the system time.
     sed 's/zone=IST +0530 jan=2026-01-15 17:30 IST +0530 ctime=Thu Jan 15 17:30:00 2026/zone=UTC +0000 jan=2026-01-15 12:00 UTC +0000 ctime=Thu Jan 15 12:00:00 2026/' "$_st/pass.log" > "$_st/tdfignored.log"
     sed 's/zone=EST -0500 jan=2026-01-15 07:00 EST -0500 ctime=Thu Jan 15 07:00:00 2026/zone=XXX +0700 jan=2026-01-15 19:00 XXX +0700 ctime=Thu Jan 15 19:00:00 2026/' "$_st/pass.log" > "$_st/tzread.log"
     sed 's/CRTLTIME: utc=2026-11-02 17:40:12/CRTLTIME: utc=2026-11-02 18:40:12/' "$_st/pass.log" > "$_st/clockoff.log"
+    # vms-a66e negative controls: the raw kernel path (stdout not a channel, a
+    # kernel pipe, /proc opened), and a mailbox SHOW DEVICE does not have.
+    sed 's/CFDDEV: stdout=_OPA0: isatty=1/CFDDEV: stdout=<none> isatty=1/' "$_st/pass.log" > "$_st/ttkernel.log"
+    sed 's/CFDDEV: pipe=_MBA7: messages=abc|defg/CFDDEV: pipe=<none> messages=WRONG/' "$_st/pass.log" > "$_st/pipekernel.log"
+    sed 's/MBA7:                   Online               0/%SYSTEM-W-NOSUCHDEV, no such device available/' "$_st/pass.log" > "$_st/nombx.log"
+    sed 's/proc=ENOENT/proc=OPENED/' "$_st/pass.log" > "$_st/procopen.log"
     # vms-599 negative controls: musl's exit (exit(1) a POSIX failure, nothing recorded),
     # a __posix_exit that does not encode, and an exit that skips the stdio flush
     sed 's/CRTLFD-EXIT: exit 1 STATUS=%X00000001/CRTLFD-EXIT: exit 1 STATUS=%X0000002C/' "$_st/pass.log" > "$_st/muslexit.log"
@@ -3366,7 +3420,7 @@ EOF
     grep -v "APPENDED BY" "$_st/pass.log" > "$_st/noappend.log"
     sed 's/TYPE-STATUS=%X00000001/TYPE-STATUS=%X00018292/' "$_st/pass.log" > "$_st/notype.log"
     sed 's/test: OK (stdio/test: 1 check(s) FAILED (first 14) (stdio/' "$_st/pass.log" > "$_st/checkfail.log"
-    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1" "retnorundown:1" "retnoatexit:1" "retstatus:1" "tdfignored:1" "tzread:1" "clockoff:1"; do
+    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1" "retnorundown:1" "retnoatexit:1" "retstatus:1" "tdfignored:1" "tzread:1" "clockoff:1" "ttkernel:1" "pipekernel:1" "nombx:1" "procopen:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_crtlfd "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  crtlfd selftest $_n: PASS"; else echo "  crtlfd selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -3378,7 +3432,7 @@ EOF
     assemble_boot_image
     log "step 3: BOOT A -- the C RTL file layer over RMS on the REAL executive"
     run_boot_a
-    grep -aE "CFD:|CFDX:|CRTLFD-EXIT:|CRTLTIME|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    grep -aE "CFD:|CFDX:|CFDDEV:|MBA[0-9]+:|CRTLFD-EXIT:|CRTLFD-DEV:|CRTLTIME|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-|%SYSTEM-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_crtlfd "$WORK/modgpA.log"; then
       echo ""
       echo "PASS: a 32-bit DEC C program's stdio and descriptor calls ran over RMS on the"

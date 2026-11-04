@@ -2133,6 +2133,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_bg_getname(proc, arg);
     case VMS_IOCTL_BG_SOCKOPT:
         return vms_ioctl_bg_sockopt(proc, arg);
+    case VMS_IOCTL_BG_IFLIST:
+        return vms_ioctl_bg_iflist(proc, arg);
+    case VMS_IOCTL_BG_SELECT:
+        return vms_ioctl_bg_select(proc, arg);
     case VMS_IOCTL_BG_BIND:
         return vms_ioctl_bg_bind(proc, arg);
     case VMS_IOCTL_BG_LISTEN:

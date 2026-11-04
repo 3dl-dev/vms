@@ -1383,6 +1383,22 @@ uint32_t vms_kif_bg_setsockopt(uint32_t exec_chan, int level, int optname,
  * the live host kernel socket; *out_optval gets it on success. */
 uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
                                int *out_optval);
+/* IO$_SENSEMODE interface list (rd vms-99f) -- the executive's own interface
+ * list (name/flags/MTU/first IPv4 addr+mask/link-layer addr), read live from
+ * the stack the channel's socket lives in; TCPIP SHOW INTERFACE's source. The
+ * channel needs its socket (vms_kif_bg_setmode first). Fails SS$_NOSUCHDEV with
+ * no executive, SS$_IVCHAN with no socket. */
+struct vms_bg_ifent;
+uint32_t vms_kif_bg_iflist(uint32_t exec_chan, struct vms_bg_ifent *out,
+                           uint32_t max, uint32_t *count);
+/* IO$_SENSEMODE readiness wait (rd vms-99f) over up to VMS_BG_SELECT_MAX BG
+ * channels: each entry's revents gets the executive's live VMS_BG_RDY_* state;
+ * timeout_ms 0 = sense only, < 0 = no limit. SS$_IVCHAN when a channel has no
+ * socket (its revents VMS_BG_RDY_NVAL), SS$_ABORT on a signal, SS$_NOSUCHDEV
+ * with no executive. */
+struct vms_bg_selent;
+uint32_t vms_kif_bg_select(struct vms_bg_selent *ent, uint32_t n,
+                           int32_t timeout_ms, uint32_t *nready);
 /* Server path (vms-698, OpenSSH server port). bind binds a local AF_INET address
  * (network byte order; port 0 = ephemeral) and returns the EFFECTIVE port/addr in
  * *out_port and *out_addr; listen marks the socket passive; accept blocks for one

@@ -2,9 +2,10 @@
 # A ratchet: a count may only go DOWN, and when it does this file is lowered
 # with it. Each line is a libc-drop to remove (rd label libc-drop).
 dcl_backup.c 6
-dcl_cmd_file.c 28
+dcl_builtin.c 1
+dcl_cmd_file.c 26
 dcl_cmd_io.c 1
-dcl_cmd_misc.c 25
+dcl_cmd_misc.c 24
 dcl_cmd_process.c 21
 dcl_cmd_set.c 10
 dcl_cmd_show.c 7

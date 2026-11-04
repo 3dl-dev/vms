@@ -111,6 +111,7 @@ build_producer_graph() {
     if nm --defined-only "$LIBC" 2>/dev/null | awk '{print $NF}' | grep -qxF __ovmx_sys_hook; then
         echo "== DECC\$SHR.EXE (the RMS-backed pass: C RTL over RMS + VMS channels, vms-569) =="
         CC="$CC" CRTL_RMS_USE="$SYSLIB/LIBVMSRMS\$SHR.EXE" CRTL_VMS_USE="$SYSLIB/LIBVMS\$SHR.EXE" \
+            CRTL_SYS_USE="$SYSLIB/LIBVMSSYS\$SHR.EXE" \
             sh "$LINK_DIR/mk_decc_shr.sh" "$WORK/LINK.EXE" "$WORK/DECC\$SHR.pass2.EXE" "$LIBC" "$LIBGCC"
         mv "$WORK/DECC\$SHR.pass2.EXE" "$SYSLIB/DECC\$SHR.EXE"
     fi

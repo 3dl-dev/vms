@@ -18,6 +18,10 @@
  *   ALARM     alarm(1) + pause(): whether the SIGALRM action ran, and whether
  *             the frame handler established here saw the condition the C RTL
  *             signals for a timer AST, SS$_ASTFLT.
+ *   FORK      fork() with a pipe(): the child asks $GETJPI for its own PID and
+ *             writes "<PID hex>,<status>" into the pipe; the parent reports
+ *             what it read, then its own PID and $GETJPI status. A child that
+ *             is a subprocess has a VMS PID of its own and still holds the pipe.
  *
  * Built by tests/qemu/crtlshr/mk_crtlshr_native.sh: cc + LINK.EXE --executable
  * --use DECC$SHR --use LIBVMS$SHR (lib$establish).
@@ -36,9 +40,24 @@
 extern char *decc_getname(int fd, char *buf, ...) __asm__("decc$getname");
 extern unsigned int decc_alarm(unsigned int seconds) __asm__("decc$alarm");
 extern void *lib$establish(void *handler);
+extern unsigned int sys$getjpiw(unsigned int efn, unsigned int *pidadr, void *prcnam,
+                                void *itmlst, void *iosb, void *astadr, unsigned int astprm);
 
-#define SS_ASTFLT 0x0000001Cu            /* SSDEF: %SYSTEM-F-ASTFLT */
+#define SS_ASTFLT 1036u                  /* SSDEF SS$_ASTFLT (%X0000040C): %SYSTEM-F-ASTFLT */
 #define SS_RESIGNAL 0x00000918u
+#define JPI_PID 0x0319u                  /* prcdef.h JPI$_PID */
+
+/* $GETJPI JPI$_PID of this process */
+static unsigned int my_pid(unsigned int *pid)
+{
+    struct { unsigned short len, code; void *buf; unsigned short *ret; } il[2];
+    unsigned short iosb[4] = { 0, 0, 0, 0 };
+    il[0].len = 4; il[0].code = JPI_PID; il[0].buf = pid; il[0].ret = 0;
+    il[1].len = 0; il[1].code = 0; il[1].buf = 0; il[1].ret = 0;
+    *pid = 0;
+    unsigned int st = sys$getjpiw(0, 0, 0, il, iosb, 0, 0);
+    return (st & 1) ? iosb[0] : st;
+}
 
 struct sigarr { uint32_t args, name; };
 
@@ -109,6 +128,36 @@ int main(void)
         decc_alarm(1);
         pause();
         say("CRTLSHR ALARM %s %ld %ld\n", "ran", (long)alarm_ran, (long)frame_astflt);
+    }
+
+    /* fork(): the child is a VMS subprocess and holds the pipe */
+    {
+        int p[2] = { -1, -1 };
+        unsigned int me = 0, st = my_pid(&me);
+        char got[64] = "(none)";
+        if (pipe(p) == 0) {
+            pid_t c = fork();
+            if (c == 0) {
+                unsigned int cp = 0, cs = my_pid(&cp);
+                char m[32];
+                int k = snprintf(m, sizeof m, "%08X,%u", cp, cs);
+                close(p[0]);
+                (void)write(p[1], m, (size_t)k);
+                close(p[1]);
+                _exit(0);
+            }
+            close(p[1]);
+            if (c > 0) {
+                ssize_t r = read(p[0], got, sizeof got - 1);
+                got[r > 0 ? r : 0] = '\0';
+                if (r <= 0)
+                    strcpy(got, "(nothing)");
+            } else {
+                strcpy(got, "(nofork)");
+            }
+            close(p[0]);
+        }
+        say("CRTLSHR FORK %s %ld %ld\n", got, (long)me, (long)st);
     }
 
     say("CRTLSHR DONE %s %ld %ld\n", "end", 0, 0);

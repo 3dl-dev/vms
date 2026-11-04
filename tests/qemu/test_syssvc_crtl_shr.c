@@ -35,9 +35,14 @@
  *      program's time() is 2031 -- far from the substrate clock;
  *   5. alarm(1) runs its SIGALRM action from a timer AST: the frame handler it
  *      established saw SS$_ASTFLT.
+ *   6. fork() makes the child a VMS subprocess that holds the pipe(): what the
+ *      child writes into the pipe is what the parent reads, and the child's
+ *      $GETJPI JPI$_PID succeeds with a PID that is not its creator's.
  *
- * NEGATIVE CONTROL: tests/qemu/defects.d/crtl-shr-layer-not-started.defect
+ * NEGATIVE CONTROLS: tests/qemu/defects.d/crtl-shr-layer-not-started.defect
  * removes the activator's call; every assertion above goes red.
+ * crtl-shr-fork-not-subprocess.defect makes fork() a bare substrate fork: 6
+ * goes red.
  *
  * Registered only where the RMS-backed DECC$SHR is built (OVMX_CRTL_FD_STATIC:
  * the musl system-call funnel, tests/qemu/CMakeLists.txt). No /dev/vms: SKIP.
@@ -339,6 +344,20 @@ int main(void)
     /* negctl: crtl-shr-layer-not-started */
     check(report(tt, "ALARM", a, sizeof a, &b, &c) && c == 1,
           "...from a $SETIMR AST: the program's frame handler saw SS$_ASTFLT");
+
+    /* 6. fork(): a subprocess that holds the pipe */
+    {
+        char f[64];
+        long me = 0, mst = 0;
+        unsigned long cpid = 0, cst = 0;
+        int got = report(tt, "FORK", f, sizeof f, &me, &mst) &&
+                  sscanf(f, "%lx,%lu", &cpid, &cst) == 2;
+        /* negctl: crtl-shr-fork-not-subprocess */
+        check(got, "fork(): what the child writes into the pipe() it inherited is what the parent reads");
+        /* negctl: crtl-shr-fork-not-subprocess */
+        check(got && (mst & 1) && (cst & 1) && cpid != 0 && cpid != (unsigned long)me,
+              "...and the child is a VMS process of its own: its $GETJPI JPI$_PID succeeds, not its creator's PID");
+    }
 
     if (tm >= 0)
         (void)ovmx_vterm_delete(dev, tm);

@@ -1736,6 +1736,74 @@ void ovmx_crtl_sig_flush(void);
 extern volatile int ovmx_crtl_sig_busy;
 
 extern void ovmx_crtl_devfd_rundown(void);         /* crtl_devfd.c */
+
+#if defined(OVMX_CRTLFD_GENERIC_SHR)
+/*
+ * fork() (rd vms-569). A task the substrate forks is no VMS process: the
+ * executive refuses it services (rd vms-1f8), so a child the C RTL made that
+ * way could not touch one of the terminals, mailboxes or files this layer gives
+ * it. A program that makes another process on VMS gets a SUBPROCESS, which
+ * exists in the executive before it runs -- $CREPRC. So the C RTL's fork()
+ * creates its child the way every OVMX forker does (src/libvms/include/
+ * ovmx_subprocess.h): the task is forked held, the executive makes it a
+ * subprocess of this process (VMS_CREPRC_PCB_SUBPROCESS) through the creation
+ * record (VMS_CREPRC_SYNC_*), and only then does it run. The child then holds
+ * its descriptors' devices on channels of its own (crtl_devfd.c). With no
+ * executive (OPEN refused) the task is forked as before and its own service
+ * calls fail honestly. LIBVMSSYS$SHR's (the RMS-backed pass links --use it).
+ *
+ * NOT YET (rd vms-fb8f): an RMS file open at the fork is this process's RMS
+ * stream; the child's descriptor of it is not re-opened.
+ */
+extern uint32_t vms_kif_creprc_sync(uint32_t op, uint32_t *rec, uint32_t *pid,
+                                    uint32_t *value, uint32_t *vms_pid);
+extern uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *username,
+                                   uint32_t uic, uint64_t privs, uint32_t *vms_pid);
+extern void ovmx_crtl_devfd_fork_parent(void);     /* crtl_devfd.c */
+extern void ovmx_crtl_devfd_fork_child(void);
+#define CREPRC_PCB_SUBPROCESS 0u                   /* vms_ioctl.h VMS_CREPRC_PCB_* */
+#define CREPRC_SYNC_OPEN   1u                      /* vms_ioctl.h VMS_CREPRC_SYNC_* */
+#define CREPRC_SYNC_ARRIVE 2u
+#define CREPRC_SYNC_ACCEPT 3u
+#define CREPRC_SYNC_ANSWER 4u
+#define CREPRC_SYNC_REPORT 6u
+#define CREPRC_SYNC_RESULT 7u
+#define CREPRC_SYNC_CLOSE  8u
+#define CRTL_SS_ABORT      44u                     /* ssdef.h SS$_ABORT */
+#define CRTL_SIGCHLD       17                      /* x86_64/aarch64 SIGCHLD */
+
+static long long crtl_fork(long long n, long long a1, long long a2)
+{
+    uint32_t rec = 0, st, task, go_pid = 0, report = 0;
+    long long pid;
+
+    /* NEGCTL-ANCHORED (crtl-shr-fork-not-subprocess) */
+    st = vms_kif_creprc_sync(CREPRC_SYNC_OPEN, &rec, NULL, NULL, NULL);
+    pid = rawsys(n, a1, a2, 0, 0, 0);
+    if (!(st & 1))
+        return pid;                     /* no executive: nothing to make */
+    if (pid == 0) {
+        uint32_t got = CRTL_SS_ABORT, got_pid = 0;
+        if (vms_kif_creprc_sync(CREPRC_SYNC_ARRIVE, &rec, NULL, &got, &got_pid) & 1)
+            (void)vms_kif_creprc_sync(CREPRC_SYNC_REPORT, &rec, NULL, &got, NULL);
+        if (got & 1)
+            ovmx_crtl_devfd_fork_child();
+        return 0;
+    }
+    st = CRTL_SS_ABORT;
+    task = (uint32_t)pid;
+    if (pid > 0 &&
+        (vms_kif_creprc_sync(CREPRC_SYNC_ACCEPT, &rec, &task, NULL, NULL) & 1)) {
+        st = vms_kif_creprc_pcb(task, CREPRC_PCB_SUBPROCESS, NULL, 0, 0, &go_pid);
+        if (vms_kif_creprc_sync(CREPRC_SYNC_ANSWER, &rec, NULL, &st, &go_pid) & 1)
+            (void)vms_kif_creprc_sync(CREPRC_SYNC_RESULT, &rec, NULL, &report, NULL);
+    }
+    (void)vms_kif_creprc_sync(CREPRC_SYNC_CLOSE, &rec, NULL, NULL, NULL);
+    if (pid > 0 && (st & 1))
+        ovmx_crtl_devfd_fork_parent();
+    return pid;
+}
+#endif
 /* LIBVMS (src/libvms/rtl/lib_misc.c): nonzero while a system service or RTL
  * routine is doing the substrate's own work (its /dev/vms, /vms staging, host
  * pipes between a fork and its exec); those calls are the kernel's. */
@@ -1774,6 +1842,19 @@ static long long rms_hook(long long n, long long a1, long long a2, long long a3,
     ovmx_crtl_sig_busy++;
     int saved = errno;
     long long r = rms_hook_body(n, a1, a2, a3, a4, a5, handled);
+#if defined(OVMX_CRTLFD_GENERIC_SHR)
+    /* fork(): the child is a subprocess (crtl_fork); rms_hook_body has
+     * written every open file's buffers first. A clone that shares memory
+     * (posix_spawn's, a thread) is not a fork. */
+    if (!*handled && (
+#ifdef SYS_fork
+                      n == SYS_fork ||
+#endif
+                      (n == SYS_clone && a1 == CRTL_SIGCHLD && a2 == 0))) {
+        *handled = 1;
+        r = crtl_fork(n, a1, a2);
+    }
+#endif
     errno = saved;
     in_rms = 0;
     ovmx_crtl_sig_busy--;

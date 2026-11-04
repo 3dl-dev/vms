@@ -24,9 +24,11 @@ EOF2
                       ;;
         knock_on_fail) cat <<'EOF2'
 alarm(1) ran the SIGALRM action
+fork(): what the child writes into the pipe() it inherited is what the parent reads
+...and the child is a VMS process of its own: its $GETJPI JPI$_PID succeeds, not its creator's PID
 EOF2
                       ;;
-        knock_on_why)  echo "The program reports through its stdout, which the suite reads off SYS\$OUTPUT's terminal; with the layer not started that report goes to the substrate line underneath, so the ALARM line -- whose action does run, from Linux's SIGALRM -- is not on the terminal to be read either. Same single defect: SYS\$OUTPUT is not the program's stdout.";;
+        knock_on_why)  echo "The program reports through its stdout, which the suite reads off SYS\$OUTPUT's terminal; with the layer not started that report goes to the substrate line underneath, so the ALARM line -- whose action does run, from Linux's SIGALRM -- and the FORK line are not on the terminal to be read either. Same single defect: SYS\$OUTPUT is not the program's stdout.";;
         esac
 
 }

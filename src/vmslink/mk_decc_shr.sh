@@ -1383,9 +1383,9 @@ VEC="$VEC$DECC_SOCK_TAIL"
 
 # ----------------------------------------------------------------------
 # THE RMS-BACKED PASS (rd vms-569), the x86_64 counterpart of the Alpha pass
-# above. Opt-in via CRTL_RMS_USE=<an ALREADY-BUILT LIBVMSRMS$SHR.EXE> and
-# CRTL_VMS_USE=<its LIBVMS$SHR.EXE>, from a prior bootstrap pass (this script
-# without them) -- the same two-stage bootstrap of the mutual DECC$SHR <->
+# above. Opt-in via CRTL_RMS_USE=<an ALREADY-BUILT LIBVMSRMS$SHR.EXE>,
+# CRTL_VMS_USE=<its LIBVMS$SHR.EXE> and CRTL_SYS_USE=<its LIBVMSSYS$SHR.EXE>,
+# from a prior bootstrap pass (this script without them) -- the same two-stage bootstrap of the mutual DECC$SHR <->
 # LIBVMS*$SHR dependency, and the same rule: every universal keeps its
 # symbol-vector index (IMGACT binds by index, vms-b14), so this pass only ADDS
 # names at the very end.
@@ -1405,8 +1405,8 @@ VEC="$VEC$DECC_SOCK_TAIL"
 # build-musl.sh. Stock musl has no place for the hook, so asking for this pass
 # on one is refused rather than linked into a DECC$SHR whose layer is dead code.
 if [ -n "${CRTL_RMS_USE:-}" ]; then
-    for _u in "$CRTL_RMS_USE" "${CRTL_VMS_USE:-}"; do
-        [ -n "$_u" ] && [ -f "$_u" ] || { echo "mk_decc_shr: FAIL the RMS-backed pass needs CRTL_RMS_USE (LIBVMSRMS\$SHR) and CRTL_VMS_USE (LIBVMS\$SHR); got '$_u'" >&2; exit 2; }
+    for _u in "$CRTL_RMS_USE" "${CRTL_VMS_USE:-}" "${CRTL_SYS_USE:-}"; do
+        [ -n "$_u" ] && [ -f "$_u" ] || { echo "mk_decc_shr: FAIL the RMS-backed pass needs CRTL_RMS_USE (LIBVMSRMS\$SHR), CRTL_VMS_USE (LIBVMS\$SHR) and CRTL_SYS_USE (LIBVMSSYS\$SHR); got '$_u'" >&2; exit 2; }
     done
     nm --defined-only "$LIBC" 2>/dev/null | awk '{print $NF}' | grep -qxF __ovmx_sys_hook \
         || { echo "mk_decc_shr: FAIL $LIBC has no system-call funnel (__ovmx_sys_hook): the C RTL layer would never be reached -- build musl with src/crtl-musl-x86_64/build-musl.sh" >&2; exit 2; }
@@ -1433,8 +1433,10 @@ if [ -n "${CRTL_RMS_USE:-}" ]; then
     esac
     # Appended at the very end: the image activator's C RTL start, and DEC C getname().
     VEC="$VEC,ovmx_crtl_fd_install=PROCEDURE,decc\$getname/ovmx_crtl_getname=PROCEDURE"
-    CRTLFD_USE="--use $CRTL_RMS_USE --use $CRTL_VMS_USE"
-    echo "mk_decc_shr: C RTL layer wired (vms-569): files over RMS, terminals and pipes over VMS channels, the system clock, signals over VMS -- ovmx_crtl_fd_install is the image activator's C RTL start (--use $CRTL_RMS_USE --use $CRTL_VMS_USE)"
+    # LIBVMSSYS$SHR: fork() makes its child a subprocess through the executive's
+    # creation record (crtl_rms_fd.c crtl_fork: vms_kif_creprc_sync/_pcb).
+    CRTLFD_USE="--use $CRTL_RMS_USE --use $CRTL_VMS_USE --use $CRTL_SYS_USE"
+    echo "mk_decc_shr: C RTL layer wired (vms-569): files over RMS, terminals and pipes over VMS channels, the system clock, signals over VMS -- ovmx_crtl_fd_install is the image activator's C RTL start, fork() makes a subprocess ($CRTLFD_USE)"
 fi
 
 # Whole-archive, strict (NO --allow-undefined): a complete C-RTL shareable must

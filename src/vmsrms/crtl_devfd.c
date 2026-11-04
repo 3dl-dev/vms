@@ -982,6 +982,63 @@ void ovmx_crtl_devfd_rundown(void)
 }
 
 /*
+ * fork() (rd vms-569). The C RTL makes the child a SUBPROCESS of this process
+ * through the executive (crtl_rms_fd.c, crtl_fork), and the child holds the
+ * descriptors this process held -- but a VMS channel is a number in ONE
+ * process's channel table, so the child cannot use this process's channels.
+ * In the child, every terminal and mailbox descriptor's device is $ASSIGNed
+ * again, by its name, in the child's own process, as a subprocess $ASSIGNs the
+ * SYS$INPUT/SYS$OUTPUT its creator named for it. A device the child cannot
+ * assign leaves the descriptor without a channel: its I/O fails (EBADF,
+ * SS$_IVCHAN), it never reaches the creator's channel. Data this process had
+ * already taken from a device (a mailbox message or terminal line read ahead)
+ * and a terminal line not yet written stay this process's: the child starts
+ * with neither, so no byte is read or written twice.
+ *
+ * End of file on a pipe the two now share follows exec*()'s rule (a write end
+ * given to a subprocess is the subprocess's to end, ovmx_crtl_devfd_give): the
+ * creator's close of a shared write end sends no end of file, the child's
+ * close or its image's rundown does. NOT YET (rd vms-ff79): end of file when
+ * the LAST write channel to the mailbox goes, whichever process holds it --
+ * the mailbox driver's writer count (IO$M_WRITERCHECK, SS$_NOWRITER).
+ */
+void ovmx_crtl_devfd_fork_parent(void)
+{
+    for (int fd = 0; fd < DFD_MAX; fd++) {
+        struct dfile *df = dfd[fd];
+        if (df && df->kind == DF_MBX && !df->stdbound &&
+            (df->oflags & O_ACCMODE) != O_RDONLY)
+            df->handed = 1;
+    }
+}
+
+void ovmx_crtl_devfd_fork_child(void)
+{
+    for (int fd = 0; fd < DFD_MAX; fd++) {
+        struct dfile *df = dfd[fd];
+        int seen = 0;
+        if (!df)
+            continue;
+        for (int k = 0; k < fd && !seen; k++)  /* a dup()ed description once */
+            seen = dfd[k] == df;
+        if (seen)
+            continue;
+        unsigned short ch = 0;
+        unsigned int st = SS_NOSUCHDEV;
+        if (df->dev[0] && sys$assign) {
+            struct devfd_dsc d;
+            dsc(&d, df->dev, strlen(df->dev));
+            st = sys$assign(&d, &ch, 0, 0, 0);
+        }
+        df->chan = (st & 1) ? ch : 0;
+        df->rlen = df->roff = 0;
+        df->olen = 0;
+        if (df->kind == DF_MBX && !df->stdbound)
+            df->handed = 0;
+    }
+}
+
+/*
  * Does the device field of an RMS file specification name a device or a
  * logical name? A UNIX name's first component is its device ("/proc/self/x"
  * is PROC:[SELF]X); when that is neither a logical name ($TRNLNM, the

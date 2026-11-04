@@ -96,6 +96,8 @@
 #include <linux/tcp.h>            /* tcp_sk() */
 #include <net/tcp.h>              /* TCP_NAGLE_OFF */
 #include <net/inet_sock.h>        /* inet_sk() */
+#include <linux/poll.h>               /* poll_table, init_poll_funcptr (exec_socket_wait_ready, vms-99f) */
+#include <linux/inetdevice.h>    /* in_dev, in_dev_for_each_ifa_rtnl (exec_socket_iflist, vms-99f) */
 
 /* ---- primitive types ---- */
 typedef spinlock_t        exec_lock_t;
@@ -1350,6 +1352,176 @@ static inline int exec_socket_accept(exec_socket_t s, exec_socket_t *out)
 	kref_init(&h->kref);            /* the accepting channel's reference */
 	*out = h;
 	return 0;
+}
+
+/* The interface list (rd vms-99f, TCPIP SHOW INTERFACE): walk the net devices
+ * of the network namespace the channel's OWN socket lives in, under rtnl_lock
+ * (a mutex; this is ioctl process context), and read each one's live state --
+ * dev_get_flags (the same flags SIOCGIFFLAGS reports), mtu, the FIRST IPv4
+ * address of its in_device (ifa_local / ifa_mask, already network order) and
+ * its link-layer address. Nothing is synthesized: no in_device / no IPv4 address
+ * leaves addr and mask 0. Public, documented netdev APIs only (Rule 8). */
+static inline int exec_socket_iflist(exec_socket_t s, struct exec_ifent *ent,
+				     uint32_t max, uint32_t *count)
+{
+	struct net_device *dev;
+	struct net *net;
+	uint32_t n = 0;
+
+	*count = 0;
+	if (!s || !s->sock || !s->sock->sk)
+		return -EINVAL;
+	net = sock_net(s->sock->sk);
+	rtnl_lock();
+	for_each_netdev(net, dev) {
+		struct exec_ifent *e;
+		struct in_device *in_dev;
+		unsigned int i, hl;
+
+		if (n >= max)
+			break;
+		e = &ent[n];
+		memset(e, 0, sizeof(*e));
+		for (i = 0; i + 1 < sizeof(e->name) && dev->name[i]; i++)
+			e->name[i] = dev->name[i];
+		e->flags = dev_get_flags(dev);
+		e->mtu = dev->mtu;
+		in_dev = __in_dev_get_rtnl(dev);
+		if (in_dev) {
+			const struct in_ifaddr *ifa;
+
+			in_dev_for_each_ifa_rtnl(ifa, in_dev) {
+				e->addr = ifa->ifa_local;
+				e->mask = ifa->ifa_mask;
+				break;
+			}
+		}
+		hl = dev->addr_len < sizeof(e->hwaddr) ? dev->addr_len : sizeof(e->hwaddr);
+		if (dev->dev_addr)
+			memcpy(e->hwaddr, dev->dev_addr, hl);
+		else
+			hl = 0;
+		e->hwlen = (uint16_t)hl;
+		n++;
+	}
+	rtnl_unlock();
+	*count = n;
+	return 0;
+}
+
+/* The readiness wait (rd vms-99f) behind the C RTL's select()/poll() on BG
+ * channels: the do_select pattern on the executive's own sockets. Each pass asks
+ * every socket's ->ops->poll for its state; the FIRST pass hands it a poll_table
+ * whose queue proc hangs one of our wait entries on each wait queue the socket
+ * names (sk_sleep), so any later state change wakes this task. `triggered`
+ * closes the window between a pass and the sleep, as poll_schedule_timeout's
+ * does. The sockets are referenced by the caller across the sleep. */
+#define EXEC_RDY_MAXQ 128
+struct exec_rdy_table;
+struct exec_rdy_wait {
+	wait_queue_entry_t	wq;
+	wait_queue_head_t	*head;
+	struct exec_rdy_table	*t;
+};
+struct exec_rdy_table {
+	poll_table		pt;
+	int			triggered;
+	unsigned int		nent;
+	struct exec_rdy_wait	ent[EXEC_RDY_MAXQ];
+};
+
+static inline int exec_rdy_wake(wait_queue_entry_t *wait, unsigned int mode,
+				int sync, void *key)
+{
+	struct exec_rdy_wait *e = container_of(wait, struct exec_rdy_wait, wq);
+
+	smp_store_mb(e->t->triggered, 1);
+	return default_wake_function(wait, mode, sync, key);
+}
+
+static inline void exec_rdy_queue(struct file *f, wait_queue_head_t *head,
+				  poll_table *pt)
+{
+	struct exec_rdy_table *t = container_of(pt, struct exec_rdy_table, pt);
+	struct exec_rdy_wait *e;
+
+	(void)f;
+	if (t->nent >= EXEC_RDY_MAXQ)
+		return;		/* bounded: a socket names one queue; n <= 64 */
+	e = &t->ent[t->nent++];
+	e->head = head;
+	e->t = t;
+	init_waitqueue_func_entry(&e->wq, exec_rdy_wake);
+	e->wq.private = current;
+	add_wait_queue(head, &e->wq);
+}
+
+static inline uint32_t exec_rdy_mask(__poll_t m, uint32_t want)
+{
+	uint32_t got = 0;
+
+	if ((want & EXEC_RDY_IN) && (m & (EPOLLIN | EPOLLRDNORM | EPOLLRDHUP | EPOLLHUP)))
+		got |= EXEC_RDY_IN;
+	if ((want & EXEC_RDY_OUT) && (m & (EPOLLOUT | EPOLLWRNORM)))
+		got |= EXEC_RDY_OUT;
+	if (m & EPOLLERR)
+		got |= EXEC_RDY_ERR;
+	if (m & EPOLLHUP)
+		got |= EXEC_RDY_HUP;
+	return got;
+}
+
+static inline int exec_socket_wait_ready(exec_socket_t *s, uint32_t n,
+					 const uint32_t *want, uint32_t *got,
+					 long timeout_ms)
+{
+	struct exec_rdy_table *t;
+	long left;
+	uint32_t i, nready;
+	int first = 1, rc;
+
+	t = kzalloc(sizeof(*t), GFP_KERNEL);
+	if (!t)
+		return -ENOMEM;
+	init_poll_funcptr(&t->pt, exec_rdy_queue);
+	left = (timeout_ms < 0) ? MAX_SCHEDULE_TIMEOUT
+				: (long)msecs_to_jiffies((unsigned int)timeout_ms);
+
+	for (;;) {
+		nready = 0;
+		for (i = 0; i < n; i++) {
+			struct socket *sock = s[i] ? s[i]->sock : NULL;
+			__poll_t m;
+
+			got[i] = 0;
+			if (!sock || !sock->ops || !sock->ops->poll)
+				continue;
+			m = sock->ops->poll(NULL, sock,
+					    (first && timeout_ms != 0) ? &t->pt : NULL);
+			got[i] = exec_rdy_mask(m, want[i]);
+			if (got[i])
+				nready++;
+		}
+		first = 0;
+		if (nready || timeout_ms == 0 || left == 0) {
+			rc = (int)nready;
+			break;
+		}
+		if (signal_pending(current)) {
+			rc = -EINTR;
+			break;
+		}
+		set_current_state(TASK_INTERRUPTIBLE);
+		if (!smp_load_acquire(&t->triggered))
+			left = schedule_timeout(left);
+		__set_current_state(TASK_RUNNING);
+		smp_store_mb(t->triggered, 0);
+	}
+
+	for (i = 0; i < t->nent; i++)
+		remove_wait_queue(t->ent[i].head, &t->ent[i].wq);
+	kfree(t);
+	return rc;
 }
 
 /* Linux-ONLY accessor for the readiness poll-fd rind (src/kernel/vms_bg_pollfd.c):

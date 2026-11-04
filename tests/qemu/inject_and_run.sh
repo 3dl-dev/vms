@@ -185,11 +185,37 @@ echo "--- rebuilding DECNETD.EXE (the subject test_syssvc_decnetd_syscall_audit 
 # activate it from -- the initramfs SYSEXE and the ODS-2 system volume -- so it
 # is rebuilt, copied to the first and the volume is re-mastered (one command
 # line, tests/qemu/master_ods2_sysvol.sh, shared with the image build).
-echo "--- rebuilding SYS\$SYSTEM:LINK.EXE and re-mastering the ODS-2 system volume ---"
+echo "--- rebuilding SYS\$SYSTEM:LINK.EXE (the ODS-2 system volume is re-mastered below, after DECC\$SHR) ---"
 ( cd /src/repo && cmake --build build-static --target vmslink_image \
                         --parallel "$(nproc)" ) || exit 4
 cp /src/repo/build-static/bin/sysexe/LINK.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || exit 4
 chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || exit 4
+
+# DECC$SHR.EXE + SOCKECHO.EXE (rd vms-99f). The C RTL sockets layer
+# (src/vmstcpip/sockets/ovmx_decc_sockets.c, decc-socket-bound-to-musl) is
+# compiled INTO DECC$SHR, which nothing above rebuilds: re-emit it into
+# SYS$LIBRARY with the SAME recipe and inputs the image build's full producer
+# graph used (mk_mmk_native_staged.sh: CC=musl-gcc, the musl libc.a, musl-gcc's
+# libgcc.a), and relink test_syssvc_decc_socket's subject against it. Rebuilt
+# unconditionally, as everything here is; the vector is append-only, so every
+# other activated image still binds the same sv# indices.
+echo "--- rebuilding DECC\$SHR.EXE (SYS\$LIBRARY) + SOCKECHO.EXE ---"
+( cd /src/repo && \
+  CC=musl-gcc sh src/vmslink/mk_decc_shr.sh build-static/bin/LINK.EXE \
+      'build-static/bin/DECC$SHR.EXE' \
+      "$(ls /usr/lib/*-linux-musl/libc.a | head -1)" "$(musl-gcc -print-libgcc-file-name)" && \
+  cp 'build-static/bin/DECC$SHR.EXE' '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' && \
+  IMGACT_INTERP_PATH=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE \
+  sh tests/qemu/sockecho/mk_sockecho_native.sh build-static/bin/LINK.EXE \
+      /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/SOCKECHO.EXE \
+      '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' ) || exit 4
+
+# DECC$SHR.EXE lives in the initramfs SYSLIB AND on the ODS-2 system volume
+# (master_ods2_sysvol.sh masters build-static/bin/DECC$SHR.EXE, LINK.EXE and the
+# rest): a guest activation can resolve it from either, so the rebuilt image goes
+# to both and the volume is re-mastered LAST, after every subject it carries has
+# been rebuilt. Re-mastering before the DECC$SHR rebuild left the volume copy
+# pristine, so a defect in ovmx_decc_sockets.c never reached the suite (vms-99f).
 rm -f /ods2_sysvol.img
 sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img || exit 4
 

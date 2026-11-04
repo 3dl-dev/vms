@@ -1037,6 +1037,13 @@ int  exec_socket_set_rcvtimeo(exec_socket_t s, uint32_t timeout_ms);  /* vms-a9e
 int  exec_socket_bind(exec_socket_t s, uint16_t family, uint16_t port_be, uint32_t addr_be);
 int  exec_socket_listen(exec_socket_t s, int backlog);
 int  exec_socket_accept(exec_socket_t s, exec_socket_t *out);
+/* Interface list (rd vms-99f): the stack's interfaces, read live (contract-only
+ * twin -- IFNET_READER_FOREACH / IFADDR_READER_FOREACH, vms_socket_netbsd.c). */
+struct exec_ifent;
+int  exec_socket_iflist(exec_socket_t s, struct exec_ifent *ent, uint32_t max, uint32_t *count);
+/* Readiness wait (rd vms-99f): soreadable/sowritable re-sensed on a kpause tick. */
+int  exec_socket_wait_ready(exec_socket_t *s, uint32_t n, const uint32_t *want,
+                            uint32_t *got, long timeout_ms);
 
 /* ================================================================
  * SS13  Host raw datalink (vms-7eb, auth slice of vms-1e4) -- REAL on NetBSD

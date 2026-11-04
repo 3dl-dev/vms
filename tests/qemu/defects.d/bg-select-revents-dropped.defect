@@ -1,0 +1,30 @@
+# bg-select-revents-dropped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "BGn: IO\$_SENSEMODE readiness wait (vms_ioctl_bg_select, VMS_IOCTL_BG_SELECT) in the executive BGn: driver (src/kernel-core/vms_bg.c, rd vms-99f): the executive senses each named channel's socket and sleeps on the sockets' own wait queues until one is ready or the timeout passes -- the executive half of DECC\$SHR's select()/poll() on sockets.";;
+        targets)      echo "kernel-core/vms_bg.c";;
+        suites_red)   echo "test_syssvc_decc_socket";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_bg_select() copies each channel's live readiness into its wire entry. The mutation leaves every entry's revents 0 while still reporting how many are ready, so DECC\$SHR's poll()/select() see no ready descriptor: SOCKECHO's 'poll() reports the socket readable' and 'select() reports the socket readable' go red. The timeout path (nothing ready, revents 0 anyway) and every byte transfer stay green. One assignment dropped.";;
+        require_fail) cat <<'EOF2'
+SOCKECHO (linked against DECC$SHR) completed every socket step
+O_NONBLOCK, select()/poll() timeouts and wake-ups, and dup() work through the executive readiness wait
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Anchored on the UNIQUE NEGCTL line in vms_ioctl_bg_select(); after
+        # substitution the anchor no longer matches, so a second apply is a no-op.
+        sed -i 's|                a->ent\[i\].revents = (uint16_t)got\[i\];   /\* NEGCTL bg-select-revents-dropped \*/|                (void)got[i];   /* NEGCTL bg-select-revents-dropped (applied) */|' "$_file"
+
+    :
+}

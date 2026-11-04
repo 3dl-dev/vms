@@ -36,7 +36,7 @@ try {
   await page.waitForTimeout(20000);
   await type('');
   await waitFor(/Username: *$/m, 300); await type('SYSTEM');
-  await waitFor(/Password: *$/m, 120); await type('OVMXCLUSTER1');
+  await waitFor(/Password: *$/m, 120); await type(process.env.VAX_PW);
   await waitFor(/\$ *$/m, 300);
   await type('MCR NCP LIST KNOWN NODES');
   await page.waitForTimeout(30000);

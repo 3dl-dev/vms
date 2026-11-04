@@ -42,7 +42,7 @@ const DEADLINE_MS = +(process.env.DEADLINE_MS || 3600000);
 const OUT_DIR = process.env.OUT_DIR || '/out/cn3';
 
 const OVMX_USER = 'SYSTEM', OVMX_PASS = 'MANAGER';
-const VAXC_USER = 'SYSTEM', VAXC_PASS = process.env.VAXC_PASS || 'OVMXCLUSTER1';
+const VAXC_USER = 'SYSTEM', VAXC_PASS = process.env.VAXC_PASS;
 const NODES = ['OVMXA', 'OVMXB', 'VAXC'];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

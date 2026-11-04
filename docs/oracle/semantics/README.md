@@ -52,7 +52,7 @@ the pod with the pump at `-d 0.15`, e.g. container command
     tools/oracle/semantic/capture.py alpha <pod> <family> --login <password>
 
 A freshly cloned Alpha golden disk asks SYSTEM for a new password at first login;
-`--login` changes it to `semprobe2026` (VMS refuses the old one) and says so. Capture twice and diff to check a new
+`--login` changes it to the value of `$LAB_NEWPW` (VMS refuses the old one) and says so; lab passwords are never committed (vms-aa2). Capture twice and diff to check a new
 case is deterministic before committing.
 
 Clean-room (AGENTS.md Rule 8): goldens are the observed output of real systems

@@ -19,7 +19,7 @@ for t in 1 2 3 4 5; do
   for _ in $(seq 1 15); do [ "$(cnt 'Username: *$')" -gt "$b" ] && break; sleep 1; done
   b=$(cnt 'Password: *$'); vin "SYSTEM"
   for _ in $(seq 1 15); do [ "$(cnt 'Password: *$')" -gt "$b" ] && break; sleep 1; done
-  b=$(cnt '^ *\$ *$'); vin "OVMXCLUSTER1"
+  b=$(cnt '^ *\$ *$'); vin "${VAX_PW:?set VAX_PW}"
   for _ in $(seq 1 40); do [ "$(cnt '^ *\$ *$')" -gt "$b" ] && { logged=1; break; }; sleep 1; done
   [ $logged = 1 ] && break
 done

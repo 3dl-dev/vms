@@ -447,3 +447,20 @@ build. rd **vms-ec8** tracks the decision and the re-point.
 Two gates here are unaffected and still pass, because they test the harness's
 DECISIONS as text rather than running it: `labjoin_booted_plumbing` and
 `labjoin_booted_negctl`.
+
+## Lab passwords (rd vms-aa2)
+
+Lab node passwords are operator facts, never committed. Benches and lab tools
+read them from the environment: `VAX_PW` / `VAXC_PASS` (VAXC SYSTEM), `DN_PW`
+(the DNTEST account a bench creates), `OVMX_PW` (the OVMX node), `SYSTEM_PW` /
+`NEW_SYSTEM_PW` (the `tools/lab-vax/build_nodeC_*` builders), `LAB_PW` /
+`LAB_NEWPW` (the oracle capture tools). The values live in the `ovmx-lab-passwords`
+secret in namespace `ovmx-lab`:
+
+```bash
+export VAX_PW=$(kubectl -n ovmx-lab get secret ovmx-lab-passwords -o jsonpath='{.data.VAX_PW}' | base64 -d)
+```
+
+`tools/ci/check_lab_password_literals.py` (Core Gates) fails on any committed
+literal it knows; the values that leaked onto main before 2026-11-04 were rotated
+on every lab disk.

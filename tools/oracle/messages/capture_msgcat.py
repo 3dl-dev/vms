@@ -20,7 +20,7 @@ from capture import Lab, ARCH  # noqa: E402
 def main(a):
     arch, pod, mar, out = a[:4]
     lab = Lab(arch, pod)
-    lab.login(a[4] if len(a) > 4 else "semprobe2026")
+    lab.login(a[4] if len(a) > 4 else os.environ["LAB_PW"])
     lab.cmd("SET DEFAULT SYS$LOGIN")
     lab.cmd("REPLY/DISABLE", 60)
     name = os.path.splitext(os.path.basename(mar))[0]

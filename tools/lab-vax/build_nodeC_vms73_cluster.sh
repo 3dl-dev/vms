@@ -102,7 +102,7 @@ TAP_DEV="${TAP_DEV:-}"          # optional: e.g. tap5 (an ALREADY-created tap on
                                  # empty = no network attach, config-only build (matches
                                  # build_nodeC_vms55_cluster.sh's no-tap default).
 
-SYSTEM_PW="${SYSTEM_PW:-OVMXCLUSTER1}"        # SYSTEM/SYSTEST/FIELD passwords (>=8 chars, checked)
+SYSTEM_PW="${SYSTEM_PW:?set SYSTEM_PW -- the lab SYSTEM/SYSTEST/FIELD password (>=8 chars) is an operator fact, never committed (vms-aa2)}"
 VOL_LABEL="${VOL_LABEL:-VAXCSYS}"
 SCSNODE="VAXC"
 SCSSYSTEMID=1989

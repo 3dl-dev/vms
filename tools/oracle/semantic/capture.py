@@ -96,7 +96,7 @@ class Lab:
             time.sleep(1.5)
         return None
 
-    def login(self, pw, newpw="semprobe2026"):
+    def login(self, pw, newpw=None):
         off = self.size(); self.send("")
         s = self.wait(r"Username: *$|\n\$ $", 300, off)
         if s and s.rstrip().endswith("$"):
@@ -109,10 +109,14 @@ class Lab:
         s = self.wait(r"\n\$ $|New password:", 600, off)
         if s and "New password:" in s:
             # an expired password (a fresh clone of a golden disk) must be
-            # changed to a DIFFERENT one (SET-E-PWDNOTDIF)
+            # changed to a DIFFERENT one (SET-E-PWDNOTDIF). The new one is an
+            # operator fact, never a committed literal (rd vms-aa2).
+            newpw = newpw or os.environ.get("LAB_NEWPW")
+            if not newpw:
+                sys.exit("capture: SYSTEM password expired; set LAB_NEWPW")
             off = self.size(); self.send(newpw); self.wait("Verification:", 120, off); time.sleep(1)
             off = self.size(); self.send(newpw); s = self.wait(r"\n\$ $", 600, off)
-            print("capture: SYSTEM password on %s changed to %s" % (self.pod, newpw))
+            print("capture: SYSTEM password on %s changed to $LAB_NEWPW" % self.pod)
         if not s:
             sys.exit("capture: login failed")
         self.cmd("SET TERMINAL/WIDTH=511/PAGE=0/NOWRAP")

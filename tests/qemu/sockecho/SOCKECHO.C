@@ -40,14 +40,35 @@ static void verdict(int ok, const char *what)
 }
 
 /* What the kernel says this fd is. A Linux socket would be "socket:[inode]";
- * a DECC$SHR socket descriptor names a BG channel and holds no Linux socket. */
+ * a DECC$SHR socket descriptor names a BG channel and holds no Linux socket.
+ *
+ * Asked of the substrate kernel DIRECTLY (a raw trap, not the C RTL): this is
+ * the test's evidence about the substrate underneath, and the C RTL rightly
+ * gives a program no /proc -- a kernel namespace is no RMS file (rd vms-569,
+ * the RMS-backed DECC$SHR answers ENOENT). */
+static long sub_readlinkat(const char *path, char *buf, size_t n)
+{
+#if defined(__x86_64__)
+    long r;
+    register long r10 __asm__("r10") = (long)n;
+    __asm__ volatile ("syscall"
+                      : "=a"(r)
+                      : "0"(267L /* SYS_readlinkat */), "D"(-100L /* AT_FDCWD */),
+                        "S"(path), "d"(buf), "r"(r10)
+                      : "rcx", "r11", "memory");
+    return r;
+#else
+    return readlink(path, buf, n);
+#endif
+}
+
 static void fd_kind(int fd, char *out, size_t n)
 {
     char path[64];
-    ssize_t k;
+    long k;
 
     snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
-    k = readlink(path, out, n - 1);
+    k = sub_readlinkat(path, out, n - 1);
     out[k > 0 ? k : 0] = '\0';
 }
 

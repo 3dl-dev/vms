@@ -1,0 +1,27 @@
+# crtl-shr-fork-not-subprocess -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "fork() in a program activated against the x86_64 DECC\$SHR creates a VMS SUBPROCESS through the executive's creation record (VMS_CREPRC_SYNC + CREPRC_PCB), and the child holds its inherited terminals and pipes on channels of its own (rd vms-569)";;
+        targets)      echo "vmsrms/crtl_rms_fd.c";;
+        suites_red)   echo "test_syssvc_crtl_shr";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "crtl_fork() no longer opens the creation record, so fork() is the bare substrate fork it was: the child is no VMS process, the executive refuses it services, its \$GETJPI fails and it cannot write the mailbox its pipe() descriptor names; the parent's close of the write end ends the pipe and its read() sees end of file.";;
+        require_fail) cat <<'EOF2'
+fork(): what the child writes into the pipe() it inherited is what the parent reads
+...and the child is a VMS process of its own: its $GETJPI JPI$_PID succeeds, not its creator's PID
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    st = vms_kif_creprc_sync(CREPRC_SYNC_OPEN, &rec, NULL, NULL, NULL);$|    st = CRTL_SS_ABORT; /* NEGCTL crtl-shr-fork-not-subprocess: a bare substrate fork */|' "$_file"
+    :
+}

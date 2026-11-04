@@ -26,9 +26,9 @@
  * growing mremap kept there; P0 full is ENOMEM, as on VMS. The x86_64 counterpart
  * of the alpha port's src/mman/alpha-dec-vms/mmap.c.
  *
- * Not covered: musl's cancellable-syscall assembly (src/thread/x86_64/
- * syscall_cp.s), used only when a program links pthread_cancel; a cancellation
- * point there (read/write/open/close) traps directly.
+ * musl's cancellable-syscall assembly (src/thread/x86_64/syscall_cp.s), which
+ * every DECC$SHR carries (it whole-archives pthread_cancel), is overlaid to come
+ * here too (rd vms-569).
  */
 #define _GNU_SOURCE
 #include <fcntl.h>

@@ -108,8 +108,9 @@ file(GLOB QEMU_SYSSVC_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_syssvc_*.c)
 # test_syssvc_crtl_static proves the C RTL file layer of a STATIC image (and
 # test_syssvc_crtl_time its clock and time zone, vms-593,
 # test_syssvc_crtl_signal its signals, vms-931, and
-# test_syssvc_crtl_devfd its terminal and mailbox descriptors, vms-a66e), which
-# exists only where the build links it (OVMX_CRTL_FD_STATIC: tests/qemu/
+# test_syssvc_crtl_devfd its terminal and mailbox descriptors, vms-a66e, and
+# test_syssvc_crtl_shr the same layer in an activated DECC$SHR image, vms-569),
+# which exists only where the build links it (OVMX_CRTL_FD_STATIC: tests/qemu/
 # Dockerfile, over the x86_64 musl system-call funnel src/crtl-musl-x86_64). A
 # build without that layer -- the Alpha rig, a host build -- has nothing for the
 # suite to test, so it is not registered there, rather than built to SKIP. The
@@ -118,7 +119,8 @@ option(OVMX_CRTL_FD_STATIC "link the C RTL file layer over RMS into static C ima
 foreach(_src ${QEMU_SYSSVC_SOURCES})
     get_filename_component(_name ${_src} NAME_WE)
     if((_name STREQUAL "test_syssvc_crtl_static" OR _name STREQUAL "test_syssvc_crtl_time"
-        OR _name STREQUAL "test_syssvc_crtl_signal" OR _name STREQUAL "test_syssvc_crtl_devfd")
+        OR _name STREQUAL "test_syssvc_crtl_signal" OR _name STREQUAL "test_syssvc_crtl_devfd"
+        OR _name STREQUAL "test_syssvc_crtl_shr")
        AND NOT OVMX_CRTL_FD_STATIC)
         continue()
     endif()

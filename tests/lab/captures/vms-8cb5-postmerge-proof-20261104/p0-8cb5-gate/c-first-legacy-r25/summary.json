@@ -1,0 +1,157 @@
+[
+ {
+  "label": "c-first-legacy",
+  "order": "C,A,B",
+  "gap": 5000,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "member": {
+   "OVMXA": true,
+   "VAXC": true,
+   "OVMXB": true
+  },
+  "cluster_view": {
+   "OVMXA": [
+    "OVMXA",
+    "VAXC",
+    "OVMXB"
+   ],
+   "OVMXB": [
+    "OVMXB",
+    "OVMXA",
+    "VAXC"
+   ]
+  },
+  "cluster_view_why": null,
+  "chatter": {},
+  "chatter_why": null,
+  "vaxc_admitted": [
+   "OVMXA",
+   "OVMXB"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 0,
+   "VAXC": 0
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "substrate_noise": {},
+  "quiet": true,
+  "pass": true,
+  "worstDriftMs": 271,
+  "froze": false,
+  "panel_started": {
+   "OVMXB": true,
+   "VAXC": true
+  },
+  "panel_watchdog_fired": {
+   "OVMXB": false,
+   "VAXC": false
+  },
+  "silent_never_starts": [],
+  "nodeA_worker": {
+   "workerSpawned": true,
+   "pipeReady": true,
+   "firstOut": true,
+   "nicTxCount": 3602,
+   "nicRxCount": 5403,
+   "nicRxDeliverOk": 5403,
+   "workerTicks": 166,
+   "acpOk": true
+  },
+  "nodeA_why": null,
+  "username_at": {
+   "VAXC": 75,
+   "OVMXA": 75,
+   "OVMXB": 106
+  },
+  "dcl_at": {
+   "OVMXA": 106,
+   "OVMXB": 125
+  },
+  "login_failed": {},
+  "after_waited": {},
+  "want_version": "V0.7-15",
+  "ovmx_versions": {
+   "OVMXA": [
+    "V0.7-15"
+   ],
+   "OVMXB": [
+    "V0.7-15"
+   ]
+  },
+  "version_why": null,
+  "show_system": {
+   "OVMXA": {
+    "rows": [
+     {
+      "pid": "10000002",
+      "name": "OPCOM"
+     },
+     {
+      "pid": "10000006",
+      "name": "SYSTEM"
+     },
+     {
+      "pid": "10000004",
+      "name": "NETACP"
+     },
+     {
+      "pid": "10000001",
+      "name": "STARTUP"
+     },
+     {
+      "pid": "10000005",
+      "name": "JOB_CONTROL"
+     }
+    ],
+    "ok": true,
+    "why": null
+   },
+   "OVMXB": {
+    "rows": [
+     {
+      "pid": "00000001",
+      "name": "STARTUP"
+     },
+     {
+      "pid": "00000053",
+      "name": "SYSTEM"
+     },
+     {
+      "pid": "00000069",
+      "name": "OPCOM"
+     },
+     {
+      "pid": "0000006C",
+      "name": "NETACP"
+     },
+     {
+      "pid": "0000006F",
+      "name": "JOB_CONTROL"
+     }
+    ],
+    "ok": true,
+    "why": null
+   }
+  },
+  "sethost": {
+   "OVMXA->OVMXB": {
+    "ok": true,
+    "step": "done",
+    "remote_node": "OVMXB"
+   },
+   "OVMXB->OVMXA": {
+    "ok": true,
+    "step": "done",
+    "remote_node": "OVMXA"
+   }
+  },
+  "session_why": null
+ }
+]

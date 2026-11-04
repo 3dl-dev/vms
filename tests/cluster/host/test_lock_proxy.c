@@ -2137,6 +2137,144 @@ static void d63_file_ser_lock_on_a_vax_mastered_volume(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * rd vms-623: THE F11B$s LOCK ON THIS NODE'S OWN VOLUME SURVIVES THE CLUSTER
+ * ASSIGNING THIS NODE ITS CSID.
+ *
+ * The cluster web demo's Node A (V0.7-15 preflight on a30f53d81) booted its
+ * own system disk before it joined, with the substrate's placeholder CSID 1.
+ * Every ACP access takes the XQP's F11B$s<fid> sub-lock under the volume's
+ * F11B$v tree (rd vms-d63), which THIS node masters. The engine looked the
+ * SUB's name up in its own lock directory as if it were a root and claimed
+ * it there under CSID 1; when the join assigned 0x00010002 the next lookup
+ * found that entry, took it for another system's mastery with no hash, and
+ * refused the $ENQ SS$_UNSUPPORTED -- IO$_ACCESS failed and IMGACT reported
+ * %IMGACT-F-IMGNOTFND for DCL.EXE. Only ROOT resources are in a directory
+ * (Davis p. 6-29); a sub of a tree mastered here is mastered here.
+ *
+ * The directory here is the smallest faithful stand-in for the arm's
+ * (vms_dlm_scs.c dlm_arm_eng_dir_local_lookup / _claim_self): it records a
+ * claim under the CSID the engine holds at the time, and answers a lookup
+ * with that master, `is_self` only when it equals the CSID held now.
+ * ================================================================ */
+#define E623_VRES   "F11B$vOVMXASYS    "   /* 18 bytes, the demo's label */
+#define E623_FID    11u                    /* the access that failed: SYS0.DIR */
+#define E623_JOINED 0x00010002u            /* Node A's CSID once a member */
+
+struct e623_entry {
+	uint8_t  name[32];
+	uint32_t name_len;
+	uint32_t master;
+};
+static struct e623_entry e623_dir[16];
+static int e623_ndir;
+static int e623_sub_asked;     /* the directory was asked about F11B$s */
+
+static int e623_is_sub_name(const struct vms_dlm_dir_ask *q)
+{
+	return q->name_len >= 6u && memcmp(q->name, "F11B$s", 6) == 0;
+}
+
+static uint32_t e623_lookup(void *ctx, const struct vms_dlm_dir_ask *q,
+			    struct vms_dlm_dir_local *out)
+{
+	int i;
+
+	(void)ctx;
+	if (e623_is_sub_name(q))
+		e623_sub_asked++;
+	memset(out, 0, sizeof(*out));
+	for (i = 0; i < e623_ndir; i++) {
+		if (e623_dir[i].name_len != q->name_len ||
+		    memcmp(e623_dir[i].name, q->name, q->name_len) != 0)
+			continue;
+		out->master_csid = e623_dir[i].master;
+		out->is_self = e623_dir[i].master == vms_lock_dlm_local_csid();
+		return (uint32_t)SS__NORMAL;
+	}
+	return (uint32_t)SS__NORMAL;    /* no entry: master_csid 0 */
+}
+
+static uint32_t e623_claim(void *ctx, const struct vms_dlm_dir_ask *q)
+{
+	int i;
+
+	(void)ctx;
+	if (e623_is_sub_name(q))
+		e623_sub_asked++;
+	for (i = 0; i < e623_ndir; i++)
+		if (e623_dir[i].name_len == q->name_len &&
+		    memcmp(e623_dir[i].name, q->name, q->name_len) == 0)
+			return (uint32_t)SS__NORMAL;
+	if (e623_ndir >= 16 || q->name_len > sizeof(e623_dir[0].name))
+		return (uint32_t)SS__INSFMEM;
+	memcpy(e623_dir[e623_ndir].name, q->name, q->name_len);
+	e623_dir[e623_ndir].name_len = q->name_len;
+	e623_dir[e623_ndir].master = vms_lock_dlm_local_csid();
+	e623_ndir++;
+	return (uint32_t)SS__NORMAL;
+}
+
+static void e623_file_ser_survives_the_csid_assignment(void)
+{
+	struct vms_dlm_requester_ops ops;
+	struct vms_proc proc;
+	uint32_t vol_lkid = 0, par = 0, lk = 0;
+	uint8_t vb[16];
+	int remote = 0;
+
+	printf("--- rd vms-623: the F11B$s lock on this node's own volume, across the CSID assignment ---\n");
+	configure_local_only();             /* this node is the directory */
+	fm_init();
+	fm.fail_with = SS__UNSUPPORTED;     /* nothing may be posted at all */
+	memset(e623_dir, 0, sizeof(e623_dir));
+	e623_ndir = 0;
+	e623_sub_asked = 0;
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_ops_fill(&ops);
+	ops.dir_local_lookup = e623_lookup;
+	ops.dir_claim_self = e623_claim;
+	vms_lock_dlm_set_requester_ops(&ops);
+	vms_lock_dlm_set_local_csid(CSID_LOCAL);   /* the substrate placeholder */
+	proc_init(&proc);
+
+	/* MOUNT: the standing F11B$v lock, mastered here. */
+	ct_check_eq_u32(vms_lock_acp_vol_standing(&proc, E623_VRES, &vol_lkid,
+						  &remote), SS__NORMAL,
+			"MOUNT takes the volume's standing F11B$v lock");
+	ct_check(vol_lkid != 0u && remote == 0, "  mastered on THIS node");
+
+	/* An ACP access before the join. */
+	ct_check_eq_u32(vms_lock_acp_file_ser(&proc, E623_VRES, 18u, E623_FID,
+					      vb, &par, &lk), SS__NORMAL,
+			"an access before the join takes F11B$s<11>");
+	(void)vms_lock_acp_file_ser_release(&proc, par, lk, vb);
+
+	/* The join: the cluster assigns this node its CSID. */
+	vms_lock_dlm_set_local_csid(E623_JOINED);
+
+	/* negctl: dlm-623-sublock-in-own-directory */
+
+	ct_check_eq_u32(vms_lock_acp_file_ser(&proc, E623_VRES, 18u, E623_FID,
+					      vb, &par, &lk), SS__NORMAL,
+			"*** an access after the join takes F11B$s<11> too -- "
+			"never SS$_UNSUPPORTED (the IMGNOTFND DCL.EXE of rd vms-623) ***");
+	(void)vms_lock_acp_file_ser_release(&proc, par, lk, vb);
+	ct_check(e623_sub_asked == 0,
+		 "*** the lock directory is never asked about, or told of, the "
+		 "F11B$s SUB-resource: only roots are in a directory ***");
+	ct_check(fm.posts == 0,
+		 "  and nothing went on the wire: the tree is mastered here");
+
+	(void)vms_lock_acp_vol_release(&proc, vol_lkid);
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+	vms_local_csid = CSID_LOCAL;
+}
+
 int main(void)
 {
 	printf("=== test_lock_proxy (FC-P4.4 proxy LKB, real engine, R1 host unit) ===\n");
@@ -2159,5 +2297,6 @@ int main(void)
 	e3ea_refused_then_admitted_after_the_label_is_freed();
 	d63_value_block_rules_are_the_captured_ones();
 	d63_file_ser_lock_on_a_vax_mastered_volume();
+	e623_file_ser_survives_the_csid_assignment();
 	return ct_summary("test_lock_proxy");
 }

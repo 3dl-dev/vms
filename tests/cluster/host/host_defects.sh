@@ -146,6 +146,7 @@ dlm-d63-release-queue-drops-the-value-block
 dlm-d63-request-asks-for-no-value-block
 dlm-d63-release-writes-no-value-block
 dlm-d63-read-holder-writes-the-master-block
+dlm-623-sublock-in-own-directory
 dlm-f29f-deferred-grant-not-read
 dlm-f29f-deferred-grant-declined-by-the-arm
 dlm-7649-f11b-lock-takes-the-mounters-identity
@@ -1335,6 +1336,21 @@ EOF2
         why)          echo "the release of the XQP's per-file serialization lock goes out unmarked and without its block -- what OVMX did before rd vms-d63. MEASURED COST 2026-11-02 (tests/lab/captures/vms-5fa-shared-volume-r2-20261102): OVMX appended seq 11..20 to EVAC.DAT and rewrote its header, VAX1's cached header never learned of it, and VAX1 wrote its own seq 11..20 over OVMX's records -- the final file held 1169 records, every one VAX1's.";;
         require_fail) hd_lines <<'EOF2'
 *** and its release is MARKED as writing the value block ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-623-sublock-in-own-directory)
+        case "$_f" in
+        facility)     echo "a SUB-resource is never looked up in, or claimed into, this node's own lock directory: only ROOT resources are in a directory (Davis p. 6-29), and a sub of a tree mastered here is mastered here (vms_lock.c dlm_resolve_master, rd vms-623)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the XQP's F11B\$s<fid> sub-lock (rd vms-d63) is claimed in the own directory under the substrate's placeholder CSID 1 while the node boots alone; once the cluster assigns its CSID the lookup reads that entry as another system's mastery and refuses the \$ENQ SS\$_UNSUPPORTED. MEASURED COST 2026-11-04 (V0.7-15 preflight on a30f53d81, openvmx-site run 41859451749): the cluster web demo's Node A failed IO\$_ACCESS of SYS0.DIR during its join, IMGACT reported %IMGACT-F-IMGNOTFND for DCL.EXE, PROVISION failed and the node powered down.";;
+        require_fail) hd_lines <<'EOF2'
+*** an access after the join takes F11B$s<11> too -- never SS$_UNSUPPORTED (the IMGNOTFND DCL.EXE of rd vms-623) ***
+*** the lock directory is never asked about, or told of, the F11B$s SUB-resource: only roots are in a directory ***
+  and nothing went on the wire: the tree is mastered here
 EOF2
                       ;;
         esac;;
@@ -4213,6 +4229,11 @@ apply_edit() {
         # The F11B$s request's flags in vms_lock_acp_file_ser; unique.
         sed -i 's|^    a.flags = LCK_M_SYNC \| LCK_M_VALBLK \| LCK_M_SYSTEM \| LCK_M_SYNCSTS;$|    a.flags = LCK_M_SYNC \| LCK_M_VALBLK \| LCK_M_SYNCSTS; /* NEGCTL dlm-d63-xqp-lock-not-system */|' "$_file";;
 
+    dlm-623-sublock-in-own-directory)
+        # The sub-resource guard on the own-directory consult is one line,
+        # unique in this file; replacing it consumes the anchor.
+        sed -i 's|    if (!inbound \&\& res->parent == NULL \&\&$|    if (!inbound \&\& /* NEGCTL dlm-623-sublock-in-own-directory */|' "$_file";;
+
     dlm-d63-release-writes-no-value-block)
         # The $DEQ arm of write_valblk; unique in vms_lock.c.
         sed -i 's|^                       (op == VMS_DLM_POST_DEQ \&\&$|                       (op == VMS_DLM_POST_DEQ \&\& 0 \&\& /* NEGCTL dlm-d63-release-writes-no-value-block */|' "$_file";;
@@ -4383,9 +4404,10 @@ apply_edit() {
         sed -i 's|vms_wire_put_le32(\&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_NOTQUEUED_REC_VAL);|vms_wire_put_le32(\&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_QUEUED_REC_VAL); /* NEGCTL dlm-1e58-deny-record-not-written */|' "$_file";;
 
     dlm-own-directory-not-consulted)
-        # `if (!inbound && dlm_route_own_directory(res, route, dst_csid, &st))`
-        # is unique in this file.
-        sed -i 's|if (!inbound \&\& dlm_route_own_directory(res, route, dst_csid, \&st))|if (0 \&\& !inbound \&\& dlm_route_own_directory(res, route, dst_csid, \&st)) /* NEGCTL dlm-own-directory-not-consulted */|' "$_file";;
+        # The own-directory consult's second line,
+        # `        dlm_route_own_directory(res, route, dst_csid, &st))`, is unique
+        # in this file (its first line carries rd vms-623's sub-resource guard).
+        sed -i 's|^        dlm_route_own_directory(res, route, dst_csid, \&st))|        0 \&\& dlm_route_own_directory(res, route, dst_csid, \&st)) /* NEGCTL dlm-own-directory-not-consulted */|' "$_file";;
 
     dlm-dir-matched-by-name-alone)
         # `if (e->id.group != b->group || e->id.mode != b->mode)` is unique.

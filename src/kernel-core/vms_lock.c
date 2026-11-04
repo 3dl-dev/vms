@@ -2366,8 +2366,24 @@ static uint32_t dlm_resolve_master(struct vms_lock_resource *res, int inbound,
      * here because the SENDER's cluster addressed it here, and that decision is
      * a fact this node received (the same reasoning as the refusal above). It
      * is served, or refused, as the master role decides.
+     *
+     * A SUB-RESOURCE IS NOT IN ANY DIRECTORY (rd vms-623). Only ROOT resources
+     * are (Davis p. 6-29), and a tree has one master: dir_resolve() answers
+     * "this node" for a sub only because its tree is mastered here (a sub of a
+     * tree mastered elsewhere already took that master above, rd vms-b67a).
+     * Looking the sub's NAME up here as if it were a root asked a question
+     * that has no answer, and claiming it recorded an entry nothing ever
+     * releases (dlm_dir_release_self takes back only roots). Measured on the
+     * cluster web demo's Node A (V0.7-15 preflight on a30f53d81): every ACP
+     * access takes the XQP's F11B$s<fid> sub-lock (rd vms-d63); the first ones
+     * claimed F11B$s<fid> under the substrate's placeholder CSID 1, and once the
+     * cluster assigned this node 0x00010002 the next lookup found that entry,
+     * read it as ANOTHER system's mastery with no hash, and refused the $ENQ
+     * SS$_UNSUPPORTED -- the ACP access failed, IMGACT reported
+     * %IMGACT-F-IMGNOTFND for DCL.EXE, and the node did not boot.
      */
-    if (!inbound && dlm_route_own_directory(res, route, dst_csid, &st))
+    if (!inbound && res->parent == NULL &&
+        dlm_route_own_directory(res, route, dst_csid, &st))
         return st;
 
     /* Nobody masters it and we are its directory: master it here ("simply

@@ -35,6 +35,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -64,6 +65,21 @@ static void check(int cond, const char *name)
     fflush(stdout);
 }
 
+/*
+ * WHERE EACH CHILD IS, readable by the parent after a deadline (rd vms-2a84). A
+ * child's stdout is buffered and lost when it is killed, so the progress lives
+ * in a page the parent shares: which record/cycle it reached, how many timer
+ * ASTs ran, and the first $SETIMR re-arm that failed.
+ */
+struct child_progress {
+    volatile uint32_t step;          /* logger: $PUTs done; writer: cycles done */
+    volatile uint32_t asts;          /* timer ASTs run */
+    volatile uint32_t setimr_bad;    /* first failing re-arm status, 0 = none */
+    volatile uint32_t setimr_bad_at; /* the AST count it failed at */
+};
+static struct child_progress *progress;   /* [0] logger, [1] writer */
+static struct child_progress *me;         /* this child's slot */
+
 /* ---- the timer: 1 ms, re-armed from its own AST, until told to stop ---- */
 static volatile int timer_on;
 static volatile uint32_t timer_fired;
@@ -73,8 +89,15 @@ static void timer_ast(uint32_t reqidt)
 {
     (void)reqidt;
     timer_fired++;
-    if (timer_on)
-        (void)sys$setimr(0, &one_ms, timer_ast, TIMER_ID, 0);
+    if (me)
+        me->asts = timer_fired;
+    if (timer_on) {
+        uint32_t st = sys$setimr(0, &one_ms, timer_ast, TIMER_ID, 0);
+        if (!(st & 1) && me && me->setimr_bad == 0) {
+            me->setimr_bad = st;
+            me->setimr_bad_at = timer_fired;
+        }
+    }
 }
 
 static int timer_start(void)
@@ -118,6 +141,7 @@ static int run_logger(void)
     char line[96];
     int i, bad = 0;
 
+    me = &progress[0];
     if (timer_start() != 0)
         return 10;
     fab.fab$l_fna = LOG_SPEC;
@@ -142,7 +166,9 @@ static int run_logger(void)
             if (bad++ == 0)
                 printf("  logger: $PUT #%d failed sts=%08X stv=%08X\n", i,
                        (unsigned)rab.rab$l_sts, (unsigned)rab.rab$l_stv);
+            fflush(stdout);
         }
+        me->step = (uint32_t)(i + 1);
     }
     timer_stop();
     if (!(sys$close(&fab, 0, 0) & 1))
@@ -159,6 +185,7 @@ static int run_writer(void)
     int c, r;
 
     memset(rec, 'F', sizeof(rec));
+    me = &progress[1];
     if (timer_start() != 0)
         return 20;
     for (c = 0; c < CYCLES; c++) {
@@ -192,9 +219,39 @@ static int run_writer(void)
         fab.fab$b_fns = (uint8_t)strlen(BIG_SPEC);
         if (!(sys$erase(&fab, 0, 0) & 1))
             return 25;
+        me->step = (uint32_t)(c + 1);
     }
     timer_stop();
     return 0;
+}
+
+/* A wedged child, described from outside: how far it got, and where the
+ * kernel says it is (state, wait channel, the system call it is in). */
+static void describe(const char *who, pid_t pid, const struct child_progress *p,
+                     int total)
+{
+    static const char *const files[] = { "stat", "wchan", "syscall", "stack" };
+    char path[64], buf[512];
+    unsigned f;
+
+    printf("  %s: reached %u of %d, %u timer ASTs, first failed re-arm %08X at AST %u\n",
+           who, (unsigned)p->step, total, (unsigned)p->asts,
+           (unsigned)p->setimr_bad, (unsigned)p->setimr_bad_at);
+    for (f = 0; f < sizeof(files) / sizeof(files[0]); f++) {
+        FILE *fp;
+        size_t n;
+
+        snprintf(path, sizeof(path), "/proc/%d/%s", (int)pid, files[f]);
+        fp = fopen(path, "r");
+        if (!fp)
+            continue;
+        n = fread(buf, 1, sizeof(buf) - 1, fp);
+        fclose(fp);
+        buf[n] = '\0';
+        printf("  %s %s: %s%s", who, files[f], buf,
+               (n && buf[n - 1] == '\n') ? "" : "\n");
+    }
+    fflush(stdout);
 }
 
 /* Wait for `pid` until the shared deadline; -1 = still running at it. */
@@ -278,6 +335,15 @@ int main(void)
     erase_all(LOG_SPEC);
     erase_all(BIG_SPEC);
 
+    progress = mmap(NULL, 2 * sizeof(*progress), PROT_READ | PROT_WRITE,
+                    MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (progress == MAP_FAILED)
+        progress = NULL;
+    check(progress != NULL, "the children's progress page is shared with the parent");
+    if (progress == NULL)
+        return 1;
+    memset(progress, 0, 2 * sizeof(*progress));
+
     logger = ovmx_fork_subprocess();
     if (logger == 0)
         _exit(run_logger());
@@ -294,6 +360,10 @@ int main(void)
     wrc = wait_until(writer, deadline);
     printf("  logger rc=%d writer rc=%d (-1 = still running at the deadline)\n",
            lrc, wrc);
+    printf("  INFO: logger %u timer ASTs (re-arm failed %08X at %u); writer %u (%08X at %u)\n",
+           (unsigned)progress[0].asts, (unsigned)progress[0].setimr_bad,
+           (unsigned)progress[0].setimr_bad_at, (unsigned)progress[1].asts,
+           (unsigned)progress[1].setimr_bad, (unsigned)progress[1].setimr_bad_at);
     check(lrc != -1,
           "*** the logger finished: its $PUTs never stalled behind the writer ***");
     check(wrc != -1,
@@ -305,6 +375,10 @@ int main(void)
     check(wrc == 0, "  and every writer create/$PUT/close/erase succeeded");
     if (lrc == -1 || wrc == -1) {
         /* Wedged: say so and end; the stuck processes are the evidence. */
+        if (lrc == -1)
+            describe("logger", logger, &progress[0], LINES);
+        if (wrc == -1)
+            describe("writer", writer, &progress[1], CYCLES);
         kill(logger, SIGKILL);
         kill(writer, SIGKILL);
     } else {

@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -358,6 +359,103 @@ static void spawn_resolve_spec(const struct dsc$descriptor_s *spec,
     }
 }
 
+/* The null device, by any of its names (NL:, _NL:, NLA0:, _NLA0:). */
+static int spawn_is_null_device(const char *spec)
+{
+    const char *p = spec[0] == '_' ? spec + 1 : spec;
+    return !strcasecmp(p, "NL:") || !strcasecmp(p, "NLA0:");
+}
+
+/* A bare DEVICE name (NL:, OPA0:, MBA3:) -- a ':' that ends the spec, no
+ * directory -- rather than a file on one. */
+static int spawn_is_device(const struct dsc$descriptor_s *d)
+{
+    char spec[256];
+    dsc$strncpy(spec, d, sizeof(spec));
+    size_t n = strlen(spec);
+    return n > 1 && spec[n - 1] == ':' && !strpbrk(spec, "[<") &&
+           strchr(spec, ':') == spec + n - 1;
+}
+
+/* As spawn_cmd_mailbox, for several records (`text`, one per line): each line
+ * is one mailbox message, then end-of-file. The mailbox's quota holds them all,
+ * since they are queued before the subprocess exists to read them. */
+static uint32_t spawn_cmd_mailbox_records(const char *text, uint32_t *chan,
+                                          char *dev, size_t devsz)
+{
+    uint32_t unit = 0;
+    size_t total = strlen(text), maxrec = 16;
+    size_t nrec = 0;
+    for (const char *p = text; *p; ) {
+        const char *e = strchr(p, '\n');
+        size_t rl = e ? (size_t)(e - p) : strlen(p);
+        if (rl > maxrec) maxrec = rl;
+        nrec++;
+        p += rl + (e ? 1 : 0);
+    }
+    if (maxrec > 4096)
+        return SS$_MBTOOSML;
+    uint32_t st = vms_kif_mbx_create(0, (uint32_t)maxrec,
+                                     (uint32_t)(total + 64 * (nrec + 1)),
+                                     chan, &unit, dev, (uint32_t)devsz);
+    if (!(st & 1))
+        return st;
+    for (const char *p = text; *p && (st & 1); ) {
+        const char *e = strchr(p, '\n');
+        size_t rl = e ? (size_t)(e - p) : strlen(p);
+        st = vms_kif_mbx_write(*chan, p, (uint32_t)rl);
+        p += rl + (e ? 1 : 0);
+    }
+    if (st & 1)
+        st = vms_kif_mbx_write_eof(*chan);
+    if (!(st & 1)) {
+        (void)vms_kif_dassgn((uint16_t)*chan);
+        *chan = 0;
+    }
+    return st;
+}
+
+/*
+ * The command mailboxes of /NOWAIT subprocesses (rd vms-691d). The creator keeps
+ * its channel until the subprocess has had the chance to assign the mailbox
+ * (a temporary mailbox goes away with its last channel); once the subprocess is
+ * gone, the channel is given back on the creator's next LIB$SPAWN, so a
+ * long-lived creator -- an interactive DCL that SPAWNs again and again -- does
+ * not accumulate one channel per subprocess it ever created.
+ */
+#define SPAWN_KEPT_MAX 64
+static struct { uint32_t pid; uint32_t chan; } spawn_kept[SPAWN_KEPT_MAX];
+static pthread_mutex_t spawn_kept_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static void spawn_kept_reap(void)
+{
+    pthread_mutex_lock(&spawn_kept_mtx);
+    for (int i = 0; i < SPAWN_KEPT_MAX; i++) {
+        if (!spawn_kept[i].chan)
+            continue;
+        struct vms_procinfo pi;
+        if (vms_kif_getjpi_pid(spawn_kept[i].pid, &pi) == SS$_NONEXPR) {
+            (void)vms_kif_dassgn((uint16_t)spawn_kept[i].chan);
+            spawn_kept[i].chan = 0;
+            spawn_kept[i].pid = 0;
+        }
+    }
+    pthread_mutex_unlock(&spawn_kept_mtx);
+}
+
+static void spawn_kept_add(uint32_t pid, uint32_t chan)
+{
+    pthread_mutex_lock(&spawn_kept_mtx);
+    for (int i = 0; i < SPAWN_KEPT_MAX; i++) {
+        if (!spawn_kept[i].chan) {
+            spawn_kept[i].pid = pid;
+            spawn_kept[i].chan = chan;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&spawn_kept_mtx);
+}
+
 uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
                    const struct dsc$descriptor_s *input_file,
                    const struct dsc$descriptor_s *output_file,
@@ -377,6 +475,8 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
 
     const uint32_t spawn_flags = flags ? *flags : 0;
     const int nowait = (spawn_flags & CLI$M_NOWAIT) != 0;
+
+    spawn_kept_reap();
 
     /*
      * HONEST BOUNDARY (preserved from the pre-B0 body). Resolve the DCL CLI
@@ -459,12 +559,65 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
     const char *in_str = NULL;
 
     if (have_cmd) {
+        /*
+         * A command string AND an input file (rd vms-691d): "the command string
+         * is processed before the input file", and the subprocess ends when the
+         * input file is done (DCL Dictionary, SPAWN /INPUT; observed on VAX V7.3,
+         * tests/lab/captures/vms-691d-type-spawn-20261102: SPAWN/INPUT=IN.COM
+         * WRITE SYS$OUTPUT "from CMD" files "from CMD" then IN.COM's output).
+         * The CLI's input mailbox carries the command record, then the input
+         * file's records read here through RMS, then end-of-file. The null
+         * device (NL:) has no records: the command alone. An input file RMS
+         * cannot open is its RMS status, before any process exists (VAX:
+         * SPAWN/INPUT=NOSUCH.COM SHOW TIME -> %RMS-E-FNF, $STATUS %X00018292).
+         */
         char cbuf[4096];
         dsc$strncpy(cbuf, command, sizeof(cbuf) - 1);
-        uint32_t mst = spawn_cmd_mailbox(cbuf, &cmd_chan, cmd_dev, sizeof(cmd_dev));
+        char *all = NULL;
+        if (have_in) {
+            char raw_in[1024];
+            dsc$strncpy(raw_in, input_file, sizeof(raw_in));
+            if (!spawn_is_null_device(raw_in)) {
+                uint32_t rst = 0;
+                rms_textfile_t *tf = rms_textfile_open_st(raw_in, &rst);
+                if (!tf)
+                    return (rst & 1) || rst == 0 ? RMS$_FNF : rst;
+                size_t cap = strlen(cbuf) + 2 + 4096, len = 0;
+                all = malloc(cap);
+                if (!all) { rms_textfile_close(tf); return SS$_INSFMEM; }
+                len = (size_t)snprintf(all, cap, "%s\n", cbuf);
+                char rec[4096];
+                int too_long = 0;
+                while (rms_textfile_getline(tf, rec, sizeof(rec) - 1, &too_long)) {
+                    size_t rl = strlen(rec);
+                    if (rl > 0 && rec[rl - 1] == '\n')
+                        rec[--rl] = '\0';
+                    if (len + rl + 2 > cap) {
+                        size_t ncap = cap * 2 + rl + 2;
+                        char *g = realloc(all, ncap);
+                        if (!g) { free(all); rms_textfile_close(tf); return SS$_INSFMEM; }
+                        all = g;
+                        cap = ncap;
+                    }
+                    memcpy(all + len, rec, rl);
+                    len += rl;
+                    all[len++] = '\n';
+                    all[len] = '\0';
+                }
+                rms_textfile_close(tf);
+            }
+        }
+        uint32_t mst = all ? spawn_cmd_mailbox_records(all, &cmd_chan, cmd_dev, sizeof(cmd_dev))
+                           : spawn_cmd_mailbox(cbuf, &cmd_chan, cmd_dev, sizeof(cmd_dev));
+        free(all);
         if (!(mst & 1))
             return mst;
         in_str = cmd_dev;
+    } else if (have_in && spawn_is_device(input_file)) {
+        /* A DEVICE as SYS$INPUT (NL:, a terminal, a mailbox): $CREPRC binds it
+         * by name -- the null device gives the CLI end-of-file at once. */
+        dsc$strncpy(in_resv, input_file, sizeof(in_resv));
+        in_str = in_resv;
     } else if (have_in) {
         /*
          * SYS$INPUT FROM A FILE (vms-ccc). The file is read through RMS over the
@@ -500,8 +653,25 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
 
     char out_resv[1024] = "";
     const char *out_str = NULL;
+    int err_to_out = 0;                 /* SYS$ERROR follows SYS$OUTPUT */
     if (have_out) {
-        spawn_resolve_spec(output_file, out_resv, sizeof(out_resv));
+        /*
+         * SYS$OUTPUT a VMS FILE (rd vms-691d): $CREPRC is handed the VMS name
+         * (device logicals translated here, as for the input) and gives the
+         * subprocess that file as its SYS$OUTPUT, which its CLI $CREATEs and
+         * writes through RMS. Translating it to a host path named the retired
+         * /vms passthrough: no file appeared and the subprocess wrote on the
+         * creator's terminal. A device (NL:, OPA0:) or a host path (host-side
+         * tooling) is passed as given.
+         */
+        char raw_out[1024];
+        dsc$strncpy(raw_out, output_file, sizeof(raw_out));
+        if (raw_out[0] == '/' || spawn_is_device(output_file))
+            snprintf(out_resv, sizeof(out_resv), "%s", raw_out);
+        else {
+            spawn_full_spec(raw_out, out_resv, sizeof(out_resv));
+            err_to_out = 1;
+        }
         out_str = out_resv;
     }
 
@@ -513,7 +683,15 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
     uint32_t cst = sys$creprc(&vms_pid, &img_d,
                               in_d.dsc$a_pointer  ? &in_d  : NULL,
                               out_d.dsc$a_pointer ? &out_d : NULL,
-                              NULL,           /* SYS$ERROR: inherit */
+                              /* SYS$ERROR: the output FILE when there is one
+                               * -- the subprocess's error messages are filed
+                               * there, not shown on the creator's terminal
+                               * (VAX V7.3, SPAWN/OUTPUT=S2.LOG FOOBAR). With a
+                               * device as SYS$OUTPUT (/OUTPUT=NL:) it is
+                               * inherited: VAX V7.3 shows the subprocess's
+                               * REPLY "User SYSTEM has been notified" on the
+                               * creator's terminal (keystroke BC.READ W). */
+                              err_to_out ? &out_d : NULL,
                               NULL, NULL,     /* prvadr/quota: inherit creator */
                               prcnam,         /* B0: APPLIED, not discarded */
                               0, 0, 0,
@@ -585,8 +763,11 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         /*
          * The command mailbox's channel, if any, is kept: the subprocess may
          * not have assigned the mailbox yet, and a temporary mailbox goes away
-         * with its last channel. Image exit gives it back.
+         * with its last channel. A later LIB$SPAWN gives it back once the
+         * subprocess is gone (spawn_kept_reap); image exit gives back the rest.
          */
+        if (cmd_chan)
+            spawn_kept_add(vms_pid, cmd_chan);
         return SS$_NORMAL;
     }
 

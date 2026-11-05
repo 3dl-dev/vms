@@ -1,0 +1,27 @@
+# cli-continued-image-blocks -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "an image's CLI callback (LIB\$SET_SYMBOL over the OVMX\$CLI_MBX mailboxes) returns LIB\$_UNECLIERR, never blocks, once DCL has stopped serving -- a call in flight at CTRL/Y and every call of an image CONTINUEd after it (src/libvms/rtl/lib_symbol.c cli_call, rd vms-fe22)";;
+        targets)      echo "libvms/rtl/lib_symbol.c";;
+        suites_red)   echo "test_syssvc_cli_wait";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cli_call marks the CLI gone (cli_gone = 1) when its reply read ends in end-of-file. The mutation drops that mark: the first call after DCL leaves still reads DCL's end-of-file and returns LIB\$_UNECLIERR, but the next call writes a request nobody reads and blocks in the reply read. Part C's image is killed by its SIGALRM bound, so its exit status is not 0 and the in-flight assertion reddens. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+a call in flight when DCL stops serving returns LIB$_UNECLIERR, and so does the next -- neither blocks
+EOT
+                      ;;
+        knock_on_fail) echo "an image CONTINUEd after DCL stopped serving gets LIB\$_UNECLIERR from its CLI calls, never a hang";;
+        knock_on_why)  echo "the same dropped mark: the CONTINUE case's second call blocks too";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        cli_gone = 1;                      /\* the CLI went away (EOF) or failed \*/$|        /* NEGCTL cli-continued-image-blocks: the CLI is never marked gone */|' "$_file"
+    :
+}

@@ -45,6 +45,12 @@ static inline pid_t ovmx_creprc_fork_as(uint32_t kind, const char *username,
                                         uint32_t uic, uint64_t privs,
                                         uint32_t *pcb_status, uint32_t *vms_pid);
 
+/* The same, for a process (of the creator's identity) whose deletion the
+ * executive reports into the creator's mailbox MBA<mbxunt>: -- $CREPRC's
+ * termination mailbox (rd vms-6d9, vms_kif_creprc_pcb_mbx). mbxunt 0 = none. */
+static inline pid_t ovmx_creprc_fork_mbx(uint32_t kind, uint32_t mbxunt,
+                                         uint32_t *pcb_status, uint32_t *vms_pid);
+
 static inline pid_t ovmx_creprc_fork(uint32_t kind, uint32_t *pcb_status, uint32_t *vms_pid)
 {
     return ovmx_creprc_fork_as(kind, (const char *)0, 0, 0, pcb_status, vms_pid);
@@ -66,9 +72,9 @@ static inline pid_t ovmx_subprocess_fork(uint32_t *pcb_status, uint32_t *vms_pid
  * there is no PCB to make, so the task is forked and released as it always
  * was, and *pcb_status carries the OPEN's honest status.
  */
-static inline pid_t ovmx_creprc_fork_as(uint32_t kind, const char *username,
-                                        uint32_t uic, uint64_t privs,
-                                        uint32_t *pcb_status, uint32_t *vms_pid)
+static inline pid_t ovmx_creprc_fork_rec(uint32_t kind, const char *username,
+                                         uint32_t uic, uint64_t privs, uint32_t mbxunt,
+                                         uint32_t *pcb_status, uint32_t *vms_pid)
 {
     uint32_t rec = 0, st, task, go_pid = 0, report = 0;
     pid_t pid;
@@ -98,7 +104,8 @@ static inline pid_t ovmx_creprc_fork_as(uint32_t kind, const char *username,
     task = (uint32_t)pid;
     if (pid > 0 &&
         (vms_kif_creprc_sync(VMS_CREPRC_SYNC_ACCEPT, &rec, &task, NULL, NULL) & 1)) {
-        st = vms_kif_creprc_pcb(task, kind, username, uic, privs, &go_pid);
+        st = mbxunt ? vms_kif_creprc_pcb_mbx(task, kind, mbxunt, &go_pid)
+                    : vms_kif_creprc_pcb(task, kind, username, uic, privs, &go_pid);
         if (vms_kif_creprc_sync(VMS_CREPRC_SYNC_ANSWER, &rec, NULL, &st, &go_pid) & 1)
             (void)vms_kif_creprc_sync(VMS_CREPRC_SYNC_RESULT, &rec, NULL, &report, NULL);
     }
@@ -108,6 +115,19 @@ static inline pid_t ovmx_creprc_fork_as(uint32_t kind, const char *username,
     if (vms_pid && (st & 1))
         *vms_pid = go_pid;
     return pid;
+}
+
+static inline pid_t ovmx_creprc_fork_as(uint32_t kind, const char *username,
+                                        uint32_t uic, uint64_t privs,
+                                        uint32_t *pcb_status, uint32_t *vms_pid)
+{
+    return ovmx_creprc_fork_rec(kind, username, uic, privs, 0, pcb_status, vms_pid);
+}
+
+static inline pid_t ovmx_creprc_fork_mbx(uint32_t kind, uint32_t mbxunt,
+                                         uint32_t *pcb_status, uint32_t *vms_pid)
+{
+    return ovmx_creprc_fork_rec(kind, (const char *)0, 0, 0, mbxunt, pcb_status, vms_pid);
 }
 
 #endif /* OVMX_SUBPROCESS_H */

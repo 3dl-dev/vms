@@ -900,6 +900,13 @@ uint32_t vms_kif_pql_load(uint32_t dpgflquota, uint32_t mpgflquota, uint32_t fla
 uint32_t vms_kif_creprc_pcb_q(uint32_t child_pid, uint32_t flags, const char *username,
                               uint32_t uic, uint64_t privs, uint32_t pgflquota,
                               uint32_t *vms_pid);
+/* vms_kif_creprc_pcb (no identity) naming a TERMINATION MAILBOX (rd vms-6d9):
+ * MBA<mbxunt>:, one the caller holds a channel to (else SS$_NOSUCHDEV). The
+ * executive writes a struct vms_exec_mbxmsg into it when the process is
+ * deleted -- and, for a VMS_CREPRC_PCB_CONTINUE image task, when its CLI's
+ * CTRL/Y AST fires and the executive stops the image. */
+uint32_t vms_kif_creprc_pcb_mbx(uint32_t child_pid, uint32_t flags, uint32_t mbxunt,
+                                uint32_t *vms_pid);
 uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
                              uint32_t cap, uint32_t *count);
 

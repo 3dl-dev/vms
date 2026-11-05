@@ -5,8 +5,9 @@
  * calling program").
  *
  * This suite plays DCL's side of the CLI callback channel a fork()+execve() image
- * reaches DCL by (OVMX$CLI_FD, src/libvms/include/ovmx_cli.h) and runs the image
- * side in a child:
+ * reaches DCL by (the OVMX$CLI_MBX request/reply mailboxes,
+ * src/libvms/include/ovmx_cli.h, rd vms-6d9) and runs the image side in a
+ * child that is the suite's image task (VMS_CREPRC_PCB_CONTINUE), as DCL's is:
  *   - with no CLI the call returns LIB$_NOCLI;
  *   - the CLI receives OVMX_CLI_OP_DO_COMMAND carrying the command text;
  *   - when the CLI accepts, the image exits with SS$_NORMAL and never returns;
@@ -21,7 +22,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
-#include <sys/socket.h>
+#include <signal.h>
 #include <sys/wait.h>
 
 #include "vms_kif.h"
@@ -30,6 +31,7 @@
 #include "libdef.h"
 #include "lib$routines.h"
 #include "ovmx_cli.h"
+#include "ovmx_subprocess.h"  /* ovmx_creprc_fork: the creation record */
 
 #define EXIT_SKIP 77
 #define CMDTEXT "WRITE SYS$OUTPUT \"DOCMD-RAN\""
@@ -49,53 +51,72 @@ struct outcome {
     int      exit_code;          /* the image's exit code (-1: not a normal exit) */
 };
 
+static void on_alarm(int sig)
+{
+    (void)sig;
+    static const char m[] = "  FAIL: the CLI side's mailbox read did not end (hang)\n";
+    (void)!write(1, m, sizeof m - 1);
+    _exit(1);
+}
+
 /* Run lib$do_command in a child. `cli` 0: no CLI; else answer with `answer`. */
 static void run_case(int cli, uint32_t answer, struct outcome *o)
 {
-    int sv[2] = { -1, -1 }, rp[2];
+    int rp[2];
+    uint32_t qc = 0, rc = 0, qu = 0, ru = 0;
+    char qd[32], rd[32];
     memset(o, 0, sizeof *o);
     o->exit_code = -1;
-    if (cli && socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) != 0)
+    if (cli && (!(vms_kif_mbx_create(0, sizeof(struct ovmx_cli_req), 2 * sizeof(struct ovmx_cli_req),
+                                     &qc, &qu, qd, sizeof qd) & 1) ||
+                !(vms_kif_mbx_create(0, sizeof(struct ovmx_cli_rsp), 2 * sizeof(struct ovmx_cli_rsp),
+                                     &rc, &ru, rd, sizeof rd) & 1)))
         return;
     if (pipe(rp) != 0)
         return;
     fflush(NULL);
-    pid_t pid = fork();
+    /* The image task, DCL's own VMS process, made through the executive's
+     * creation record as dcl_image_fork does (rd vms-89bb). */
+    pid_t pid = ovmx_creprc_fork(VMS_CREPRC_PCB_CONTINUE, NULL, NULL);
     if (pid == 0) {
-        char nb[16];
+        char spec[80];
         struct dsc$descriptor_s d = { sizeof CMDTEXT - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S,
                                       (char *)CMDTEXT };
         close(rp[0]);
         if (cli) {
-            close(sv[0]);
-            snprintf(nb, sizeof nb, "%d", sv[1]);
-            setenv(OVMX_CLI_FD_ENV, nb, 1);
+            snprintf(spec, sizeof spec, "%s,%s", qd, rd);
+            setenv(OVMX_CLI_MBX_ENV, spec, 1);
         } else {
-            unsetenv(OVMX_CLI_FD_ENV);
+            unsetenv(OVMX_CLI_MBX_ENV);
         }
         uint32_t st = lib$do_command(&d);
         (void)!write(rp[1], &st, sizeof st);      /* reached only if it returned */
         _exit(9);
     }
     close(rp[1]);
-    if (cli) {
+    if (cli && pid > 0) {
         struct ovmx_cli_rsp rsp;
-        close(sv[1]);
-        if (read(sv[0], &o->req, sizeof o->req) == (ssize_t)sizeof o->req) {
+        uint32_t len = 0;
+        alarm(30);
+        if ((vms_kif_mbx_read(qc, &o->req, sizeof o->req, &len, 0) & 1) &&
+            len == (uint32_t)sizeof o->req) {
             o->got_req = 1;
             memset(&rsp, 0, sizeof rsp);
             rsp.status = answer;
-            (void)!write(sv[0], &rsp, sizeof rsp);
+            (void)vms_kif_mbx_write(rc, &rsp, sizeof rsp);
         }
+        alarm(0);
     }
     if (read(rp[0], &o->status, sizeof o->status) == (ssize_t)sizeof o->status)
         o->returned = 1;
     close(rp[0]);
-    if (cli)
-        close(sv[0]);
     int st = 0;
-    if (waitpid(pid, &st, 0) == pid && WIFEXITED(st))
+    if (pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st))
         o->exit_code = WEXITSTATUS(st);
+    if (cli) {
+        (void)vms_kif_dassgn(qc);
+        (void)vms_kif_dassgn(rc);
+    }
 }
 
 int main(void)
@@ -108,6 +129,7 @@ int main(void)
         printf("=== test_syssvc_lib_do_command: 0 passed, 0 failed (SKIPPED: no /dev/vms) ===\n");
         return EXIT_SKIP;
     }
+    signal(SIGALRM, on_alarm);
 
     run_case(0, 0, &o);
     check(o.returned && o.status == LIB$_NOCLI, "with no CLI LIB$DO_COMMAND returns LIB$_NOCLI");

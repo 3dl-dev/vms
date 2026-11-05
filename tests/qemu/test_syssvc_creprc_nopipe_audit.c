@@ -36,8 +36,9 @@
  * from SYS$INPUT, where DCLRUN.EXE is this binary in subject mode: DCL forks
  * the image task, makes it its own VMS process (VMS_CREPRC_PCB_CONTINUE)
  * through the creation record (dcl_image_fork), and the task execs the image.
- * The suite asserts no pipe / pipe2 in DCL or the image task. (DCL's CLI
- * callback socketpair is counted and printed, not asserted: rd vms-6d9.)
+ * The suite asserts no pipe / pipe2 in DCL or the image task, and (rd vms-6d9)
+ * no socketpair and no host descriptor wait (poll / ppoll / select / pselect6 /
+ * epoll_wait): DCL waits for its image in one executive mailbox read.
  *
  * NOT VACUOUS. The trace must have seen the creation record in use (the
  * VMS_IOCTL_CREPRC_SYNC ioctls of both creations), both subject images
@@ -138,6 +139,7 @@ struct verdict {
     unsigned execs;            /* PTRACE_EVENT_EXEC stops */
     unsigned bad_pipe;         /* pipe / pipe2 */
     unsigned bad_sockpair;     /* socketpair */
+    unsigned bad_poll;         /* poll / ppoll / select / pselect6 / epoll_wait (rd vms-6d9) */
     unsigned tasks;            /* tasks the tracee made (traced from birth) */
     char first_bad[160];
 };
@@ -166,6 +168,33 @@ static void classify(struct verdict *v, pid_t who, const struct sc *s)
         return;
     }
 #endif
+    {
+        const char *w = NULL;
+#ifdef SYS_poll
+        if (s->nr == SYS_poll) w = "poll";
+#endif
+#ifdef SYS_ppoll
+        if (s->nr == SYS_ppoll) w = "ppoll";
+#endif
+#ifdef SYS_select
+        if (s->nr == SYS_select) w = "select";
+#endif
+#ifdef SYS_pselect6
+        if (s->nr == SYS_pselect6) w = "pselect6";
+#endif
+#ifdef SYS_epoll_wait
+        if (s->nr == SYS_epoll_wait) w = "epoll_wait";
+#endif
+#ifdef SYS_epoll_pwait
+        if (s->nr == SYS_epoll_pwait) w = "epoll_pwait";
+#endif
+        if (w) {
+            v->bad_poll++;
+            if (!v->first_bad[0])
+                snprintf(v->first_bad, sizeof v->first_bad, "%s in task %d", w, (int)who);
+            return;
+        }
+    }
     if (what) {
         v->bad_pipe++;
         if (!v->first_bad[0])
@@ -488,7 +517,7 @@ int main(int argc, char **argv)
         if (d == 0) {
             int in = open(DIR_ "/RUN.COM", O_RDONLY);
             if (in >= 0) { dup2(in, 0); close(in); }
-            unsetenv("OVMX$CLI_FD");    /* the subject is its own DCL, not a callback */
+            unsetenv("OVMX$CLI_MBX");   /* the subject is its own DCL, not a callback */
             setenv("OVMX_NOPIPE_SUBJECT", "DCLRUN", 1);
             ptrace(PTRACE_TRACEME, 0, 0, 0);
             raise(SIGSTOP);
@@ -503,11 +532,11 @@ int main(int argc, char **argv)
             memset(&dv, 0, sizeof dv);
             int drs = trace_all(d, &dv, 60);
             printf("  (DCL exit %s%d; syscalls %lu, creation-record ioctls %lu, tasks %u,"
-                   " execs %u; pipe %u, socketpair %u (vms-6d9)%s%s)\n",
+                   " execs %u; pipe %u, socketpair %u, poll %u%s%s)\n",
                    (drs >= 0 && WIFEXITED(drs)) ? "" : "signal/broken ",
                    (drs >= 0 && WIFEXITED(drs)) ? WEXITSTATUS(drs) : -1,
                    dv.total, dv.sync_ioctls, dv.tasks, dv.execs, dv.bad_pipe,
-                   dv.bad_sockpair, dv.first_bad[0] ? "; first: " : "", dv.first_bad);
+                   dv.bad_sockpair, dv.bad_poll, dv.first_bad[0] ? "; first: " : "", dv.first_bad);
             CHECK(ran("DCLRUN"), "DCL's RUN activated the image and it ran");
             CHECK(dv.tasks >= 1 && dv.execs >= 2,
                   "the trace is not vacuous: DCL took the fork path (an image task, exec'd)");
@@ -516,6 +545,9 @@ int main(int argc, char **argv)
             /* negctl: dcl-image-fork-host-pipe */
             CHECK(dv.bad_pipe == 0,
                   "DCL's fork-path RUN made NO host pipe (pipe/pipe2) -- DCL or its image task");
+            /* rd vms-6d9: the image wait is one executive mailbox read */
+            CHECK(dv.bad_sockpair == 0 && dv.bad_poll == 0,
+                  "DCL's fork-path RUN made NO socketpair and NO host poll -- it waits in the executive");
         }
     }
 

@@ -797,6 +797,7 @@ struct vms_termination {
     uint32_t compl_parent_pid, compl_efn;
     uint64_t compl_astadr, compl_astprm;
     uint32_t owner_linux_pid, compl_parent_linux_pid; /* the creating / arming TASK (rd vms-e70f) */
+    uint32_t term_mbx_unit;     /* the termination mailbox (rd vms-6d9), 0 = none */
 };
 
 struct vms_termrec {
@@ -1139,6 +1140,11 @@ struct vms_proc {
     uint32_t            compl_efn;        /* parent EF to set, or VMS_EF_NONE */
     uint64_t            compl_astadr;     /* parent completion AST routine (0=none) */
     uint64_t            compl_astprm;     /* parameter for the completion AST */
+    /* $CREPRC's termination mailbox (rd vms-6d9): MBA<unit>:, 0 = none. The
+     * executive writes the process's termination message into it when it is
+     * deleted (vms_proc_termination_mailbox), and, for DCL's image task, a
+     * CTRL/Y message when DCL's CTRL/Y AST fires (vms_proc_ctrly_image). */
+    uint32_t            term_mbx_unit;
 
     /*
      * The process lifecycle (rd vms-9f32). owner_vms_pid is the VMS process
@@ -1439,6 +1445,8 @@ void vms_proc_free_claimed(struct vms_proc *proc);
 void vms_proc_termination_capture(struct vms_proc *victim,
                                   struct vms_termination *t);
 void vms_proc_termination_post_locked(const struct vms_termination *t);
+void vms_proc_termination_mailbox(const struct vms_termination *t);
+void vms_proc_ctrly_image(uint32_t vms_pid, uint32_t arming_task);
 
 /* Deliver a /NOWAIT spawn completion for a subprocess reclaimed WITHOUT a
  * recorded exit (SIGKILL/crash), synthesizing an abnormal $STATUS (vms-2a4).
@@ -1874,6 +1882,10 @@ int vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
 uint32_t vms_mbx_devinfo(const char *devnam, struct vms_devinfo *info);
 /* Give back every mailbox channel a dying process holds. */
 void vms_mbx_release_all(struct vms_proc *proc);
+/* The termination mailbox (rd vms-6d9). */
+int  vms_mbx_proc_holds_unit(struct vms_proc *proc, uint32_t unit);
+void vms_mbx_exec_post(uint32_t unit, uint32_t owner_vms_pid, const void *msg,
+                       uint32_t len, int atomic);
 
 /*
  * Files-11 (ODS-2) ACP -- channel + mount front-end (vms-149, epic vms-208;

@@ -2252,6 +2252,7 @@ static void vms_process_ended(pid_t tgid, struct pid *ref)
         spin_lock(&vms_proc_hash_lock);
         vms_proc_termination_post_locked(&t);
         spin_unlock(&vms_proc_hash_lock);
+        vms_proc_termination_mailbox(&t);            /* may sleep (rd vms-6d9) */
     }
 }
 

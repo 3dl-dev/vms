@@ -65,7 +65,7 @@ rm -f "$DISK" "$LOG" "$FIFO"
 cp "$DISTRIB_IMG" "$DISK"
 mkfifo "$FIFO"
 
-WALL=$((BOOT_TIMEOUT + CMD_TIMEOUT * 6 + 120))
+WALL=$((BOOT_TIMEOUT + CMD_TIMEOUT * 8 + 180))
 cleanup() { exec 4>&- 2>/dev/null || true; [ -n "${QPID:-}" ] && kill "$QPID" 2>/dev/null; rm -f "$FIFO"; }
 trap cleanup EXIT
 
@@ -225,6 +225,40 @@ if printf '%s\n' "$SEG" | grep >/dev/null -F 'do_command returned'; then
 else
     ok "LIB\$DO_COMMAND did not return control to the image"
 fi
+
+# 6. CTRL/Y (rd vms-6d9). An image that IGNORES the substrate's terminal stop
+#    signal is still interrupted by CTRL/Y, as on VMS: the executive's terminal
+#    driver fires DCL's CTRL/Y AST, stops the image task and tells DCL's wait
+#    mailbox; DCL says "Interrupt" and prompts while the image is held, and
+#    CONTINUE resumes it to its end. (The CLI symbols of section 5 go first.)
+run_cmd 'DELETE/SYMBOL OVMX_DOCMD'
+run_cmd 'OVMX_SPIN = "12"'
+Y_OFF=$(wc -c <"$LOG")
+send 'RUN SYS$SYSTEM:SYMSET.EXE'
+if wait_for 'SYMSET: spinning 12 (SIGTSTP ignored)' "$CMD_TIMEOUT" "$Y_OFF"; then
+    sleep 1
+    printf '\031' >&4                       # CTRL/Y
+    if wait_for 'Interrupt' 8 "$Y_OFF" && wait_for '$ ' 8 "$Y_OFF"; then
+        SEG=$(segment_since "$Y_OFF")
+        if printf '%s\n' "$SEG" | grep >/dev/null -F 'spin ended'; then
+            bad "CTRL/Y: DCL prompted only after the image ended on its own"
+        else
+            ok "CTRL/Y interrupts an image that ignores SIGTSTP: DCL prompts with the image held (vms-6d9)"
+        fi
+    else
+        bad "CTRL/Y did not interrupt an image that ignores SIGTSTP: $(segment_since "$Y_OFF" | tr '\n' ' ')"
+    fi
+    C_OFF=$(wc -c <"$LOG")
+    send 'CONTINUE'
+    if wait_for 'SYMSET: spin ended' 30 "$C_OFF" && wait_for '$ ' 10 "$C_OFF"; then
+        ok "CONTINUE resumes the interrupted image to its end (vms-6d9)"
+    else
+        bad "CONTINUE did not resume the interrupted image: $(segment_since "$C_OFF" | tr '\n' ' ')"
+    fi
+else
+    bad "the SIGTSTP-ignoring SYMSET.EXE never started: $(segment_since "$Y_OFF" | tr '\n' ' ')"
+fi
+run_cmd 'DELETE/SYMBOL OVMX_SPIN'
 
 echo ""
 echo "=== RUN \$STATUS e2e: $PASS passed, $FAIL failed ==="

@@ -396,7 +396,7 @@ static void run_dcl(struct run *r, int bound_s)
         dup2(o[1], 1);
         dup2(o[1], 2);
         close(o[0]); close(o[1]);
-        unsetenv("OVMX$CLI_FD");        /* the subject is its own DCL, not a callback */
+        unsetenv("OVMX$CLI_MBX");       /* the subject is its own DCL, not a callback */
         ptrace(PTRACE_TRACEME, 0, 0, 0);
         raise(SIGSTOP);
         execl(g_dcl, "DCL.EXE", "-c", r->cmd, (char *)NULL);

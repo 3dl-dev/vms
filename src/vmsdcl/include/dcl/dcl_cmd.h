@@ -169,6 +169,10 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si);
  * there is none to make, and its own service calls then fail honestly.
  */
 pid_t dcl_image_fork(uint32_t kind);
+/* The same, the task's PCB naming DCL's mailbox MBA<mbxunt>: as its $CREPRC
+ * termination mailbox (rd vms-6d9; 0 = none); *pcb_status (may be NULL) gets
+ * the executive's answer for the PCB. */
+pid_t dcl_image_fork_mbx(uint32_t kind, uint32_t mbxunt, uint32_t *pcb_status);
 void dcl_sysinput_restore(struct dcl_sysinput *si);
 
 /* P1 control-region establishment (vms-68f.v, in-process image activation).

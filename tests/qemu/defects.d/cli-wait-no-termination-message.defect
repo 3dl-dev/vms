@@ -1,0 +1,27 @@
+# cli-wait-no-termination-message -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a process's \$CREPRC termination mailbox hears its deletion from the executive (struct vms_exec_mbxmsg VMS_EXEC_MBXMSG_TERM, vms_proc_termination_mailbox) -- the message DCL's one blocking wait for a fork-path image ends on (rd vms-6d9)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_cli_wait";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_termination_mailbox() returns early only for a process with no termination mailbox (\`if (t->term_mbx_unit == 0)\`). The mutation makes it return for every process: the executive never writes the termination message. Part A reads the mailbox without waiting once waitpid has seen the task end and finds it empty (SS\$_ENDOFFILE), so the termination-message assertion reddens; DCL, which ends its wait on that message, then blocks in Part B until the suite's bound kills it. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+the executive writes the task's termination message into the mailbox
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (t->term_mbx_unit == 0)$|    if (t->term_mbx_unit == 0 \|\| 1) /* NEGCTL cli-wait-no-termination-message */|' "$_file"
+    :
+}

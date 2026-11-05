@@ -47,8 +47,6 @@
 #include "clidef.h"        /* CLI$M_NOWAIT — lib$spawn flags */
 #include "imgact_activate.h"
 #include "dcl/dcl_rms.h"    /* rms_file_attr / dcl_rms_attr: ACP image probe (vms-5f0) */
-#include <poll.h>
-#include <sys/socket.h>
 #include "ovmx_cli.h"       /* the CLI callback channel (vms-cded) */
 
 /* STS$M_INHIB_MSG: a condition value whose message has already been
@@ -2070,7 +2068,7 @@ int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
  * LIB$DELETE_SYMBOL in an image run from DCL act on DCL's own tables, as on
  * VMS. dcl_cli_handler answers one request; an in-process image reaches it
  * through lib$$set_cli_handler (registered at session start), a fork()+execve()
- * image over the OVMX$CLI_FD socketpair DCL serves while it waits. The image's
+ * image through the OVMX$CLI_MBX mailboxes DCL serves while it waits. The image's
  * local symbols land at DCL's current command level (LIB$ Manual,
  * LIB$SET_SYMBOL).
  */
@@ -2129,42 +2127,99 @@ void dcl_cli_handler(const struct ovmx_cli_req *rq, struct ovmx_cli_rsp *rs)
 }
 
 /*
- * Wait for the fork()ed image to exit or stop -- the same waitid(WNOWAIT)
- * outcome the caller reads -- answering its CLI callbacks on `fd` meanwhile.
- * The image's end of the socketpair closes when it exits, so poll() wakes at
- * once; a stop (Ctrl-Y) is seen within the poll interval.
+ * THE CLI MAILBOXES (rd vms-6d9; ovmx_cli.h). The REQUEST mailbox is also the
+ * image task's termination mailbox ($CREPRC mbxunt, vms_kif_creprc_pcb_mbx),
+ * so everything DCL waits for while the image runs arrives in that one
+ * mailbox, written by the image (a CLI request) or by the executive (the
+ * termination message; the CTRL/Y message, struct vms_exec_mbxmsg). No
+ * executive -> no mailboxes (`ok` 0): the image's LIB$ CLI calls answer
+ * LIB$_NOCLI and DCL simply waits for the task.
  */
-static void dcl_cli_wait(int fd, pid_t pid, siginfo_t *si)
+struct dcl_cli_mbx {
+    int      ok;
+    uint32_t req_chan, rsp_chan, req_unit;
+    char     req_dev[32], rsp_dev[32];
+};
+
+/* The request mailbox while DCL waits on an image, for the CTRL/Y handler
+ * (dcl_main.c); 0 = none. */
+volatile sig_atomic_t dcl_wait_mbx_chan;
+
+static void dcl_cli_mbx_open(struct dcl_cli_mbx *m)
 {
-    for (;;) {
-        if (fd >= 0) {
-            struct pollfd p = { fd, POLLIN, 0 };
-            int r = poll(&p, 1, 100);
-            if (r > 0 && (p.revents & POLLIN)) {
-                struct ovmx_cli_req rq;
-                ssize_t n = read(fd, &rq, sizeof rq);
-                if (n == (ssize_t)sizeof rq) {
-                    struct ovmx_cli_rsp rs;
-                    struct sigaction ign, old;
-                    dcl_cli_handler(&rq, &rs);
-                    /* An image killed mid-call must not take DCL with it:
-                     * a SIGPIPE raised by this write is discarded. */
-                    memset(&ign, 0, sizeof ign);
-                    ign.sa_handler = SIG_IGN;
-                    sigaction(SIGPIPE, &ign, &old);
-                    (void)write(fd, &rs, sizeof rs);
-                    sigaction(SIGPIPE, &old, NULL);
-                    continue;
-                }
-                if (n == 0)
-                    fd = -1;              /* the image's end is closed */
-            } else if (r > 0) {
-                fd = -1;                  /* POLLHUP / POLLERR */
+    uint32_t rsp_unit = 0;
+    const uint32_t qsz = (uint32_t)sizeof(struct ovmx_cli_req);
+    const uint32_t rsz = (uint32_t)sizeof(struct ovmx_cli_rsp);
+
+    memset(m, 0, sizeof *m);
+    if (!(vms_kif_mbx_create(0, qsz, 4 * qsz, &m->req_chan, &m->req_unit,
+                             m->req_dev, sizeof m->req_dev) & 1))
+        return;
+    if (!(vms_kif_mbx_create(0, rsz, 2 * rsz, &m->rsp_chan, &rsp_unit,
+                             m->rsp_dev, sizeof m->rsp_dev) & 1)) {
+        (void)vms_kif_dassgn(m->req_chan);
+        return;
+    }
+    m->ok = 1;
+}
+
+/* Deassigning DCL's channels deletes the temporary mailboxes once the image
+ * holds none either (its channels go at its rundown). */
+static void dcl_cli_mbx_close(struct dcl_cli_mbx *m)
+{
+    if (!m->ok)
+        return;
+    dcl_wait_mbx_chan = 0;
+    (void)vms_kif_dassgn(m->req_chan);
+    (void)vms_kif_dassgn(m->rsp_chan);
+    m->ok = 0;
+}
+
+/*
+ * Wait for the fork()ed image to exit or stop -- the same waitid(WNOWAIT)
+ * outcome the caller reads -- answering its CLI callbacks meanwhile. With the
+ * mailboxes, DCL blocks in ONE executive mailbox read until the executive says
+ * the image task was deleted or interrupted by CTRL/Y; then the task's state is
+ * already settled (or settling: the deletion message precedes the zombie by
+ * the task's last instructions in the kernel) and a blocking waitid reads it.
+ * No host descriptor wait, no polling interval.
+ */
+static void dcl_cli_wait(struct dcl_cli_mbx *m, pid_t pid, siginfo_t *si)
+{
+    if (m->ok) {
+        static union {
+            struct ovmx_cli_req    rq;
+            struct vms_exec_mbxmsg em;
+        } msg;
+        dcl_wait_mbx_chan = (sig_atomic_t)m->req_chan;
+        for (;;) {
+            uint32_t len = 0;
+            uint32_t st = vms_kif_mbx_read(m->req_chan, &msg, sizeof msg, &len, 0);
+            if (!(st & 1))
+                break;                    /* the executive is gone: wait below */
+            if (len == (uint32_t)sizeof msg.rq) {
+                struct ovmx_cli_rsp rs;
+                dcl_cli_handler(&msg.rq, &rs);
+                /* A reply the image never reads (it died mid-call) must not
+                 * stall DCL: no resource wait for room. */
+                (void)vms_kif_mbx_write_ex(m->rsp_chan, &rs, sizeof rs, 1);
+                continue;
             }
+            /* The end or interrupt of THIS image task. A message about
+             * another task (an earlier, interrupted image whose mailbox unit
+             * this one reuses) is not this wait's. */
+            if (len == (uint32_t)sizeof msg.em &&
+                (msg.em.msgtyp == VMS_EXEC_MBXMSG_TERM ||
+                 msg.em.msgtyp == VMS_EXEC_MBXMSG_CTRLY) &&
+                msg.em.task_pid == (uint32_t)pid)
+                break;
+            /* anything else is no CLI request: ignored */
         }
+        dcl_wait_mbx_chan = 0;
+    }
+    for (;;) {
         memset(si, 0, sizeof *si);
-        int opts = WEXITED | WSTOPPED | WNOWAIT | (fd >= 0 ? WNOHANG : 0);
-        if (waitid(P_PID, (id_t)pid, si, opts) < 0) {
+        if (waitid(P_PID, (id_t)pid, si, WEXITED | WSTOPPED | WNOWAIT) < 0) {
             if (errno == EINTR)
                 continue;
             return;
@@ -2223,10 +2278,15 @@ static void dcl_exec_handshake_open(void)
 /* The image task's PCB, from DCL (rd vms-e50, vms-89bb): see dcl_cmd.h. DCL
  * and the forked task meet in the executive's creation record, as $CREPRC's
  * creator and task do (VMS_IOCTL_CREPRC_SYNC, ovmx_subprocess.h). */
-pid_t dcl_image_fork(uint32_t kind)
+pid_t dcl_image_fork_mbx(uint32_t kind, uint32_t mbxunt, uint32_t *pcb_status)
 {
     /* NEGCTL-ANCHORED (dcl-image-fork-host-pipe) */
-    return ovmx_creprc_fork(kind, NULL, NULL);
+    return ovmx_creprc_fork_mbx(kind, mbxunt, pcb_status, NULL);
+}
+
+pid_t dcl_image_fork(uint32_t kind)
+{
+    return dcl_image_fork_mbx(kind, 0, NULL);
 }
 
 /* Child side, after a failed execv: record the errno and leave. Never returns. */
@@ -2369,27 +2429,33 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         }
     }
 
-    /* The CLI callback channel the image's LIB$*_SYMBOL calls reach DCL by
-     * (vms-cded). No channel (socketpair failed) only means no callback. */
-    int cli_sv[2] = { -1, -1 };
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, cli_sv) != 0)
-        cli_sv[0] = cli_sv[1] = -1;
+    /* The CLI mailboxes the image's LIB$*_SYMBOL / LIB$DO_COMMAND calls reach
+     * DCL by, the request one also the image task's termination mailbox
+     * (vms-cded, rd vms-6d9). None (no executive) means no callback. */
+    struct dcl_cli_mbx cli;
+    dcl_cli_mbx_open(&cli);
 
     /* The exec handshake (vms-06c): whether the image was ENTERED at all. */
     dcl_exec_handshake_open();
 
     /* The task is DCL's own VMS process before it runs a single instruction
-     * of its own (dcl_image_fork, rd vms-e50 / vms-89bb). */
-    pid_t pid = dcl_image_fork(VMS_CREPRC_PCB_CONTINUE);
+     * of its own (dcl_image_fork, rd vms-e50 / vms-89bb), its PCB naming the
+     * request mailbox as its termination mailbox (rd vms-6d9). A refused PCB
+     * means no termination message will come for the task, so DCL does not
+     * wait for one. */
+    uint32_t pcb_st = SS$_ABORT;
+    pid_t pid = dcl_image_fork_mbx(VMS_CREPRC_PCB_CONTINUE, cli.ok ? cli.req_unit : 0,
+                                   &pcb_st);
+    if (pid > 0 && !(pcb_st & 1))
+        dcl_cli_mbx_close(&cli);
     if (pid == 0) {
         /* Child */
-        if (cli_sv[1] >= 0) {
-            int cfd = dup(cli_sv[1]);          /* dup: no FD_CLOEXEC */
-            if (cfd >= 0) {
-                char nb[16];
-                snprintf(nb, sizeof nb, "%d", cfd);
-                setenv(OVMX_CLI_FD_ENV, nb, 1);
-            }
+        if (cli.ok) {
+            char spec[sizeof cli.req_dev + sizeof cli.rsp_dev + 2];
+            snprintf(spec, sizeof spec, "%s,%s", cli.req_dev, cli.rsp_dev);
+            setenv(OVMX_CLI_MBX_ENV, spec, 1);
+        } else {
+            unsetenv(OVMX_CLI_MBX_ENV);
         }
         /*
          * IMAGE ACTIVATION CONTINUES THIS PROCESS (vms-4d7; rd vms-e50). On
@@ -2471,11 +2537,8 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         dcl_running_child = (sig_atomic_t)pid;
 
         siginfo_t si;
-        if (cli_sv[1] >= 0)
-            close(cli_sv[1]);
-        dcl_cli_wait(cli_sv[0], pid, &si);
-        if (cli_sv[0] >= 0)
-            close(cli_sv[0]);
+        dcl_cli_wait(&cli, pid, &si);
+        dcl_cli_mbx_close(&cli);
 
         if (si.si_code == CLD_STOPPED || si.si_code == CLD_TRAPPED) {
             /* Child stopped by Ctrl-Y — save for CONTINUE (do NOT reap it). */
@@ -2554,8 +2617,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
             return SS$_ABORT;
         }
     } else {
-        if (cli_sv[0] >= 0) close(cli_sv[0]);
-        if (cli_sv[1] >= 0) close(cli_sv[1]);
+        dcl_cli_mbx_close(&cli);
         dcl_error("DCL", 4, "CREPRC", "cannot create process");
         return SS$_ABORT;
     }

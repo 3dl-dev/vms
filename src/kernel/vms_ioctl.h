@@ -3196,6 +3196,38 @@ struct vms_creprc_pcb_args {
     uint64_t privs;                       /* in: DETACHED privileges           */
     uint32_t status;                      /* out: SS$_ status                  */
     uint32_t pgflquota;                    /* in: PQL$_PGFLQUOTA (F_QUOTA), pagelets */
+    uint32_t mbxunt;                      /* in: termination mailbox unit, 0 = none (rd vms-6d9) */
+    uint32_t pad;
+};
+
+/*
+ * THE TERMINATION MAILBOX (rd vms-6d9). `mbxunt` names a mailbox (MBA<mbxunt>:)
+ * the creator holds a channel to -- $CREPRC's mbxunt argument (OpenVMS System
+ * Services Reference, $CREPRC: a mailbox to receive a termination message
+ * when the created process is deleted); a unit the creator holds no channel
+ * to is refused SS$_NOSUCHDEV. When the process is deleted the EXECUTIVE
+ * writes one struct vms_exec_mbxmsg (msgtyp VMS_EXEC_MBXMSG_TERM) into it,
+ * after the process's resources are released.
+ *
+ * For DCL's image task (VMS_CREPRC_PCB_CONTINUE) the same mailbox also hears a
+ * CTRL/Y: when the terminal driver fires a CTRL/Y AST armed by another task
+ * of the image's VMS process (DCL), the executive stops the image task and
+ * writes msgtyp VMS_EXEC_MBXMSG_CTRLY -- so DCL, blocked reading the mailbox,
+ * learns of the interrupt from the executive, whatever the image does with
+ * substrate signals.
+ *
+ * OVMX DESIGN CHOICE (Rule 8): this record is OVMX's own, not the VMS ACC$
+ * termination message (MSG$_DELPRC + accounting), whose full layout is a
+ * follow-on for sys$creprc's mbxunt. finalsts sits at offset 4.
+ */
+#define VMS_EXEC_MBXMSG_TERM  1u
+#define VMS_EXEC_MBXMSG_CTRLY 2u
+struct vms_exec_mbxmsg {
+    uint16_t msgtyp;      /* VMS_EXEC_MBXMSG_*                         */
+    uint16_t has_status;  /* TERM: 1 iff the process recorded finalsts */
+    uint32_t finalsts;    /* TERM: the final condition, else SS$_ABORT */
+    uint32_t pid;         /* the process's VMS PID                     */
+    uint32_t task_pid;    /* its substrate task id                     */
 };
 #define VMS_IOCTL_CREPRC_PCB _IOWR(VMS_IOC_MAGIC, 0x9a, struct vms_creprc_pcb_args)
 
@@ -3790,7 +3822,9 @@ _Static_assert(sizeof(struct vms_pri_args) == 24,
                "vms_pri_args layout changed: VMS_IOCTL_PRI ABI break");
 _Static_assert(sizeof(struct vms_brkauth_args) == 8,
                "vms_brkauth_args layout changed: VMS_IOCTL_BRKAUTH ABI break");
-_Static_assert(sizeof(struct vms_creprc_pcb_args) == 64,
+_Static_assert(sizeof(struct vms_exec_mbxmsg) == 16,
+               "vms_exec_mbxmsg layout changed: termination mailbox ABI break");
+_Static_assert(sizeof(struct vms_creprc_pcb_args) == 72,
                "vms_creprc_pcb_args layout changed: VMS_IOCTL_CREPRC_PCB ABI break");
 _Static_assert(sizeof(struct vms_creprc_sync_args) == 32,
                "vms_creprc_sync_args layout changed: VMS_IOCTL_CREPRC_SYNC ABI break");

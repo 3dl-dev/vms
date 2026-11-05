@@ -11,11 +11,17 @@
  *   - in-process (imgact_activate in DCL's own process): DCL registers a
  *     handler with lib$$set_cli_handler(); the image's LIBVMS$SHR is DCL's
  *     resident one, so the call goes straight to DCL's symbol code;
- *   - fork()+execve() (a REGISTER_CONTINUE child sharing DCL's VMS PID): DCL
- *     hands the child one end of a socketpair, named by OVMX$CLI_FD in its
- *     environment, and services requests on the other end while it waits for
- *     the image -- the request/response below, one SOCK_SEQPACKET datagram
- *     each way.
+ *   - fork()+execve() (a CONTINUE task sharing DCL's VMS PID): DCL creates
+ *     two temporary mailboxes, a REQUEST and a REPLY mailbox, and names them
+ *     to the image by OVMX$CLI_MBX ("MBAn:,MBAm:") in its environment. The
+ *     image $ASSIGNs them and writes one request message, then reads one
+ *     reply (rd vms-6d9). The request mailbox is also the image task's
+ *     TERMINATION MAILBOX ($CREPRC mbxunt), so DCL's whole wait for the image
+ *     is one blocking mailbox read: a CLI request, the executive's
+ *     termination message, or the executive's CTRL/Y message (struct
+ *     vms_exec_mbxmsg) -- no host descriptor, no poll. With no executive
+ *     there is no mailbox: a named CLI that cannot be reached answers
+ *     LIB$_NOCLI.
  *
  * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): the wire layout is OVMX's own; VMS
  * documents the behaviour (the symbol lands in DCL's table), not a format.
@@ -25,7 +31,7 @@
 
 #include <stdint.h>
 
-#define OVMX_CLI_FD_ENV     "OVMX$CLI_FD"
+#define OVMX_CLI_MBX_ENV    "OVMX$CLI_MBX"
 
 #define OVMX_CLI_OP_SET     1
 #define OVMX_CLI_OP_GET     2

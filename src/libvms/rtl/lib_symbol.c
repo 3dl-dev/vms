@@ -7,8 +7,8 @@
  *
  * UNDER DCL (rd vms-cded) they act on DCL's own symbol tables, as on VMS: the
  * call goes back to the CLI that activated the image (ovmx_cli.h) -- directly
- * when the image runs inside DCL's process, over the OVMX$CLI_FD channel when
- * DCL fork()+execve()d it. A symbol the image sets is in DCL's table when the
+ * when the image runs inside DCL's process, through the OVMX$CLI_MBX request
+ * and reply mailboxes when DCL fork()+execve()d it (rd vms-6d9). A symbol the image sets is in DCL's table when the
  * image exits, and the image reads DCL's symbols ($STATUS, P1, a global).
  *
  * WITH NO CLI (an image started some other way -- the corpus guest, a
@@ -37,12 +37,11 @@
 #include <strings.h>
 #include <ctype.h>
 #include <pthread.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include "ssdef.h"
 #include "descrip.h"
 #include "lib$routines.h"
 #include "ovmx_cli.h"
+#include "vms_kif.h"     /* the executive mailboxes (rd vms-6d9) */
 #include "starlet.h"          /* sys$exit */
 #include "imgact_activate.h"  /* in-process image exit */
 /* Weak, as lib_misc.c's RMS seams: a LIBVMS$SHR composed without the image
@@ -64,44 +63,79 @@ void lib$$set_cli_handler(ovmx_cli_handler_t handler)
     cli_handler = handler;
 }
 
-/* The fork()+execve() channel DCL handed this image, or -1. */
-static int cli_fd(void)
+/* The fork()+execve() CLI DCL named to this image (rd vms-6d9): OVMX$CLI_MBX
+ * is "MBAn:,MBAm:", the request and reply mailboxes. 0: none named; 1: both
+ * assigned (executive channels in *req / *rsp); -1: named but unreachable --
+ * no executive, or the mailboxes are gone -- which is LIB$_NOCLI, never a
+ * private table posing as DCL's. */
+static int cli_mbx(uint32_t *req, uint32_t *rsp)
 {
-    static int fd = -2;
-    if (fd == -2) {
-        const char *e = getenv(OVMX_CLI_FD_ENV);
-        fd = -1;
+    static int state;            /* 0 until a CLI has been named */
+    static uint32_t req_chan, rsp_chan;
+
+    if (state == 0) {
+        const char *e = getenv(OVMX_CLI_MBX_ENV);
+        state = 0;
         if (e && *e) {
-            char *end;
-            long v = strtol(e, &end, 10);
-            if (*end == '\0' && v >= 0 && v < 65536 &&
-                fcntl((int)v, F_GETFD) >= 0) {
-                fd = (int)v;
-                /* Ours alone: a process this image starts is not DCL's image. */
-                (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+            /* Ours alone: a process this image starts is not DCL's image
+             * (copied out before the environment entry goes). */
+            char spec[72];
+            size_t el = strlen(e);
+            if (el >= sizeof spec)
+                el = sizeof spec - 1;
+            memcpy(spec, e, el);
+            spec[el] = '\0';
+            e = spec;
+            unsetenv(OVMX_CLI_MBX_ENV);
+            char rq[32], rs[32];
+            const char *comma = strchr(e, ',');
+            size_t n = comma ? (size_t)(comma - e) : 0;
+            state = -1;
+            if (comma && n > 0 && n < sizeof rq && strlen(comma + 1) < sizeof rs) {
+                memcpy(rq, e, n);
+                rq[n] = '\0';
+                strcpy(rs, comma + 1);
+                if ((vms_kif_mbx_assign(rq, &req_chan) & 1)) {
+                    if ((vms_kif_mbx_assign(rs, &rsp_chan) & 1))
+                        state = 1;
+                    else
+                        (void)vms_kif_dassgn(req_chan);
+                }
             }
         }
     }
-    return fd;
+    *req = req_chan;
+    *rsp = rsp_chan;
+    return state;
 }
 
 /* Ask the CLI. Returns 1 with *rsp filled, 0 when there is no CLI. */
 static int cli_call(const struct ovmx_cli_req *req, struct ovmx_cli_rsp *rsp)
 {
+    uint32_t qc, rc, got = 0;
+    int m;
+
     memset(rsp, 0, sizeof *rsp);
     if (cli_handler) {
         cli_handler(req, rsp);
         return 1;
     }
-    int fd = cli_fd();
-    if (fd < 0)
-        return 0;
     pthread_mutex_lock(&cli_mutex);
-    ssize_t n = write(fd, req, sizeof *req);
-    if (n == (ssize_t)sizeof *req)
-        n = read(fd, rsp, sizeof *rsp);
+    m = cli_mbx(&qc, &rc);
+    if (m == 0) {
+        pthread_mutex_unlock(&cli_mutex);
+        return 0;
+    }
+    if (m < 0) {
+        pthread_mutex_unlock(&cli_mutex);
+        rsp->status = LIB$_NOCLI;
+        return 1;
+    }
+    uint32_t st = vms_kif_mbx_write(qc, req, (uint32_t)sizeof *req);
+    if (st & 1)
+        st = vms_kif_mbx_read(rc, rsp, (uint32_t)sizeof *rsp, &got, 0);
     pthread_mutex_unlock(&cli_mutex);
-    if (n != (ssize_t)sizeof *rsp) {
+    if (!(st & 1) || got != (uint32_t)sizeof *rsp) {
         memset(rsp, 0, sizeof *rsp);
         rsp->status = LIB$_UNECLIERR;      /* the CLI went away mid-call */
     }

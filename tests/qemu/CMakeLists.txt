@@ -143,6 +143,14 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
        NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|aarch64|arm64)$")
         continue()
     endif()
+    # test_syssvc_decc_socket drives SOCKECHO.EXE (tests/qemu/sockecho/
+    # mk_sockecho_native.sh): cc'd and LINK.EXE-linked --use DECC$SHR on the same
+    # native backend, so the same arch condition applies for the same reason
+    # (rd vms-99f; TEMPORARY until LINK.EXE produces native Alpha images, vms-b2b).
+    if(_name STREQUAL "test_syssvc_decc_socket" AND
+       NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|aarch64|arm64)$")
+        continue()
+    endif()
     qemu_syssvc_add_test(${_name} ${_src})
 endforeach()
 

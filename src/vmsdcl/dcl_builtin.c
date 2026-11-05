@@ -19,6 +19,7 @@
 #include <ctype.h>
 #include <time.h>
 
+#include "dcl/dcl_out.h"
 #include "dcl/context.h"
 #include "dcl/parser.h"
 #include "dcl/cdu.h"
@@ -74,7 +75,7 @@ void dcl_put_sysmsg(uint32_t st)
 
     if (sys$getmsg(st, &len, &md, MSG$M_ALL, NULL) & 1) {
         msg[len] = '\0';
-        fprintf(stderr, "%s\n", msg);
+        dcl_err_printf("%s\n", msg);
     }
 }
 

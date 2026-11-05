@@ -491,7 +491,8 @@ unset(CMAKE_REQUIRED_LINK_OPTIONS)
 add_executable(test_rms_remote test_rms_remote.c
     ${CMAKE_SOURCE_DIR}/src/vmsrms/rms_remote.c
     ${CMAKE_SOURCE_DIR}/src/vmsrms/rms_dap.c
-    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_remote_file.c)
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_remote_file.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_out.c)
 target_include_directories(test_rms_remote PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsrms
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/include

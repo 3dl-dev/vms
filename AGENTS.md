@@ -9,9 +9,18 @@ instruction set to hunt for.
 
 An independent, open-source re-implementation of a DEC-style operating environment — the **DCL**
 command language, **Record Management Services (RMS)**, the VMS **system services**, and a kernel
-**executive** — with its own userland (no libc, no ld.so) running above the Linux or NetBSD kernel.
-Built clean-room from public documentation and observed behavior. Start with
-`docs/product-vision.md` and `docs/architecture.md`.
+**executive** — running above the Linux or NetBSD kernel. Built clean-room from public
+documentation and observed behavior. Start with `docs/product-vision.md` and `docs/architecture.md`.
+
+**The userland goal:** every OVMX program, service and runtime library does its work through
+VMS-authentic APIs — system services (`$QIO`, `$ASSIGN`, `$CREPRC`, ...), RMS, and DECC$SHR/LIB$
+entry points built on them — with no host C library and no host dynamic loader (images are activated
+by OVMX's own IMGACT, not `ld.so`).
+
+**Where it stands today:** that goal is not yet met. DECC$SHR is still built on musl, and DCL and
+some services still reach the host C library on several paths (the "Known open items" in
+`docs/RELEASE-NOTES-0.7-15.md`). Each remaining path is a work item labelled `libc-drop`, and the
+per-file DCL count is ratcheted downward by `tests/dcl/libc_io_baseline.txt`. Never add a new one.
 
 ## Build and test
 

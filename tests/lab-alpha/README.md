@@ -26,7 +26,8 @@ oracle**, nothing is disassembled or decompiled.
 | **Two-node Alpha VMScluster** | **forms**, then hits AXPbox bug #83 — see below |
 
 Node identity: `SCSNODE=ALPHA1`, `SCSSYSTEMID=2049` (DECnet 2.1), TZ GMT,
-ODS-5 with hard links, `SYSTEM` password `ovmxlab2026`.
+ODS-5 with hard links, `SYSTEM` password `$LAB_PW` (the `ovmx-lab-passwords` secret,
+see `tests/lab/README.md`; never committed, vms-aa2).
 
 Installed: OpenVMS 8.4, TCP/IP Services 5.7-13, CDSA, Kerberos, SSL, TDC_RT,
 Availability Manager, Binary Checker. **Not** installed: DECwindows Motif,
@@ -116,7 +117,7 @@ this correctly if you drive the console directly instead of through the FIFO.
 
 ### Logging in — prompt-synchronised, one step at a time
 
-Wait for `Username:`, send `SYSTEM`; wait for `Password:`, send `ovmxlab2026`.
+Wait for `Username:`, send `SYSTEM`; wait for `Password:`, send `$LAB_PW`.
 Batched or timed sends race the boot chatter and fail as `%LOGIN-F-CMDINPUT`,
 which is **never** actually a bad password — it means LOGINOUT read input it did
 not expect. (Lab-2's equivalent symptom is `%LOGIN-F-INVPWD`.) Then

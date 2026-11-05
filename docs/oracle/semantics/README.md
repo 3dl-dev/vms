@@ -51,7 +51,7 @@ the pod with the pump at `-d 0.15`, e.g. container command
     tools/oracle/semantic/capture.py vax   <pod> <family> --login <password>
     tools/oracle/semantic/capture.py alpha <pod> <family> --login <password>
 
-A freshly cloned Alpha golden disk asks SYSTEM for a new password at first login;
+A node whose SYSTEM password has expired asks for a new one at first login;
 `--login` changes it to the value of `$LAB_NEWPW` (VMS refuses the old one) and says so; lab passwords are never committed (vms-aa2). Capture twice and diff to check a new
 case is deterministic before committing.
 

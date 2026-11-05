@@ -76,7 +76,7 @@ $K sh -c "tcpdump -i br0 -w $L/formation.pcap -U -s 0 &"     # capture inside th
 ```
 
 **Login is prompt-synchronised** — wait for `Username:`, send `SYSTEM`, wait for
-`Password:`, send `system`. Batched sends race the boot chatter and fail as
+`Password:`, send `$LAB_PW` (SYSTEM on every vaxlab/alphalab node; see below). Batched sends race the boot chatter and fail as
 `%LOGIN-F-INVPWD`, which is *never* actually a bad password. Then
 `SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST`.
 
@@ -451,16 +451,22 @@ DECISIONS as text rather than running it: `labjoin_booted_plumbing` and
 ## Lab passwords (rd vms-aa2)
 
 Lab node passwords are operator facts, never committed. Benches and lab tools
-read them from the environment: `VAX_PW` / `VAXC_PASS` (VAXC SYSTEM), `DN_PW`
-(the DNTEST account a bench creates), `OVMX_PW` (the OVMX node), `SYSTEM_PW` /
-`NEW_SYSTEM_PW` (the `tools/lab-vax/build_nodeC_*` builders), `LAB_PW` /
-`LAB_NEWPW` (the oracle capture tools). The values live in the `ovmx-lab-passwords`
-secret in namespace `ovmx-lab`:
+read them from the environment, filled from the `ovmx-lab-passwords` secret in
+namespace `ovmx-lab`:
+
+| key | account |
+|---|---|
+| `LAB_PW` | SYSTEM, FIELD, SYSTEST on every vaxlab and alphalab node and on their goldens (`/lab/cluster/data/d0.dsk.3node-golden.bak`, `/lab/alpha/disks/alpha1-sys.golden.img`) |
+| `LAB_NEWPW` | the value `tools/oracle/semantic/capture.py --login` sets when a SYSTEM password has expired |
+| `VAX_PW` / `VAXC_PASS` | SYSTEM on a DECnet bench lab's VAX (the vms-6a4/vms-3106 benches) and on VAXC |
+| `SYSTEM_PW` / `NEW_SYSTEM_PW` | the `tools/lab-vax/build_nodeC_*` builders' SYSTEM/SYSTEST/FIELD password |
+| `DN_PW` | the DNTEST account a DECnet bench creates |
+| `OVMX_PW` | SYSTEM on the OVMX node a bench boots |
 
 ```bash
 export VAX_PW=$(kubectl -n ovmx-lab get secret ovmx-lab-passwords -o jsonpath='{.data.VAX_PW}' | base64 -d)
 ```
 
 `tools/ci/check_lab_password_literals.py` (Core Gates) fails on any committed
-literal it knows; the values that leaked onto main before 2026-11-04 were rotated
-on every lab disk.
+literal it knows; the values that leaked onto main before 2026-11-05 were rotated
+on the lab nodes and goldens above.

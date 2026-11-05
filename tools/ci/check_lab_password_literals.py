@@ -26,6 +26,7 @@ KNOWN = {
     "ace0313d107f6c85b24a884c57794b96842cd9de00a4f7b3bed5cdd7254333bd",  # lab VAXC SYSTEM
     "999715a5340fafe8cc114bc6df0f9b1b0f9a41c93cb5e2370a0c839c5355529c",  # lab DNTEST account
     "fd8e6f02ad9ac94c6d605b420c79397be4983e437c48f41ac1f91ff1f8d62eb4",  # oracle-capture SYSTEM
+    "3311a9c40a8bd8391debf1d4af3aacabb4085bb67b39b06b92fd938703c9923e",  # lab-Alpha golden SYSTEM (pre-2026-11-05)
 }
 WORD = re.compile(rb"[A-Za-z0-9]{6,32}")
 

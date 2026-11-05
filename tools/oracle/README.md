@@ -71,8 +71,8 @@ sync with the capture.
 - **a bare RETURN wakes OPA0:** — the boot parks at "SYSTEM job terminated"
   before the `Username:` prompt appears.
 - **prompt-synchronised login, one line at a time** — batched sends race the boot
-  chatter and fail as `%LOGIN-F-*` (never actually a bad password). VAX login is
-  `SYSTEM`/`system`; Alpha is `SYSTEM`/`ovmxlab2026`.
+  chatter and fail as `%LOGIN-F-*` (never actually a bad password). VAX and Alpha
+  login is `SYSTEM`/`$LAB_PW` (the `ovmx-lab-passwords` secret, vms-aa2).
 - **never touch a busy/shared pod** — the tool always scales UP its *own*
   isolated replica (`cur+1`, the new highest-index pod) and scales back after
   (`--keep-lab` to skip); it never drives `vaxlab-0/1` or a pod it did not create.

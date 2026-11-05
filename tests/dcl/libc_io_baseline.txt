@@ -4,7 +4,7 @@
 dcl_backup.c 6
 dcl_cmd_file.c 21
 dcl_cmd_misc.c 18
-dcl_cmd_process.c 14
+dcl_cmd_process.c 10
 dcl_cmd_set.c 2
 dcl_cmd_show.c 7
 dcl_editor.c 2

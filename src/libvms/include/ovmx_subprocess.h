@@ -11,7 +11,7 @@
  * creator -- while the child waits, before the child runs a single
  * instruction of its own. That is the same mechanism $CREPRC uses
  * (src/libvms/syssvc/sys_process.c) and DCL uses for its image tasks and PIPE
- * segments (src/vmsdcl/dcl_cmd_process.c, dcl_pcb_hold_*), made available to
+ * segments (src/vmsdcl/dcl_cmd_process.c, dcl_image_fork), made available to
  * every in-tree forker so none of them has its child register itself.
  *
  * ovmx_subprocess_fork() returns as fork() does: 0 in the child, the child's

@@ -27,6 +27,18 @@
  * and exits. Every system-call entry of every traced task is classified, and
  * the suite asserts NONE is pipe / pipe2 / socketpair.
  *
+ * DCL'S FORK-PATH IMAGE ACTIVATION (rd vms-89bb / vms-d8e1). A second traced
+ * subject is the shipped DCL.EXE itself, a VMS subprocess reading
+ *
+ *   $ DEFINE AUDDIR "/tmp/c416d/"
+ *   $ RUN AUDDIR:DCLRUN.EXE
+ *
+ * from SYS$INPUT, where DCLRUN.EXE is this binary in subject mode: DCL forks
+ * the image task, makes it its own VMS process (VMS_CREPRC_PCB_CONTINUE)
+ * through the creation record (dcl_image_fork), and the task execs the image.
+ * The suite asserts no pipe / pipe2 in DCL or the image task. (DCL's CLI
+ * callback socketpair is counted and printed, not asserted: rd vms-6d9.)
+ *
  * NOT VACUOUS. The trace must have seen the creation record in use (the
  * VMS_IOCTL_CREPRC_SYNC ioctls of both creations), both subject images
  * exec'd and ran, and both $CREPRC calls returned success with a process ID.
@@ -124,7 +136,9 @@ struct verdict {
     unsigned long total;       /* syscall entries seen */
     unsigned long sync_ioctls; /* VMS_IOCTL_CREPRC_SYNC: the creation record */
     unsigned execs;            /* PTRACE_EVENT_EXEC stops */
-    unsigned bad_pipe;         /* pipe / pipe2 / socketpair */
+    unsigned bad_pipe;         /* pipe / pipe2 */
+    unsigned bad_sockpair;     /* socketpair */
+    unsigned tasks;            /* tasks the tracee made (traced from birth) */
     char first_bad[160];
 };
 
@@ -145,7 +159,12 @@ static void classify(struct verdict *v, pid_t who, const struct sc *s)
     if (s->nr == SYS_pipe2) what = "pipe2";
 #endif
 #ifdef SYS_socketpair
-    if (s->nr == SYS_socketpair) what = "socketpair";
+    if (s->nr == SYS_socketpair) {
+        v->bad_sockpair++;
+        if (!v->first_bad[0])
+            snprintf(v->first_bad, sizeof v->first_bad, "socketpair in task %d", (int)who);
+        return;
+    }
 #endif
     if (what) {
         v->bad_pipe++;
@@ -189,7 +208,7 @@ static int trace_all(pid_t root, struct verdict *v, int bound_s)
         int k;
         for (k = 0; k < nt && tids[k] != p; k++)
             ;
-        if (k == nt && nt < MAXT) { tids[nt] = p; insys[nt] = 0; newborn[nt] = 1; nt++; live++; }
+        if (k == nt && nt < MAXT) { tids[nt] = p; insys[nt] = 0; newborn[nt] = 1; nt++; live++; v->tasks++; }
         if (WIFEXITED(st) || WIFSIGNALED(st)) {
             if (p == root) root_status = st;
             live--;
@@ -312,6 +331,19 @@ static void creator_main(void)
     _exit(bits);
 }
 
+/* The DCL.EXE under trace: the harness's staged copy, or OVMX_DCL. */
+static const char *pick_dcl(void)
+{
+    const char *e = getenv("OVMX_DCL");
+    if (e && *e) return e;
+    static const char *cand[] = {
+        "/run/ovmx-boot/DCL.EXE", "/tests/DCL.EXE", "/bin/DCL.EXE",
+    };
+    for (size_t i = 0; i < sizeof cand / sizeof cand[0]; i++)
+        if (access(cand[i], X_OK) == 0) return cand[i];
+    return cand[0];
+}
+
 /* The control child: it makes exactly the forbidden calls. */
 static void control_child(void)
 {
@@ -324,6 +356,13 @@ static void control_child(void)
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
+    {
+        /* The image DCL activates is named by its environment, so the subject
+         * is chosen whatever argv[0] DCL's path resolution hands it. */
+        const char *sub = getenv("OVMX_NOPIPE_SUBJECT");
+        if (sub && *sub)
+            return subject_main(sub);
+    }
     if (argc >= 1 && strncmp(argv[0], DIR_ "/", strlen(DIR_) + 1) == 0)
         return subject_main(basename(argv[0]));
 
@@ -423,8 +462,62 @@ int main(int argc, char **argv)
           "creator and created tasks met in the executive's creation record (VMS_IOCTL_CREPRC_SYNC)");
     /* negctl: creprc-handshake-host-pipe */
     /* negctl: subprocess-fork-host-pipe */
-    CHECK(v.bad_pipe == 0,
+    CHECK(v.bad_pipe == 0 && v.bad_sockpair == 0,
           "NO host pipe: no pipe/pipe2/socketpair across $CREPRC and the created processes' runs");
+
+    /* ---- 3. DCL's fork-path image activation (rd vms-89bb, vms-d8e1) ---- */
+    {
+        const char *dcl = pick_dcl();
+        char img[128];
+        snprintf(img, sizeof img, DIR_ "/DCLRUN.EXE");
+        unlink(img);
+        unlink(DIR_ "/DCLRUN.ran");
+        int ok = symlink(self, img) == 0;
+        int cf = open(DIR_ "/RUN.COM", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (cf >= 0) {
+            dprintf(cf, "$ DEFINE AUDDIR \"" DIR_ "/\"\n$ RUN AUDDIR:DCLRUN.EXE\n");
+            close(cf);
+        } else {
+            ok = 0;
+        }
+        CHECK(ok && access(dcl, X_OK) == 0,
+              "staged DCL's subject (AUDDIR:DCLRUN.EXE, this binary) and found DCL.EXE");
+
+        uint32_t dst = 0;
+        pid_t d = ovmx_fork_subprocess_st(&dst);
+        if (d == 0) {
+            int in = open(DIR_ "/RUN.COM", O_RDONLY);
+            if (in >= 0) { dup2(in, 0); close(in); }
+            unsetenv("OVMX$CLI_FD");    /* the subject is its own DCL, not a callback */
+            setenv("OVMX_NOPIPE_SUBJECT", "DCLRUN", 1);
+            ptrace(PTRACE_TRACEME, 0, 0, 0);
+            raise(SIGSTOP);
+            execl(dcl, "DCL.EXE", (char *)NULL);
+            _exit(127);
+        }
+        CHECK(d > 0 && (dst & 1), "the suite makes a VMS subprocess to run the traced DCL");
+        if (d > 0) {
+            int dstat = 0;
+            waitpid(d, &dstat, 0);
+            struct verdict dv;
+            memset(&dv, 0, sizeof dv);
+            int drs = trace_all(d, &dv, 60);
+            printf("  (DCL exit %s%d; syscalls %lu, creation-record ioctls %lu, tasks %u,"
+                   " execs %u; pipe %u, socketpair %u (vms-6d9)%s%s)\n",
+                   (drs >= 0 && WIFEXITED(drs)) ? "" : "signal/broken ",
+                   (drs >= 0 && WIFEXITED(drs)) ? WEXITSTATUS(drs) : -1,
+                   dv.total, dv.sync_ioctls, dv.tasks, dv.execs, dv.bad_pipe,
+                   dv.bad_sockpair, dv.first_bad[0] ? "; first: " : "", dv.first_bad);
+            CHECK(ran("DCLRUN"), "DCL's RUN activated the image and it ran");
+            CHECK(dv.tasks >= 1 && dv.execs >= 2,
+                  "the trace is not vacuous: DCL took the fork path (an image task, exec'd)");
+            CHECK(dv.sync_ioctls >= 7,
+                  "DCL and its image task met in the executive's creation record (VMS_IOCTL_CREPRC_SYNC)");
+            /* negctl: dcl-image-fork-host-pipe */
+            CHECK(dv.bad_pipe == 0,
+                  "DCL's fork-path RUN made NO host pipe (pipe/pipe2) -- DCL or its image task");
+        }
+    }
 
     printf("=== test_syssvc_creprc_nopipe_audit: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

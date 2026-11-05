@@ -653,6 +653,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
 
     char out_resv[1024] = "";
     const char *out_str = NULL;
+    int err_to_out = 0;                 /* SYS$ERROR follows SYS$OUTPUT */
     if (have_out) {
         /*
          * SYS$OUTPUT a VMS FILE (rd vms-691d): $CREPRC is handed the VMS name
@@ -667,8 +668,10 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
         dsc$strncpy(raw_out, output_file, sizeof(raw_out));
         if (raw_out[0] == '/' || spawn_is_device(output_file))
             snprintf(out_resv, sizeof(out_resv), "%s", raw_out);
-        else
+        else {
             spawn_full_spec(raw_out, out_resv, sizeof(out_resv));
+            err_to_out = 1;
+        }
         out_str = out_resv;
     }
 
@@ -680,12 +683,15 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
     uint32_t cst = sys$creprc(&vms_pid, &img_d,
                               in_d.dsc$a_pointer  ? &in_d  : NULL,
                               out_d.dsc$a_pointer ? &out_d : NULL,
-                              /* SYS$ERROR: the output file when there is one
+                              /* SYS$ERROR: the output FILE when there is one
                                * -- the subprocess's error messages are filed
                                * there, not shown on the creator's terminal
-                               * (VAX V7.3, SPAWN/OUTPUT=S2.LOG FOOBAR) --
-                               * otherwise inherited. */
-                              out_d.dsc$a_pointer ? &out_d : NULL,
+                               * (VAX V7.3, SPAWN/OUTPUT=S2.LOG FOOBAR). With a
+                               * device as SYS$OUTPUT (/OUTPUT=NL:) it is
+                               * inherited: VAX V7.3 shows the subprocess's
+                               * REPLY "User SYSTEM has been notified" on the
+                               * creator's terminal (keystroke BC.READ W). */
+                              err_to_out ? &out_d : NULL,
                               NULL, NULL,     /* prvadr/quota: inherit creator */
                               prcnam,         /* B0: APPLIED, not discarded */
                               0, 0, 0,

@@ -4,7 +4,7 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "DCL PIPE segments as subprocesses DCL creates (cmd_pipe -> dcl_pcb_hold_release_kind, VMS_IOCTL_CREPRC_PCB SUBPROCESS, rd vms-1f8)";;
+        facility)     echo "DCL PIPE segments as subprocesses DCL creates (cmd_pipe -> dcl_image_fork, VMS_IOCTL_CREPRC_PCB SUBPROCESS, rd vms-1f8)";;
         targets)      echo "vmsdcl/dcl_cmd_process.c";;
         suites_red)   echo "test_syssvc_dcl_pipe";;
         blind_suites) echo "";;
@@ -22,6 +22,6 @@ EOF
 }
 
 defect_apply() {
-        sed -i 's|^                                            VMS_CREPRC_PCB_SUBPROCESS);$|                                            0xFFu); /* NEGCTL dcl-pipe-segment-not-created */|' "$_file"
+        sed -i 's|^        pid_t pid = dcl_image_fork(VMS_CREPRC_PCB_SUBPROCESS);$|        pid_t pid = dcl_image_fork(0xFFu); /* NEGCTL dcl-pipe-segment-not-created */|' "$_file"
     :
 }

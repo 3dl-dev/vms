@@ -16,9 +16,10 @@
 # on a node whose activator is staged elsewhere) behind a message that said the
 # program had run and failed.
 #
-# DCL now carries the real execve() errno out of the child over a CLOEXEC
-# handshake pipe (dcl_exec_handshake_*) and reports the OpenVMS CLI's own
-# activation-failure condition instead.
+# DCL now carries the real execve() errno out of the child in its activation
+# cell -- one shared page of DCL's own memory, no host pipe (dcl_exec_handshake_*,
+# rd vms-89bb) -- and reports the OpenVMS CLI's own activation-failure condition
+# instead.
 #
 # The subject here is a file DCL will happily resolve and hand to execve(), and
 # which execve() then refuses because the interpreter it names does not exist --

@@ -61,7 +61,7 @@ fired (see "Known gap" below; diagnostic-only, does not affect this harness's ac
 which grades Node A's own SCA+ACP, not Node C's).
 
 **`probe-run3-vaxc-login-sda.log`** + **`vaxc-fulldump-run3.txt`** — a one-off, throwaway probe
-script (not added to the repo) that logs into VAXC (`SYSTEM`/`OVMXCLUSTER1`) and runs SDA's
+script (not added to the repo) that logs into VAXC (`SYSTEM`, password from `$VAX_PW`) and runs SDA's
 `SHOW CLUSTER` directly (plain `SHOW CLUSTER` needs a terminal-table entry this minimally-
 tailored disk doesn't carry — `%SMG-F-UNDTERNOS`, matched the interactive build session).
 Taken ~15s after Node A's own CNXMAN first appeared: VAXC's CSB list still shows **`Nodes 1`**

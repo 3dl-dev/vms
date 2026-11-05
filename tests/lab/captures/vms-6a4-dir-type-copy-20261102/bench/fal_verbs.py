@@ -19,9 +19,9 @@ from node import Node
 
 W = os.environ.get('W', '/tmp/vms6a4-lab')
 OUT, IMG = sys.argv[1], sys.argv[2]
-VAX_PW = 'OVMXCLUSTER1'          # lab test SYSTEM account on VAXC
-DN_PW = 'DNTESTPW1'              # a throwaway unprivileged account this bench creates
-OVMX_PW = 'MANAGER'
+VAX_PW = os.environ['VAX_PW']            # lab test SYSTEM account on VAXC
+DN_PW = os.environ['DN_PW']              # a throwaway unprivileged account this bench creates
+OVMX_PW = os.environ['OVMX_PW']
 MCAST = '230.0.0.33:12433'
 os.makedirs(OUT, exist_ok=True)
 EVENTS = open(os.path.join(OUT, 'events.log'), 'a')

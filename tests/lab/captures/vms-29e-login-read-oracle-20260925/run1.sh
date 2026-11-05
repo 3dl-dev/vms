@@ -66,7 +66,7 @@ waitp "$POD" 'Timeout period expired|expired' 120 && log "B: timeout seen"
 sleep 10
 sendraw "$POD" $'SYSTEM\r'; log "B: typed SYSTEM<CR> in one burst"
 sleep 15
-if tailc "$POD" 6 | grep -q 'Password:'; then log "B: Password: reached from the one burst"; sendraw "$POD" $'system\r'; sleep 20;
+if tailc "$POD" 6 | grep -q 'Password:'; then log "B: Password: reached from the one burst"; sendraw "$POD" "${LAB_PW:?set LAB_PW (vms-aa2)}"$'\r'; sleep 20;
 else log "B: no Password: after the burst"; fi
 log "B: done"
 kexec "$POD" "cat $(lb "$POD").log" > "$OUTDIR/vax1.console.raw" 2>/dev/null

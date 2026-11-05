@@ -48,7 +48,7 @@ for i in $(seq 1 60); do clean "$T/vax1.log" | grep -qE 'Username:' && { log "va
 bootchk "$T/vax1.log" vax1
 printf "SYSTEM\r" > "$T/vax1.log.in"; sleep 4
 for i in $(seq 1 10); do clean "$T/vax1.log" | tail -3 | grep -qE 'Password:' && break; sleep 2; done
-printf 'system\r' > "$T/vax1.log.in"; sleep 12
+printf '%s\r' "${LAB_PW:?set LAB_PW (ovmx-lab-passwords secret, vms-aa2)}" > "$T/vax1.log.in"; sleep 12
 for i in $(seq 1 10); do
   printf 'WRITE SYS$OUTPUT "LOGIN_OK"\r' > "$T/vax1.log.in"; sleep 3
   clean "$T/vax1.log" | grep -q 'LOGIN_OK' && { log "vax1 DCL reached"; break; }

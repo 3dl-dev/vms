@@ -23,8 +23,8 @@ $ SET HOST VAXCSET HOST VAXC
 
 Username: SYSTEMSYSTEM
 
-Password: OVMXCLUSTER121-Oct-2026 16:23:18 DECNETD-I-HELLOSENT, endnode-hello circuit ETH-0 seq=3 bytes=60
-OVMXCLUSTER1
+Password: XX21-Oct-2026 16:23:18 DECNETD-I-HELLOSENT, endnode-hello circuit ETH-0 seq=3 bytes=60
+XX
 
  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAXC
     Last interactive login on Wednesday, 21-OCT-2026 16:19

@@ -22,7 +22,7 @@ from node import Node
 W = os.environ.get('W', '/tmp/vms3106-lab')
 OUT = sys.argv[1]
 VARIANTS = sys.argv[2].split(',')
-VAX_PW = 'OVMXCLUSTER1'          # the lab test account (already in tests/lab captures)
+VAX_PW = os.environ['VAX_PW']    # the lab test account (vms-aa2: never a literal)
 MCAST = '230.0.0.31:12431'
 os.makedirs(OUT, exist_ok=True)
 EVENTS = open(os.path.join(OUT, 'events.log'), 'a')

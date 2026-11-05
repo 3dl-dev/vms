@@ -180,8 +180,8 @@ interpretations — 32-bit on both fields, no quadword widening.
 ## Reproduce
 
 Alpha: `kubectl -n ovmx-lab scale sts/alphalab --replicas=1`, then drive
-`alpha1` per `tests/lab-alpha/README.md` (login `SYSTEM` / `ovmxlab2026`), run
+`alpha1` per `tests/lab-alpha/README.md` (login `SYSTEM` / `$LAB_PW`), run
 the commands above. VAX: `kubectl -n ovmx-lab scale sts/vaxlab --replicas=3`,
-drive `vaxlab-2` / `vax1` per `tests/lab/README.md` (login `SYSTEM` / `system`).
+drive `vaxlab-2` / `vax1` per `tests/lab/README.md` (login `SYSTEM` / `$LAB_PW`).
 Scale both back to their prior replica counts when done (AXPbox and SIMH each
 burn a host core per emulated node).

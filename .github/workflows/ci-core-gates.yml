@@ -138,6 +138,12 @@ jobs:
         run: |
           python3 tools/ci/check_docker_mirror.py --selftest
           python3 tools/ci/check_docker_mirror.py .
+      # vms-aa2: lab node passwords are operator facts read from the environment;
+      # the rotated literals that once leaked onto main never come back.
+      - name: check_lab_password_literals.py (no lab node password is committed)
+        run: |
+          python3 tools/ci/check_lab_password_literals.py --selftest
+          python3 tools/ci/check_lab_password_literals.py .
       # vms-839: every GCC/binutils port patch carries a classified row in
       # docs/selfhost/gcc-patch-audit.md, and no row outlives its patch.
       - name: check_patch_audit.sh (every port patch is classified in the audit)

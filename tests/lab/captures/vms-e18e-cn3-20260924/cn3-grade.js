@@ -38,7 +38,7 @@ const BOOT_ORDER = (process.env.BOOT_ORDER || 'C,A,B').split(',');
 const OUT_DIR = process.env.OUT_DIR || __dirname;
 
 const OVMX_USER = 'SYSTEM', OVMX_PASS = 'MANAGER';
-const VAXC_USER = 'SYSTEM', VAXC_PASS = process.env.VAXC_PASS || 'OVMXCLUSTER1';
+const VAXC_USER = 'SYSTEM', VAXC_PASS = process.env.VAXC_PASS;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(`[${new Date().toISOString().slice(11, 19)}]`, ...a);

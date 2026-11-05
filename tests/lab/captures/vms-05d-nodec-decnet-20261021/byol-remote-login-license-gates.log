@@ -9,8 +9,8 @@ $ SET HOST VAXCSET HOST VAXC
 Username: SYSTEM21-Oct-2026 16:15:05 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
 SYSTEM
 
-Password: OVMXCLUSTER121-Oct-2026 16:15:06 DECNETD-I-HELLOSENT, endnode-hello circuit ETH-0 seq=3 bytes=60
-OVMXCLUSTER1
+Password: XX21-Oct-2026 16:15:06 DECNETD-I-HELLOSENT, endnode-hello circuit ETH-0 seq=3 bytes=60
+XX
 
 No license is active for this software product%REM-S-END, control returned to node OVMXA::
 21-Oct-2026 16:15:07 DECNETD-I-LINKEND, outbound link to 1.965 (object 42) for process 10000005 ended (its process disconnected)
@@ -25,8 +25,8 @@ $ SET HOST VAXCSET HOST VAXC
 
 Username: SYSTEMSYSTEM
 
-Password: OVMXCLUSTER121-Oct-2026 16:18:34 DECNETD-I-HELLOSENT, endnode-hello circuit ETH-0 seq=3 bytes=60
-OVMXCLUSTER1
+Password: XX21-Oct-2026 16:18:34 DECNETD-I-HELLOSENT, endnode-hello circuit ETH-0 seq=3 bytes=60
+XX
 
 DEC VMSCLUSTER license is not active%REM-S-END, 
 == run 4: VAXC console (security audit of the refused remote login): ==

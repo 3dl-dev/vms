@@ -254,9 +254,11 @@ objcopy --strip-debug /src/kernel/vms.ko /initramfs/lib/modules/vms.ko || exit 4
 # teeth, discovered when showterm-width-page-fabricated (vmsdcl/dcl_cmd_show.c)
 # rebuilt and linked correctly (confirmed with `strings` on the fresh
 # build-static/bin/DCL.EXE) but produced zero effect on test_syssvc_showterm's
-# output. Both copies must be the SAME freshly rebuilt binary.
+# output. Both names must be the SAME freshly rebuilt binary.
 cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || exit 4
-cp /src/repo/build-static/bin/DCL.EXE /initramfs/tests/DCL.EXE || exit 4
+# The second name is a hard link to the first, as tests/qemu/Dockerfile stages
+# it: the SAME binary by construction, and held once in the initramfs budget.
+ln -f /initramfs/bin/DCL.EXE /initramfs/tests/DCL.EXE || exit 4
 
 # INITIALIZE.EXE at /tests/INITIALIZE.EXE (test_syssvc_initialize's
 # OVMX_INITIALIZE default, staged there by tests/qemu/Dockerfile) -- the SAME

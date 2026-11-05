@@ -23,12 +23,19 @@
 #include <stdint.h>
 #include <sys/wait.h>
 
+#include "starlet.h"
 #include "ssdef.h"
+#include "rms/rms.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 #define DCL_PATH "/bin/DCL.EXE"
+/* The procedure and its data live on the ODS-2 volume, written through RMS:
+ * DCL reaches a file -- @ and a file SYS$INPUT alike -- only through RMS, never
+ * a host path (libc-drop vms-20c94, vms-5cc). */
+#define RW_UNIT   "VDA0:"
+#define DIR       RW_UNIT "[OVMXDIR]"
 
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
@@ -75,6 +82,38 @@ static int run_dcl(const char *script, char *out, size_t outsz)
     return 0;
 }
 
+/* A text file of variable-length carriage-return records, one $PUT a line. */
+static int put_lines(const char *spec, const char *const *lines)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_org = FAB$C_SEQ;
+    fab.fab$b_rfm = FAB$C_VAR;
+    fab.fab$b_rat = FAB$M_CR;
+    fab.fab$b_fac = FAB$M_PUT;
+    if (!(sys$create(&fab, 0, 0) & 1)) return -1;
+    struct RAB rab = cc$rms_rab;
+    rab.rab$l_fab = &fab;
+    if (!(sys$connect(&rab, 0, 0) & 1)) { sys$close(&fab, 0, 0); return -1; }
+    uint32_t st = RMS$_NORMAL;
+    for (; *lines && (st & 1); lines++) {
+        rab.rab$l_rbf = (char *)*lines;
+        rab.rab$w_rsz = (uint16_t)strlen(*lines);
+        st = sys$put(&rab, 0, 0);
+    }
+    uint32_t cst = sys$close(&fab, 0, 0);
+    return ((st & 1) && (cst & 1)) ? 0 : -1;
+}
+
+static void erase(const char *spec)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    (void)sys$erase(&fab, 0, 0);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -89,37 +128,37 @@ int main(void)
         return 1;
     }
 
-    char dir[] = "/tmp/ovmx_rd_XXXXXX";
-    if (!mkdtemp(dir)) { printf("  FAIL: mkdtemp\n"); return 1; }
-    char path[128];
-    snprintf(path, sizeof path, "%s/F.TXT", dir);
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0 || write(fd, "one\n", 4) != 4) { printf("  FAIL: write F.TXT\n"); return 1; }
-    close(fd);
-    snprintf(path, sizeof path, "%s/T.COM", dir);
-    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    const char com[] =
-        "$ DEFINE SYS$INPUT \"F.TXT\"\n"
-        "$ READ/END_OF_FILE=EOFL/ERROR=ERRL SYS$INPUT REC\n"
-        "$ WRITE SYS$OUTPUT \"first=''REC'\"\n"
-        "$ READ/END_OF_FILE=EOFL/ERROR=ERRL SYS$INPUT REC\n"
-        "$ WRITE SYS$OUTPUT \"NOT-REACHED\"\n"
-        "$ EXIT\n"
-        "$ EOFL:\n"
-        "$ WRITE SYS$OUTPUT \"at-eof\"\n"
-        "$ EXIT\n"
-        "$ ERRL:\n"
-        "$ WRITE SYS$OUTPUT \"wrong-err\"\n";
-    if (fd < 0 || write(fd, com, sizeof com - 1) != (ssize_t)(sizeof com - 1)) {
-        printf("  FAIL: write T.COM\n"); return 1;
-    }
-    close(fd);
+    CHECK($VMS_STATUS_SUCCESS(vms_kif_acp_mount(RW_UNIT)), "MOUNT " RW_UNIT " (writable)");
+    unsigned pid = (unsigned)getpid() % 100000u;
+    char fspec[64], tspec[64], fname[32], tname[32];
+    snprintf(fname, sizeof fname, "RDF%u.TXT", pid);
+    snprintf(tname, sizeof tname, "RDT%u.COM", pid);
+    snprintf(fspec, sizeof fspec, DIR "%s", fname);
+    snprintf(tspec, sizeof tspec, DIR "%s", tname);
+    static const char *const data[] = { "one", NULL };
+    char define[96];
+    snprintf(define, sizeof define, "$ DEFINE SYS$INPUT \"%s\"", fname);
+    const char *const com[] = {
+        define,
+        "$ READ/END_OF_FILE=EOFL/ERROR=ERRL SYS$INPUT REC",
+        "$ WRITE SYS$OUTPUT \"first=''REC'\"",
+        "$ READ/END_OF_FILE=EOFL/ERROR=ERRL SYS$INPUT REC",
+        "$ WRITE SYS$OUTPUT \"NOT-REACHED\"",
+        "$ EXIT",
+        "$ EOFL:",
+        "$ WRITE SYS$OUTPUT \"at-eof\"",
+        "$ EXIT",
+        "$ ERRL:",
+        "$ WRITE SYS$OUTPUT \"wrong-err\"",
+        NULL };
+    CHECK(put_lines(fspec, data) == 0, "data file written through RMS");
+    CHECK(put_lines(tspec, com) == 0, "procedure written through RMS");
 
     static char out1[16384], out2[16384];
     char script[512];
 
     snprintf(script, sizeof script,
-             "DEFINE RDDIR \"%s\"\nSET DEFAULT RDDIR:[000000]\n@T.COM\n", dir);
+             "SET DEFAULT " DIR "\n@%s\n", tname);
     CHECK(run_dcl(script, out1, sizeof out1) == 0, "DCL ran the READ label procedure");
     printf("  ---- label procedure ----\n%s  ---- end ----\n", out1);
     CHECK(strstr(out1, "first=one") != NULL, "READ/END_OF_FILE=.. /ERROR=.. still reads a record normally");
@@ -132,7 +171,7 @@ int main(void)
     CHECK(strstr(out1, "wrong-err") == NULL, "end of file went to /END_OF_FILE, not /ERROR");
 
     snprintf(script, sizeof script,
-             "DEFINE RDDIR \"%s\"\nSET DEFAULT RDDIR:[000000]\nREAD/BOGUS SYS$INPUT X\nREAD/DELETE SYS$INPUT X\n", dir);
+             "SET DEFAULT " DIR "\nREAD/BOGUS SYS$INPUT X\nREAD/DELETE SYS$INPUT X\n");
     CHECK(run_dcl(script, out2, sizeof out2) == 0, "DCL ran READ with unknown qualifiers");
     printf("  ---- bogus qualifiers ----\n%s  ---- end ----\n", out2);
     /* negctl: dcl-read-quals-accept-all */
@@ -142,9 +181,8 @@ int main(void)
     CHECK(strstr(out2, "\\DELETE\\") != NULL,
           "READ/DELETE (not implemented) is rejected as %DCL-W-IVQUAL, not silently accepted");
 
-    snprintf(path, sizeof path, "%s/F.TXT", dir); unlink(path);
-    snprintf(path, sizeof path, "%s/T.COM", dir); unlink(path);
-    rmdir(dir);
+    erase(fspec);
+    erase(tspec);
     printf("=== test_syssvc_dcl_read: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

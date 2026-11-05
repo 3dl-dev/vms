@@ -74,6 +74,7 @@
 #include "starlet.h"
 #include "descrip.h"
 #include "ssdef.h"
+#include "rms/rms.h"
 #include "prcdef.h"
 #include "prvdef.h"
 #include "vms_kif.h"
@@ -119,20 +120,24 @@ static int fail = 0;
 
 #define HOLD_SCRIPT     "/tmp/ovmx47b_hold.sh"
 #define SVC_LOG         "/tmp/ovmx47b_svc.log"
-#define SVC_STARTUP_COM "/tmp/OVMX47B_SVC_STARTUP.COM"
-#define SYSTARTUP_COM   "/tmp/OVMX47B_SYSTARTUP.COM"
-#define UIC_COM         "/tmp/OVMX47B_UIC.COM"
-#define SUBP_COM        "/tmp/OVMX47B_SUBP.COM"
-#define PRIO_COM        "/tmp/OVMX47B_PRIO.COM"
-#define PLAIN_COM       "/tmp/OVMX47B_PLAIN.COM"
-#define NODBG_COM       "/tmp/OVMX47B_NODBG.COM"
-#define DEBUG_COM       "/tmp/OVMX47B_DEBUG.COM"
-#define ABPRIO_COM      "/tmp/OVMX47B_ABPRIO.COM"
-#define ABPROC_COM      "/tmp/OVMX47B_ABPROC.COM"
-#define ABNODBG_COM     "/tmp/OVMX47B_ABNODBG.COM"
-#define ABDET_COM       "/tmp/OVMX47B_ABDET.COM"
-#define DETPRIO_COM     "/tmp/OVMX47B_DETPRIO.COM"
-#define AMBIG_COM       "/tmp/OVMX47B_AMBIG.COM"
+/* The procedures live on the ODS-2 volume, written through RMS: DCL reaches a
+ * procedure (@, or the one it is started on) only through RMS, never a host
+ * path (libc-drop vms-20c94). */
+#define PROC_UNIT       "VDA0:"
+#define SVC_STARTUP_COM PROC_UNIT "[OVMXDIR]OVMX47B_SVC_STARTUP.COM"
+#define SYSTARTUP_COM   PROC_UNIT "[OVMXDIR]OVMX47B_SYSTARTUP.COM"
+#define UIC_COM         PROC_UNIT "[OVMXDIR]OVMX47B_UIC.COM"
+#define SUBP_COM        PROC_UNIT "[OVMXDIR]OVMX47B_SUBP.COM"
+#define PRIO_COM        PROC_UNIT "[OVMXDIR]OVMX47B_PRIO.COM"
+#define PLAIN_COM       PROC_UNIT "[OVMXDIR]OVMX47B_PLAIN.COM"
+#define NODBG_COM       PROC_UNIT "[OVMXDIR]OVMX47B_NODBG.COM"
+#define DEBUG_COM       PROC_UNIT "[OVMXDIR]OVMX47B_DEBUG.COM"
+#define ABPRIO_COM      PROC_UNIT "[OVMXDIR]OVMX47B_ABPRIO.COM"
+#define ABPROC_COM      PROC_UNIT "[OVMXDIR]OVMX47B_ABPROC.COM"
+#define ABNODBG_COM     PROC_UNIT "[OVMXDIR]OVMX47B_ABNODBG.COM"
+#define ABDET_COM       PROC_UNIT "[OVMXDIR]OVMX47B_ABDET.COM"
+#define DETPRIO_COM     PROC_UNIT "[OVMXDIR]OVMX47B_DETPRIO.COM"
+#define AMBIG_COM       PROC_UNIT "[OVMXDIR]OVMX47B_AMBIG.COM"
 /* A "did the image run at all?" witness: the script's only job is to
  * leave a file behind, so a refusal that still ran the image cannot hide
  * behind having produced no output. */
@@ -163,6 +168,41 @@ static int write_file(const char *path, const char *text, mode_t mode)
     return 0;
 }
 
+/* A procedure as variable-length carriage-return records, one $PUT a line. */
+static int write_com_rms(const char *spec, const char *text)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_org = FAB$C_SEQ;
+    fab.fab$b_rfm = FAB$C_VAR;
+    fab.fab$b_rat = FAB$M_CR;
+    fab.fab$b_fac = FAB$M_PUT;
+    if (!(sys$create(&fab, 0, 0) & 1)) return -1;
+    struct RAB rab = cc$rms_rab;
+    rab.rab$l_fab = &fab;
+    if (!(sys$connect(&rab, 0, 0) & 1)) { sys$close(&fab, 0, 0); return -1; }
+    uint32_t st = RMS$_NORMAL;
+    while (*text && (st & 1)) {
+        const char *nl = strchr(text, '\n');
+        size_t n = nl ? (size_t)(nl - text) : strlen(text);
+        rab.rab$l_rbf = (char *)text;
+        rab.rab$w_rsz = (uint16_t)n;
+        st = sys$put(&rab, 0, 0);
+        text += n + (nl ? 1 : 0);
+    }
+    uint32_t cst = sys$close(&fab, 0, 0);
+    return ((st & 1) && (cst & 1)) ? 0 : -1;
+}
+
+static void erase_rms(const char *spec)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    (void)sys$erase(&fab, 0, 0);
+}
+
 /*
  * The fixtures, in the shape SYS$MANAGER:SYSTARTUP_VMS.COM documents.
  *
@@ -180,7 +220,9 @@ static int write_fixtures(void)
     if (write_file(HOLD_SCRIPT, "sleep 600\n", 0644) != 0)
         return -1;
 
-    if (write_file(SVC_STARTUP_COM,
+    if (!$VMS_STATUS_SUCCESS(vms_kif_acp_mount(PROC_UNIT)))
+        return -1;
+    if (write_com_rms(SVC_STARTUP_COM,
                    "$! Service startup procedure (test fixture, vms-47b)\n"
                    "$ RUN/DETACHED"
                    "/PROCESS_NAME=" SVC_NAME
@@ -188,15 +230,15 @@ static int write_fixtures(void)
                    "/OUTPUT=\"" SVC_LOG "\""
                    "/ERROR=\"" SVC_LOG "\""
                    " \"" SUBJECT_IMAGE "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
     /* Stands in for SYS$MANAGER:SYSTARTUP_VMS.COM: the site procedure
      * that invokes each service's own startup procedure. */
-    if (write_file(SYSTARTUP_COM,
+    if (write_com_rms(SYSTARTUP_COM,
                    "$! Site-specific startup (test fixture, vms-47b)\n"
-                   "$ @\"" SVC_STARTUP_COM "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ @" SVC_STARTUP_COM "\n"
+                   "$ EXIT\n") != 0)
         return -1;
 
     /* The witness image for the refusal phases: it does nothing but
@@ -209,7 +251,7 @@ static int write_fixtures(void)
     /* P7's procedure: RUN/DETACHED with a UIC. Written exactly as an
      * operator would type it, INCLUDING the comma, because the comma is half
      * of what the lexer must get right. */
-    if (write_file(UIC_COM,
+    if (write_com_rms(UIC_COM,
                    "$! /UIC is now honoured on the detached path (vms-d31d).\n"
                    "$! Written with the comma an operator types, so the DCL\n"
                    "$! lexer's split of \"[300,1]\" is exercised end to end.\n"
@@ -219,37 +261,37 @@ static int write_fixtures(void)
                    "/OUTPUT=\"" SVC_LOG "\""
                    "/ERROR=\"" SVC_LOG "\""
                    " \"" SUBJECT_IMAGE "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
     /* P8's procedure: process qualifiers WITHOUT /DETACHED. On OpenVMS
      * this asks for a subprocess (HELP RUN Process, quoted in
      * src/libvms/include/ovmx_status.h); OVMX has no subprocess form. */
-    if (write_file(SUBP_COM,
+    if (write_com_rms(SUBP_COM,
                    "$! subprocess-qualifier refusal (test fixture, vms-47b)\n"
                    "$ RUN/PROCESS_NAME=" SUBP_NAME
                    " \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
     /* P8, second case: a process qualifier that is NOT one of the four
      * RUN/DETACHED honours. The oracle's rule is "any of the qualifiers
      * except /UIC or /DETACHED", so refusing a list of four would leave
      * this one silently discarded -- the same defect, narrower. */
-    if (write_file(PRIO_COM,
+    if (write_com_rms(PRIO_COM,
                    "$! non-enumerated process qualifier (test fixture, vms-47b)\n"
                    "$ RUN/PRIORITY=4"
                    " \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
     /* P8's positive control: the SAME image, run by the SAME DCL, with
      * no process qualifier at all. This must still work -- a refusal
      * that swallowed plain RUN would pass every assertion above. */
-    if (write_file(PLAIN_COM,
+    if (write_com_rms(PLAIN_COM,
                    "$! plain RUN still runs the image (test fixture, vms-47b)\n"
                    "$ RUN \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
     /* P9's procedures: the OTHER RUN topic. /NODEBUG and /DEBUG are RUN
@@ -258,16 +300,16 @@ static int write_fixtures(void)
      * two and nothing else -- so neither of them asks for a subprocess,
      * whatever the RUN (Process) topic says about "any of the
      * qualifiers". */
-    if (write_file(NODBG_COM,
+    if (write_com_rms(NODBG_COM,
                    "$! RUN (Image) /NODEBUG still runs the image (vms-47b)\n"
                    "$ RUN/NODEBUG \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
-    if (write_file(DEBUG_COM,
+    if (write_com_rms(DEBUG_COM,
                    "$! RUN (Image) /DEBUG names the absent debugger (vms-47b)\n"
                    "$ RUN/DEBUG \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
     /* ---------------------------------------------------------------
@@ -277,24 +319,24 @@ static int write_fixtures(void)
      *   "RUN/AST_LIMIT=100/BUFFER=.../DETACH/PRIV=ALL/PRIO=4/UIC=[1,4]"
      * -- i.e. ABBREVIATED. See P10's own comment for the oracle.
      * --------------------------------------------------------------- */
-    if (write_file(ABPRIO_COM,
+    if (write_com_rms(ABPRIO_COM,
                    "$! abbreviated process qualifier, no /DETACHED (vms-47b)\n"
                    "$ RUN/PRIO=4"
                    " \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
-    if (write_file(ABPROC_COM,
+    if (write_com_rms(ABPROC_COM,
                    "$! abbreviated /PROCESS_NAME, no /DETACHED (vms-47b)\n"
                    "$ RUN/PROC=" ABBR_NAME
                    " \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
-    if (write_file(ABNODBG_COM,
+    if (write_com_rms(ABNODBG_COM,
                    "$! abbreviated RUN (Image) qualifier still runs (vms-47b)\n"
                    "$ RUN/NODEB \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
     /* mx_start.com's own spelling of the one form OVMX honours.
@@ -308,7 +350,7 @@ static int write_fixtures(void)
      * DCL -- and the created process holds that pipe open for its
      * whole 600-second life, which would make run_dcl() block instead
      * of returning a verdict. A control that hangs is a flaky gate. */
-    if (write_file(ABDET_COM,
+    if (write_com_rms(ABDET_COM,
                    "$! abbreviated /DETACHED + /PROCESS_NAME (vms-47b)\n"
                    "$ RUN/DETACH"
                    "/PROC=" DETABBR_NAME
@@ -316,12 +358,12 @@ static int write_fixtures(void)
                    "/OUTPUT=\"" SVC_LOG "\""
                    "/ERROR=\"" SVC_LOG "\""
                    " \"" SUBJECT_IMAGE "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
     /* The vms-69e case: /DETACHED plus a process qualifier NOTHING in
      * run_detached() reads. */
-    if (write_file(DETPRIO_COM,
+    if (write_com_rms(DETPRIO_COM,
                    "$! /DETACHED + a qualifier nobody reads (vms-47b/vms-69e)\n"
                    "$ RUN/DETACHED/PRIORITY=4"
                    "/PROCESS_NAME=" DETPRIO_NAME
@@ -329,16 +371,16 @@ static int write_fixtures(void)
                    "/OUTPUT=\"" SVC_LOG "\""
                    "/ERROR=\"" SVC_LOG "\""
                    " \"" SUBJECT_IMAGE "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
     /* An abbreviation that resolves to more than one RUN qualifier:
      * /PR is PRIORITY, PRIVILEGES and PROCESS_NAME. */
-    if (write_file(AMBIG_COM,
+    if (write_com_rms(AMBIG_COM,
                    "$! ambiguous abbreviation (vms-47b)\n"
                    "$ RUN/PR=4"
                    " \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
+                   "$ EXIT\n") != 0)
         return -1;
 
     return 0;
@@ -1424,20 +1466,20 @@ int main(void)
     clear_touch();
     unlink(HOLD_SCRIPT);
     unlink(TOUCH_SCRIPT);
-    unlink(UIC_COM);
-    unlink(SUBP_COM);
-    unlink(PRIO_COM);
-    unlink(PLAIN_COM);
-    unlink(NODBG_COM);
-    unlink(DEBUG_COM);
-    unlink(ABPRIO_COM);
-    unlink(ABPROC_COM);
-    unlink(ABNODBG_COM);
-    unlink(ABDET_COM);
-    unlink(DETPRIO_COM);
-    unlink(AMBIG_COM);
-    unlink(SVC_STARTUP_COM);
-    unlink(SYSTARTUP_COM);
+    erase_rms(UIC_COM);
+    erase_rms(SUBP_COM);
+    erase_rms(PRIO_COM);
+    erase_rms(PLAIN_COM);
+    erase_rms(NODBG_COM);
+    erase_rms(DEBUG_COM);
+    erase_rms(ABPRIO_COM);
+    erase_rms(ABPROC_COM);
+    erase_rms(ABNODBG_COM);
+    erase_rms(ABDET_COM);
+    erase_rms(DETPRIO_COM);
+    erase_rms(AMBIG_COM);
+    erase_rms(SVC_STARTUP_COM);
+    erase_rms(SYSTARTUP_COM);
     unlink(SVC_LOG);
 
     printf("=== test_syssvc_startup_service: %d passed, %d failed ===\n",

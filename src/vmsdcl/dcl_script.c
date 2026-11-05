@@ -23,6 +23,8 @@ extern int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
                             char *linux_path, size_t path_size);
 extern void dcl_error(const char *facility, int severity, const char *ident,
                       const char *fmt, ...);
+extern void dcl_error_cont(const char *facility, int severity, const char *ident,
+                           const char *fmt, ...);
 extern void dcl_set_status(struct dcl_context *ctx, int status);
 
 /*
@@ -232,6 +234,11 @@ static int dcl_run_proc_lines(struct dcl_context *ctx, struct dcl_pf *fp)
         {
             int lvl = ctx->proc_depth;
 
+            if (ctx->status_handled) {         /* it branched to its own label */
+                ctx->status_handled = 0;
+                continue;
+            }
+
             /* SET NOON: DCL does not test $STATUS at all -- no default exit and
              * no ON action -- so execution continues past any error. This is the
              * fix for the flagged bug where SET NOON suppressed only the ON
@@ -398,7 +405,6 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
     return status;
 }
 
-#if defined(OVMX_HAVE_ACP)
 #include "dcl/dcl_rms.h"     /* dcl_rms_read_open/read_record/read_close (ACP) */
 
 /*
@@ -434,7 +440,7 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
  * (no ACP-mounted SYS$DISK) working exactly as before.
  */
 static struct dcl_pf *dcl_proc_open_acp(struct dcl_context *ctx, const char *spec,
-                                        int *failed)
+                                        int *failed, uint32_t *ost)
 {
     static const char *exts[] = { "", ".COM" };
     for (unsigned e = 0; e < 2; e++) {
@@ -444,8 +450,11 @@ static struct dcl_pf *dcl_proc_open_acp(struct dcl_context *ctx, const char *spe
 
         snprintf(trial, sizeof(trial), "%s%s", spec, exts[e]);
         r = dcl_rms_read_open(ctx, trial, &rst);
-        if (!r)
-            continue;                       /* try .COM, then passthrough */
+        if (!r) {
+            if (ost && (e == 0 || rst != RMS$_FNF || *ost == 0))
+                *ost = rst;                 /* the reason, if both fail */
+            continue;                       /* try the .COM default type */
+        }
 
         /*
          * Stage the text in MEMORY, not a tmpfile() (rd vms-97c2): a tmpfs
@@ -499,7 +508,6 @@ static struct dcl_pf *dcl_proc_open_acp(struct dcl_context *ctx, const char *spe
     }
     return NULL;
 }
-#endif /* OVMX_HAVE_ACP */
 
 /*
  * Execute a command procedure (.COM file).
@@ -525,65 +533,17 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
     while (slen > 0 && (spec[slen - 1] == ' ' || spec[slen - 1] == '\t'))
         spec[--slen] = '\0';
 
-    dcl_resolve_path(ctx, spec, linux_path, sizeof(linux_path));
-
-    /* Try to open the file. vms-5f0: FIRST reach it the VMS way -- through RMS /
-     * the Files-11 ACP on the mounted ODS-2 SYS$DISK -- so a procedure that
-     * lives only on the volume (JOB_CONTROL_STARTUP.COM et al) is found. Fall
-     * back to the /vms passthrough fopen chain below only when the ACP has no
-     * such device/file (host builds without /dev/vms), preserving those tests. */
-    FILE *fp = NULL;
+    /* The procedure is reached the VMS way only: RMS $OPEN/$GET through the
+     * Files-11 ACP, the spec then the .COM default type. A file RMS cannot
+     * reach is %DCL-E-OPENIN with the RMS reason -- never a host fopen() of a
+     * /vms passthrough path (libc-drop vms-20c94). */
     struct dcl_pf *pf = NULL;
-#if defined(OVMX_HAVE_ACP)
     int acp_failed = 0;
-    pf = dcl_proc_open_acp(ctx, spec, &acp_failed);
+    uint32_t rms_st = 0;
+    pf = dcl_proc_open_acp(ctx, spec, &acp_failed, &rms_st);
     if (acp_failed)
         return SS$_INSFMEM;
-    if (pf) {
-        strncpy(linux_path, spec, sizeof(linux_path) - 1);
-        linux_path[sizeof(linux_path) - 1] = '\0';
-    }
-#endif
-    if (!pf && !fp)
-        fp = fopen(linux_path, "r");
-
-    /* If not found, try adding .com extension */
-    if (!pf && !fp) {
-        char with_ext[1024];
-        snprintf(with_ext, sizeof(with_ext), "%s.com", linux_path);
-        fp = fopen(with_ext, "r");
-        if (!fp) {
-            /* Also try uppercase .COM */
-            snprintf(with_ext, sizeof(with_ext), "%s.COM", linux_path);
-            fp = fopen(with_ext, "r");
-        }
-        if (fp) {
-            strncpy(linux_path, with_ext, sizeof(linux_path) - 1);
-        }
-    }
-
-    /* Still not found: the ODS-2 namespace is case-folded but the Linux backing
-     * store is case-sensitive, so vmsfs_to_linux_path lowercases a leaf that does
-     * not exist yet -- e.g. `@SYS$STARTUP:STARTUP` -> ".../startup", missing the
-     * real STARTUP.COM. Case-resolve the base and the two .COM spellings against
-     * the actual directory entries. (vms-615) */
-    if (!pf && !fp) {
-        extern int vmsfs_resolve_path_case(const char *, char *, size_t);
-        const char *exts[] = { "", ".com", ".COM" };
-        char cand[1024], resolved[1024];
-        for (unsigned e = 0; e < 3 && !fp; e++) {
-            snprintf(cand, sizeof(cand), "%s%s", linux_path, exts[e]);
-            if (vmsfs_resolve_path_case(cand, resolved, sizeof(resolved)) == 0) {
-                fp = fopen(resolved, "r");
-                if (fp) {
-                    strncpy(linux_path, resolved, sizeof(linux_path) - 1);
-                    linux_path[sizeof(linux_path) - 1] = '\0';
-                }
-            }
-        }
-    }
-
-    if (!pf && !fp) {
+    if (!pf) {
         /* keystroke ERR.DCL E7, VAX V7.3: the full spec, default type .COM,
          * and the RMS reason on its own line -- rd vms-c174 */
         extern void dcl_message_spec(struct dcl_context *, const char *,
@@ -591,16 +551,15 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
         char full[1100];
         dcl_message_spec(ctx, spec, ".COM", full, sizeof full);
         dcl_error("DCL", 2, "OPENIN", "error opening %s as input", full);
-        fprintf(stderr, "-RMS-E-FNF, file not found\n");
-        return SS$_NOSUCHFILE;
-    }
-    if (!pf) {
-        pf = dcl_pf_from_file(fp);      /* the passthrough stdio stream */
-        if (!pf) {
-            fclose(fp);
-            return SS$_INSFMEM;
+        if (rms_st == 0 || rms_st == RMS$_FNF) {
+            dcl_error_cont("RMS", 2, "FNF", "file not found");
+            return SS$_NOSUCHFILE;
         }
+        dcl_error_cont("RMS", 2, "STATUS", "RMS status %%X%08X", rms_st);
+        return (int)rms_st;
     }
+    strncpy(linux_path, spec, sizeof(linux_path) - 1);
+    linux_path[sizeof(linux_path) - 1] = '\0';
 
     /* Push procedure onto stack */
     if (ctx->proc_depth >= DCL_MAX_NEST - 1) {

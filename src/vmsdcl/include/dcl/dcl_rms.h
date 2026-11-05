@@ -76,6 +76,8 @@ struct dcl_rms_writer *dcl_rms_write_supersede(struct dcl_context *ctx, const ch
                                                uint8_t rfm, uint8_t rat, uint16_t mrs,
                                                uint32_t *rms_status);
 /* $PUT one record (len bytes). Returns 0 on success, -1 on error. */
+struct dcl_rms_writer *dcl_rms_write_append(struct dcl_context *ctx, const char *spec,
+                                            uint32_t *rms_status);
 int      dcl_rms_write_record(struct dcl_rms_writer *w, const char *buf, size_t len);
 /* The RMS status of the last $PUT (and its secondary value, STV, to *stv). */
 uint32_t dcl_rms_write_status(const struct dcl_rms_writer *w, uint32_t *stv);

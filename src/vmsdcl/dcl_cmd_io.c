@@ -30,10 +30,21 @@
 #include "msgdef.h"
 #include "vmsfs/filespec.h"
 
+/* The name a READ/WRITE acts on: a channel OPENed on SYS$OUTPUT/SYS$ERROR/
+ * SYS$INPUT acts on that process-permanent logical name (vms-28db). */
+static const char *dcl_chan_ppf_name(const struct dcl_context *ctx, const char *name)
+{
+    static const char *const ppf_names[] = { NULL, "SYS$OUTPUT", "SYS$ERROR", "SYS$INPUT" };
+    for (int i = 0; i < 16; i++)
+        if (ctx->channels[i].ppf && strcasecmp(ctx->channels[i].name, name) == 0)
+            return ppf_names[ctx->channels[i].ppf];
+    return name;
+}
+
 /* vms-5f0: a channel slot is free when it holds no stream and no RMS handle. */
 static int dcl_chan_free(const struct dcl_context *ctx, int i)
 {
-    return ctx->channels[i].fp == NULL &&
+    return ctx->channels[i].ppf == 0 &&
            ctx->channels[i].reader == NULL &&
            ctx->channels[i].writer == NULL;
 }
@@ -42,9 +53,15 @@ static int dcl_chan_free(const struct dcl_context *ctx, int i)
  * reader/writer) and clear it. */
 static void dcl_chan_release(struct dcl_context *ctx, int i)
 {
-    if (ctx->channels[i].fp)     { fclose(ctx->channels[i].fp); ctx->channels[i].fp = NULL; }
+    ctx->channels[i].ppf = 0;    /* the process-permanent file itself stays open */
     if (ctx->channels[i].reader) { dcl_rms_read_close(ctx->channels[i].reader); ctx->channels[i].reader = NULL; }
     if (ctx->channels[i].writer) { (void)dcl_rms_write_close(ctx->channels[i].writer); ctx->channels[i].writer = NULL; }
+    /* OPEN defined the channel name as a process logical name; CLOSE removes it */
+    if (ctx->channels[i].name[0] && ctx->channels[i].named) {
+        lnm_manager_t *mgr = lnm_get_manager();
+        if (mgr) lnm_delete(mgr, LNM_PROCESS_TABLE, ctx->channels[i].name, LNM_MODE_SUPER);
+    }
+    ctx->channels[i].named = 0;
     ctx->channels[i].name[0] = '\0';
 }
 
@@ -221,7 +238,7 @@ static int dcl_logical_is_terminal(const char *equiv)
 /* Cached SYS$INPUT stream for a file-redirected SYS$INPUT, so successive
  * READ SYS$INPUT calls advance through the file rather than re-reading line 1
  * (vms-f89). Keyed by resolved path; re-opened when the redirection changes. */
-static FILE *g_sysinput_fp;
+static struct dcl_rms_reader *g_sysinput_rd;   /* RMS $OPEN/$GET, never stdio (vms-5cc) */
 static char  g_sysinput_key[1024];
 
 /*
@@ -465,6 +482,37 @@ int cmd_deassign(struct dcl_command *cmd)
 /*                     I/O Channel Operations                          */
 /* ================================================================== */
 
+extern int dcl_find_label(struct dcl_pf *fp, const char *label);
+
+/* Completion statuses VMS gives the file verbs (VAX V7.3, docs/oracle/semantics/fio/) */
+#define DCL_CLI_NORMAL   0x00030001u   /* READ, DELETE */
+#define DCL_CLI_UNDFIL   0x00038188u   /* the channel was not opened by DCL */
+#define DCL_STS_INHIB    0x10000000u
+
+/* A failed command that names its own label (/ERROR=, /END_OF_FILE=) goes
+ * there instead of taking the error action; $STATUS stays the failure. */
+static int dcl_branch_handled(struct dcl_context *ctx, const char *label)
+{
+    if (!label || !*label || ctx->proc_depth < 0)
+        return 0;
+    struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
+    if (dcl_find_label(fp, label) != 0) {
+        dcl_error("DCL", 2, "USGOTO", "target of GOTO not found - \\%s\\", label);
+        return 0;
+    }
+    ctx->status_handled = 1;
+    return 1;
+}
+
+static void dcl_chan_name_logical(struct dcl_context *ctx, int slot, const char *equiv)
+{
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (!mgr) return;
+    uint32_t st = lnm_create(mgr, LNM_PROCESS_TABLE, ctx->channels[slot].name, equiv,
+                             0, LNM_MODE_SUPER);
+    ctx->channels[slot].named = (st == SS$_NORMAL || st == SS$_SUPERSEDE);
+}
+
 /*
  * OPEN - Open a file for READ, WRITE, or APPEND.
  */
@@ -490,12 +538,15 @@ int cmd_open(struct dcl_command *cmd)
 
     /* Find a free channel slot (or reuse one already bound to this name). */
     int slot = -1;
+    int reopened = 0;
     for (int i = 0; i < 16; i++) {
         if (!dcl_chan_free(ctx, i) &&
             strcasecmp(ctx->channels[i].name, channel_name) == 0) {
-            /* Already open - close and reuse */
+            /* Already open - close and reuse; VMS leaves $STATUS %X00030001
+             * (docs/oracle/semantics/fio/ FIO.OPEN.TWICE) */
             dcl_chan_release(ctx, i);
             slot = i;
+            reopened = 1;
             break;
         }
     }
@@ -521,9 +572,11 @@ int cmd_open(struct dcl_command *cmd)
     /* SYS$OUTPUT:/SYS$ERROR:/SYS$INPUT: name the process's standard streams,
      * not RMS files -- OPEN connects a channel to the current output/error/input
      * (VSI OpenVMS DCL Dictionary, OPEN). MMK's subprocess protocol OPENs
-     * SYS$OUTPUT: to write its end-of-command $STATUS marker there. dup() the
-     * underlying fd so a later CLOSE of the channel frees only this channel's
-     * handle, never the process's real standard stream. */
+     * SYS$OUTPUT: to write its end-of-command $STATUS marker there. The
+     * channel records which process-permanent file it is on, and READ/WRITE
+     * on it act on that logical name -- a file through RMS, a mailbox
+     * through the stream bound to it, the terminal through $QIO -- so CLOSE
+     * frees only the channel, never the process-permanent file (vms-28db). */
     {
         char norm[64];
         size_t nk = 0;
@@ -532,20 +585,13 @@ int cmd_open(struct dcl_command *cmd)
         norm[nk] = '\0';
         if (nk > 0 && norm[nk - 1] == ':') norm[--nk] = '\0';
 
-        int stdfd = -1;
-        if      (strcmp(norm, "SYS$OUTPUT") == 0) stdfd = STDOUT_FILENO;
-        else if (strcmp(norm, "SYS$ERROR")  == 0) stdfd = STDERR_FILENO;
-        else if (strcmp(norm, "SYS$INPUT")  == 0) stdfd = STDIN_FILENO;
+        int ppf = 0;
+        if      (strcmp(norm, "SYS$OUTPUT") == 0) ppf = 1;
+        else if (strcmp(norm, "SYS$ERROR")  == 0) ppf = 2;
+        else if (strcmp(norm, "SYS$INPUT")  == 0) ppf = 3;
 
-        if (stdfd >= 0) {
-            int dfd = dup(stdfd);
-            FILE *sfp = (dfd >= 0) ? fdopen(dfd, fmode) : NULL;
-            if (!sfp) {
-                if (dfd >= 0) close(dfd);
-                dcl_error("RMS", 2, "FNF", "error opening %s", filespec);
-                return SS$_NOSUCHFILE;
-            }
-            ctx->channels[slot].fp = sfp;
+        if (ppf) {
+            ctx->channels[slot].ppf = ppf;
             ctx->channels[slot].mode = mode;
             strncpy(ctx->channels[slot].name, channel_name,
                     sizeof(ctx->channels[0].name) - 1);
@@ -553,7 +599,7 @@ int cmd_open(struct dcl_command *cmd)
             for (size_t i = 0; ctx->channels[slot].name[i]; i++)
                 ctx->channels[slot].name[i] =
                     (char)toupper((unsigned char)ctx->channels[slot].name[i]);
-            return SS$_NORMAL;
+            return reopened ? (int)DCL_CLI_NORMAL : SS$_NORMAL;
         }
     }
 
@@ -568,21 +614,20 @@ int cmd_open(struct dcl_command *cmd)
     uint32_t rms_st = RMS$_NORMAL;
     if (mode == 0) {
         struct dcl_rms_reader *r = dcl_rms_read_open(ctx, filespec, &rms_st);
-        if (!r) {
-            dcl_error("RMS", 2, "FNF", "error opening %s", filespec);
-            return SS$_NOSUCHFILE;
-        }
+        if (!r) goto open_failed;
         ctx->channels[slot].reader = r;
+    } else if (mode == 2) {
+        /* OPEN/APPEND: $PUT lands at the end of the file (a missing one is created) */
+        struct dcl_rms_writer *w = dcl_rms_write_append(ctx, filespec, &rms_st);
+        if (!w) goto open_failed;
+        ctx->channels[slot].writer = w;
     } else {
-        /* WRITE / APPEND create the file through RMS ($CREATE writes a new
+        /* WRITE creates the file through RMS ($CREATE writes a new
          * version onto the ODS-2 volume): variable-length carriage-return
          * records, the text-file shape DCL WRITE appends lines to. */
         struct dcl_rms_writer *w =
             dcl_rms_write_create(ctx, filespec, FAB$C_VAR, FAB$M_CR, 0, &rms_st);
-        if (!w) {
-            dcl_error("RMS", 2, "FNF", "error opening %s", filespec);
-            return SS$_NOSUCHFILE;
-        }
+        if (!w) goto open_failed;
         ctx->channels[slot].writer = w;
     }
     ctx->channels[slot].mode = mode;
@@ -594,8 +639,28 @@ int cmd_open(struct dcl_command *cmd)
         ctx->channels[slot].name[i] =
             (char)toupper((unsigned char)ctx->channels[slot].name[i]);
     }
+    dcl_chan_name_logical(ctx, slot, filespec);
 
-    return SS$_NORMAL;
+    return reopened ? (int)DCL_CLI_NORMAL : SS$_NORMAL;
+
+open_failed: {
+        /* %DCL-E-OPENIN/OPENOUT and the RMS reason; $STATUS is the RMS status with
+         * STS$M_INHIB_MSG (the message is out): FNF = %X10018292 (VAX V7.3,
+         * FIO.OPEN.MISSING). /ERROR=label goes there instead of ending the level. */
+        char full[1100];
+        extern void dcl_message_spec(struct dcl_context *, const char *,
+                                     const char *, char *, size_t);
+        dcl_message_spec(ctx, filespec, NULL, full, sizeof full);
+        dcl_error("DCL", 2, mode == 0 ? "OPENIN" : "OPENOUT",
+                  "error opening %s as %s", full, mode == 0 ? "input" : "output");
+        if (rms_st == RMS$_FNF)
+            dcl_error_cont("RMS", 2, "FNF", "file not found");
+        else
+            dcl_error_cont("RMS", 2, "STATUS", "RMS status %%X%08X", rms_st);
+        int ost = (int)(rms_st | DCL_STS_INHIB);
+        dcl_branch_handled(ctx, dcl_qualifier_value(cmd, "ERROR"));
+        return ost;
+    }
 }
 
 /*
@@ -614,14 +679,14 @@ int cmd_close(struct dcl_command *cmd)
     for (int i = 0; i < 16; i++) {
         if (!dcl_chan_free(ctx, i) &&
             strcasecmp(ctx->channels[i].name, cmd->params[0]) == 0) {
+            int was_file = ctx->channels[i].reader || ctx->channels[i].writer;
             dcl_chan_release(ctx, i);
-            return SS$_NORMAL;
+            return was_file ? (int)RMS$_NORMAL : SS$_NORMAL;
         }
     }
 
-    dcl_error("DCL", 2, "IVLOGNAM",
-              "channel %s is not open", cmd->params[0]);
-    return SS$_BADPARAM;
+    dcl_error("DCL", 0, "UNDFIL", "file has not been opened by DCL - check logical name");
+    return (int)DCL_CLI_UNDFIL;
 }
 
 /*
@@ -629,8 +694,6 @@ int cmd_close(struct dcl_command *cmd)
  */
 
 static int read_impl(struct dcl_command *cmd);
-
-extern int dcl_find_label(struct dcl_pf *fp, const char *label);
 
 /*
  * READ with /END_OF_FILE=label and /ERROR=label (VSI DCL Dictionary, READ):
@@ -647,16 +710,14 @@ int cmd_read(struct dcl_command *cmd)
     if (st & 1)
         return st;
 
-    int eof = (st == (int)SS$_ENDOFFILE || st == (int)RMS$_EOF);
+    int eof = (st == (int)RMS$_EOF);
     const char *label = eof ? dcl_qualifier_value(cmd, "END_OF_FILE") : NULL;
     if (!label || !*label)
         label = dcl_qualifier_value(cmd, "ERROR");
-    if (label && *label && ctx->proc_depth >= 0) {
-        struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
-        if (dcl_find_label(fp, label) == 0)
-            return SS$_NORMAL;
-        dcl_error("DCL", 2, "USGOTO", "target of GOTO not found - \\%s\\", label);
-    }
+    /* At end of file the /END_OF_FILE= (else /ERROR=) label takes control
+     * and no message is shown; without one it is %RMS-E-EOF. */
+    if (!dcl_branch_handled(ctx, label) && eof)
+        dcl_error("RMS", 2, "EOF", "end of file detected");
     return st;
 }
 
@@ -670,10 +731,10 @@ static int read_impl(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    const char *channel_name = cmd->params[0];
+    const char *channel_name = dcl_chan_ppf_name(ctx, cmd->params[0]);
     const char *symbol_name = cmd->params[1];
 
-    /* Find the channel (stdio stream OR RMS reader). */
+    /* Find the channel (an RMS reader, or one on a process-permanent file). */
     int ch = -1;
     for (int i = 0; i < 16; i++) {
         if (!dcl_chan_free(ctx, i) &&
@@ -682,7 +743,6 @@ static int read_impl(struct dcl_command *cmd)
             break;
         }
     }
-    FILE *fp = (ch >= 0) ? ctx->channels[ch].fp : NULL;
 
     /* Check for /PROMPT qualifier (read from SYS$INPUT) */
     const char *prompt = dcl_qualifier_value(cmd, "PROMPT");
@@ -703,10 +763,8 @@ static int read_impl(struct dcl_command *cmd)
             dcl_error("RMS", 0, "TMO", "timeout period expired");
             return RMS$_TMO;
         }
-        if (n < 0) {
-            dcl_error("RMS", 2, "EOF", "end of file detected");
-            return RMS$_EOF;
-        }
+        if (n < 0)
+            return RMS$_EOF;            /* cmd_read reports it unless a label takes it */
         dcl_sym_set(symbol_name, buf, DCL_SYM_LOCAL);
         return SS$_NORMAL;
     }
@@ -719,44 +777,35 @@ static int read_impl(struct dcl_command *cmd)
      * SYS$INPUT is the process-permanent logical name for the default input
      * stream (VSI OpenVMS DCL Dictionary).
      */
-    if (!fp && strcasecmp(channel_name, "SYS$INPUT") == 0) {
+    if (strcasecmp(channel_name, "SYS$INPUT") == 0) {
         char equiv[1024];
-        int redirected = 0;
-        char linux_path[1024];
         if (dcl_translate_logical("SYS$INPUT", equiv, sizeof(equiv)) == 0 &&
                 equiv[0] && !dcl_logical_is_terminal(equiv)) {
-            dcl_resolve_path(ctx, equiv, linux_path, sizeof(linux_path));
-            redirected = 1;
-        }
-
-        if (redirected) {
-            if (!g_sysinput_fp || strcmp(g_sysinput_key, linux_path) != 0) {
-                if (g_sysinput_fp)
-                    fclose(g_sysinput_fp);
-                g_sysinput_fp = fopen(linux_path, "r");
-                strncpy(g_sysinput_key, linux_path, sizeof(g_sysinput_key) - 1);
+            /* A file SYS$INPUT is read through RMS: $OPEN once per
+             * redirection, then one $GET per READ (vms-f89, vms-5cc). */
+            if (!g_sysinput_rd || strcmp(g_sysinput_key, equiv) != 0) {
+                if (g_sysinput_rd)
+                    dcl_rms_read_close(g_sysinput_rd);
+                uint32_t ost = RMS$_NORMAL;
+                g_sysinput_rd = dcl_rms_read_open(ctx, equiv, &ost);
+                strncpy(g_sysinput_key, equiv, sizeof(g_sysinput_key) - 1);
                 g_sysinput_key[sizeof(g_sysinput_key) - 1] = '\0';
             }
-            if (!g_sysinput_fp) {
-                dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
-                return SS$_ENDOFFILE;
-            }
+            if (!g_sysinput_rd)
+                return RMS$_EOF;
             char rline[4096];
-            if (!fgets(rline, sizeof(rline), g_sysinput_fp)) {
-                dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
-                return SS$_ENDOFFILE;
-            }
-            size_t rl = strlen(rline);
-            if (rl > 0 && rline[rl - 1] == '\n') rline[rl - 1] = '\0';
+            int reof = 0;
+            if (dcl_rms_read_record(g_sysinput_rd, rline, sizeof(rline), &reof) < 0)
+                return RMS$_EOF;
             dcl_sym_set(symbol_name, rline, DCL_SYM_LOCAL);
-            return SS$_NORMAL;
+            return (int)DCL_CLI_NORMAL;
         }
 
         /* Terminal SYS$INPUT: read one line from the process stdin. */
         char tbuf[4096];
         if (dcl_tt_read_line(NULL, tbuf, sizeof(tbuf)) != 0) {
             dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
-            return SS$_ENDOFFILE;
+            return RMS$_EOF;
         }
         dcl_sym_set(symbol_name, tbuf, DCL_SYM_LOCAL);
         return SS$_NORMAL;
@@ -770,31 +819,20 @@ static int read_impl(struct dcl_command *cmd)
         int eof = 0;
         int n = dcl_rms_read_record(ctx->channels[ch].reader, rec, sizeof(rec), &eof);
         if (n < 0) {
-            dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
-            return SS$_ENDOFFILE;
+            /* RMS$_EOF leaves the symbol alone (FIO.READ.EOF.NOLABEL);
+             * cmd_read shows %RMS-E-EOF unless a label takes it */
+            return RMS$_EOF;
         }
         dcl_sym_set(symbol_name, rec, DCL_SYM_LOCAL);
-        return SS$_NORMAL;
+        return (int)DCL_CLI_NORMAL;
     }
 
-    if (!fp) {
-        dcl_error("DCL", 2, "IVLOGNAM",
-                  "channel %s is not open", channel_name);
-        return SS$_BADPARAM;
+    if (ch >= 0 && ctx->channels[ch].writer) {
+        dcl_error("DCL", 2, "READERR", "error reading %s", channel_name);
+        return (int)RMS$_FAC;               /* opened for write, not read */
     }
-
-    char line[4096];
-    if (!fgets(line, sizeof(line), fp)) {
-        dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
-        return SS$_ENDOFFILE;
-    }
-
-    /* Remove trailing newline */
-    size_t len = strlen(line);
-    if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-
-    dcl_sym_set(symbol_name, line, DCL_SYM_LOCAL);
-    return SS$_NORMAL;
+    dcl_error("DCL", 0, "UNDFIL", "file has not been opened by DCL - check logical name");
+    return (int)DCL_CLI_UNDFIL;
 }
 
 /*
@@ -926,13 +964,7 @@ int cmd_write(struct dcl_command *cmd)
     int st = write_impl(cmd);
     if (st & 1)
         return st;
-    const char *label = dcl_qualifier_value(cmd, "ERROR");
-    if (label && *label && ctx->proc_depth >= 0) {
-        struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
-        if (dcl_find_label(fp, label) == 0)
-            return SS$_NORMAL;
-        dcl_error("DCL", 2, "USGOTO", "target of GOTO not found - \\%s\\", label);
-    }
+    dcl_branch_handled(ctx, dcl_qualifier_value(cmd, "ERROR"));
     return st;
 }
 
@@ -958,7 +990,7 @@ static int write_impl(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    const char *channel_name = cmd->params[0];
+    const char *channel_name = dcl_chan_ppf_name(ctx, cmd->params[0]);
 
     /* WRITE's argument list is an expression (or comma-separated list of
      * expressions) whose VALUE is written. Evaluate it ONCE, up front, through
@@ -1025,22 +1057,34 @@ static int write_impl(struct dcl_command *cmd)
         strcasecmp(channel_name, "SYS$ERROR") == 0) {
         int is_err = (strcasecmp(channel_name, "SYS$ERROR") == 0);
 
-        char equiv[1024];
+        char equiv[1024] = "";
         if (dcl_translate_logical(channel_name, equiv, sizeof(equiv)) == 0 &&
                 equiv[0] && !dcl_logical_is_terminal(equiv)) {
-            char linux_path[1024];
-            dcl_resolve_path(ctx, equiv, linux_path, sizeof(linux_path));
-            FILE *fp = fopen(linux_path, "a");
-            if (!fp) {
+            /* A file SYS$OUTPUT/SYS$ERROR: the record is $PUT at the end of
+             * the file through RMS, never stdio (vms-5cc). */
+            uint32_t ost = RMS$_NORMAL;
+            struct dcl_rms_writer *w = dcl_rms_write_append(ctx, equiv, &ost);
+            if (!w) {
                 dcl_error("RMS", 2, "OPENOUT",
                           "error opening %s as output", equiv);
-                return SS$_NOSUCHFILE;
+                return (int)(ost & 1 ? RMS$_FNF : ost);
             }
-            fprintf(fp, "%s\n", text);
-            fclose(fp);
-            return SS$_NORMAL;
+            int wr = dcl_rms_write_record(w, text, strlen(text));
+            uint32_t pst = wr < 0 ? dcl_rms_write_status(w, NULL) : RMS$_NORMAL;
+            uint32_t cst = dcl_rms_write_close(w);
+            if (!(pst & 1))
+                return (int)pst;
+            return (int)((cst & 1) ? RMS$_NORMAL : cst);
         }
 
+        /* The terminal: the record goes to the terminal driver with $QIO
+         * IO$_WRITEVBLK (vms-28db). Only a DCL with no executive terminal
+         * behind its output (the host test harness, a pipe) uses the
+         * process's own output stream, which all of its messages share. */
+        const char *eq = equiv + (equiv[0] == '_');
+        int is_mbx = strncasecmp(eq, "MBA", 3) == 0;
+        if (!is_mbx && dcl_tt_put_record(text, strlen(text)) == 0)
+            return SS$_NORMAL;
         FILE *out = is_err ? stderr : stdout;
         fprintf(out, "%s\n", text);
         return SS$_NORMAL;
@@ -1057,9 +1101,13 @@ static int write_impl(struct dcl_command *cmd)
     }
 
     if (ch < 0) {
-        dcl_error("DCL", 2, "IVLOGNAM",
-                  "channel %s is not open", channel_name);
-        return SS$_BADPARAM;
+        dcl_error("DCL", 0, "UNDFIL", "file has not been opened by DCL - check logical name");
+        return (int)DCL_CLI_UNDFIL;
+    }
+    if (ctx->channels[ch].reader) {
+        /* opened /READ: RMS$_FAC, the access is not allowed (FIO.WRITE.READONLY) */
+        dcl_error("DCL", 2, "WRITEERR", "error writing %s", channel_name);
+        return (int)RMS$_FAC;
     }
 
     /* An RMS write channel (vms-5f0): assemble the record and $PUT it onto the
@@ -1071,19 +1119,11 @@ static int write_impl(struct dcl_command *cmd)
             dcl_error("RMS", 2, "WER", "error writing to channel %s", channel_name);
             return SS$_ABORT;
         }
-        return SS$_NORMAL;
+        return (int)RMS$_NORMAL;
     }
 
-    FILE *fp = ctx->channels[ch].fp;
-    if (!fp) {
-        dcl_error("DCL", 2, "IVLOGNAM",
-                  "channel %s is not open", channel_name);
-        return SS$_BADPARAM;
-    }
-    fprintf(fp, "%s\n", text);
-    fflush(fp);
-
-    return SS$_NORMAL;
+    dcl_error("DCL", 0, "UNDFIL", "file has not been opened by DCL - check logical name");
+    return (int)DCL_CLI_UNDFIL;
 }
 
 /* ================================================================== */

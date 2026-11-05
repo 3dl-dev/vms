@@ -852,6 +852,48 @@ static struct dcl_rms_writer *rms_write_open(struct dcl_context *ctx, const char
     return w;
 }
 
+/* OPEN/APPEND: the file's end is where the next $PUT lands (RAB$M_EOF); a file
+ * that does not exist yet is created, as VMS does. The record format is the
+ * existing file's own (read from its header), like dcl_rms_read_open. */
+struct dcl_rms_writer *dcl_rms_write_append(struct dcl_context *ctx, const char *spec,
+                                            uint32_t *rms_status)
+{
+    struct dcl_rms_writer *w = calloc(1, sizeof(*w));
+    struct rms_fileattr fa;
+    uint32_t st;
+    if (!w) { if (rms_status) *rms_status = RMS$_DME; return NULL; }
+    if (dcl_rms_effective_spec(ctx, spec, w->spec, sizeof(w->spec)) != 0) {
+        if (rms_status) *rms_status = RMS$_SYN;
+        free(w); return NULL;
+    }
+    if (rms_file_attr(w->spec, &fa) != RMS$_NORMAL) {
+        free(w);                               /* not there: create it */
+        return rms_write_open(ctx, spec, FAB$C_VAR, FAB$M_CR, 0, 0, rms_status);
+    }
+    w->fab = cc$rms_fab;
+    w->fab.fab$l_fna = w->spec;
+    w->fab.fab$b_fns = (uint8_t)strlen(w->spec);
+    w->fab.fab$b_org = FAB$C_SEQ;
+    if (fa.rfm >= FAB$C_FIX && fa.rfm <= FAB$C_STMCR) {
+        w->fab.fab$b_rfm = fa.rfm;
+        if (fa.mrs) w->fab.fab$w_mrs = fa.mrs;
+    }
+    w->fab.fab$b_fac = FAB$M_PUT;
+    st = sys$open(&w->fab, 0, 0);
+    if (!(st & 1)) { if (rms_status) *rms_status = st; free(w); return NULL; }
+    w->rab = cc$rms_rab;
+    w->rab.rab$l_fab = &w->fab;
+    w->rab.rab$l_rop |= RAB$M_EOF;
+    st = sys$connect(&w->rab, 0, 0);
+    if (st != RMS$_NORMAL) {
+        if (rms_status) *rms_status = st;
+        sys$close(&w->fab, 0, 0); free(w); return NULL;
+    }
+    w->connected = 1;
+    if (rms_status) *rms_status = RMS$_NORMAL;
+    return w;
+}
+
 int dcl_rms_write_record(struct dcl_rms_writer *w, const char *buf, size_t len)
 {
     uint32_t st;

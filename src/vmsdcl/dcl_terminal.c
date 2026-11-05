@@ -302,6 +302,35 @@ void dcl_tt_qio_write(const void *b, size_t n)
                    (void *)b, (uint32_t)n, 0, 0, 0, 0);
 }
 
+/*
+ * One output record to the terminal SYS$OUTPUT names, through the terminal
+ * driver: $QIO IO$_WRITEVBLK with P4 " " -- one record with implied carriage
+ * control, as RMS writes a record to a terminal (vms-28db). The driver renders
+ * the new line for where the cursor is (a line feed a previous record or
+ * message left owed is paid first) and ends the record with its carriage
+ * return. Appending our own CR LF instead overprinted a line whose line feed
+ * was owed (an error message just shown) and broke the echo-relative bytes the
+ * keystroke oracle compares (LE.CTRLU R: VAX "<CR>1<CR><LF>").
+ * 0 when the driver took it; -1 when the process's output is not the
+ * executive's terminal (no driver, or output redirected to a pipe), or the
+ * record is empty (the class driver writes no record for P2 = 0), and the
+ * caller writes the process stream instead.
+ */
+int dcl_tt_put_record(const char *text, size_t n)
+{
+    uint16_t iosb[4];
+
+    if (n == 0 || !isatty(STDOUT_FILENO) || !dcl_tt_assign())
+        return -1;
+    if (n > 4096)
+        n = 4096;
+    fflush(stdout);
+    fflush(stderr);
+    uint32_t st = sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0,
+                           (void *)text, (uint32_t)n, 0, ' ', 0, 0);
+    return ((st & 1) && (iosb[0] & 1)) ? 0 : -1;
+}
+
 int dcl_tt_getc(int poll)
 {
     static uint32_t none[8];

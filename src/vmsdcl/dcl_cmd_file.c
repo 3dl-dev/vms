@@ -1467,7 +1467,7 @@ static int cmd_directory_list(struct dcl_command *cmd)
             if (entry_count > 0 && show_heading) { printf("\nDirectory %s\n\n", vms_dir); headed = 1; }
             if (entry_count == 0) {
                 dcl_error("DIRECT", STS$K_ERROR, "OPENIN", "error opening %s as input", vms_pattern);
-                fprintf(stderr, "-RMS-E-FNF, file not found\n");
+                dcl_error_cont("RMS", 2, "FNF", "file not found");
                 list_status = 0x0001C04A;
             }
             for (int m = 0; m < dir_more_n; m++) {
@@ -1488,7 +1488,7 @@ static int cmd_directory_list(struct dcl_command *cmd)
                 if (mst != SS$_NORMAL || more_count == 0) {
                     free(more);
                     dcl_error("DIRECT", STS$K_ERROR, "OPENIN", "error opening %s as input", mpat);
-                    fprintf(stderr, "-RMS-E-FNF, file not found\n");
+                    dcl_error_cont("RMS", 2, "FNF", "file not found");
                     list_status = 0x0001C04A;   /* DIRECT-E-OPENIN, lab #14 */
                     continue;
                 }
@@ -2288,24 +2288,24 @@ static int copy_concat(struct dcl_context *ctx, struct dcl_command *cmd)
                 dcl_resolve_path(ctx, out, out_path, sizeof out_path);
                 continue;
             }
-            char src_path[1024];
-            dcl_resolve_path(ctx, in, src_path, sizeof src_path);
-            FILE *src = fopen(src_path, "rb"), *dst = NULL;
+            /* Each further input is appended to the output through RMS:
+             * $GET its records, $PUT them at the end of the output (libc-drop
+             * vms-523). */
+            uint32_t rst = RMS$_NORMAL, wst = RMS$_NORMAL;
+            struct dcl_rms_reader *src = dcl_rms_read_open(ctx, in, &rst);
             if (!src) {
                 dcl_error("RMS", 2, "FNF", "file not found - %s", in);
                 final = SS$_NOSUCHFILE;
                 continue;
             }
-            dst = fopen(out_path, "ab");
-            size_t k;
-            int recs = 0;
-            while (dst && fgets(rec, sizeof rec, src)) {
-                k = strlen(rec);
-                if (fwrite(rec, 1, k, dst) != k) { final = SS$_ABORT; break; }
+            struct dcl_rms_writer *dst = dcl_rms_write_append(ctx, out, &wst);
+            int recs = 0, eof = 0, nr;
+            while (dst && (nr = dcl_rms_read_record(src, rec, sizeof rec, &eof)) >= 0) {
+                if (dcl_rms_write_record(dst, rec, (size_t)nr) != 0) { final = SS$_ABORT; break; }
                 recs++;
             }
-            fclose(src);
-            if (!dst || fclose(dst) != 0) {
+            dcl_rms_read_close(src);
+            if (!dst || !(dcl_rms_write_close(dst) & 1)) {
                 dcl_error("RMS", 2, "WER", "write error - %s", out);
                 final = SS$_ABORT;
             } else if (do_log) {
@@ -2813,7 +2813,9 @@ static int delete_files_acp(struct dcl_context *ctx, const char *param,
         dcl_error("RMS", 2, "FNF", "file not found - %s", param);
         return SS$_NOSUCHFILE;
     }
-    return SS$_NORMAL;
+    /* a DELETE leaves %X10000001 (SS$_NORMAL|STS$M_INHIB_MSG) in $STATUS (VAX V7.3,
+     * docs/oracle/semantics/fio/vax73-delete-status-probe.txt) */
+    return 0x10000001;
 }
 
 /* DELETE of one file specification (an element of DELETE's list). */
@@ -2989,7 +2991,7 @@ int cmd_delete(struct dcl_command *cmd)
     /* DELETE a,b,...: each element of the list in turn (the parser hands
      * them over as separate parameters); a failure on one does not stop the
      * rest, and $STATUS is the last failure (rd vms-ad5a). */
-    int rc = SS$_NORMAL;
+    int rc = 0x10000001;   /* SS$_NORMAL|STS$M_INHIB_MSG: what a DELETE leaves in $STATUS (VAX V7.3, docs/oracle/semantics/fio/) */
     for (int pi = 0; pi < dcl_param_total(cmd); pi++) {
         const char *spec = dcl_param_at(cmd, pi);
         if (!spec || !spec[0]) continue;

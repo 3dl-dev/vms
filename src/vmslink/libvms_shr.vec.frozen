@@ -462,3 +462,4 @@ sys$process_scan=PROCEDURE
 sys$set_process_propertiesw=PROCEDURE
 vms$$qio_cancel_uring=PROCEDURE
 vms_uring_cancel_fd=PROCEDURE
+sysuaf_record_uaf_flags=PROCEDURE

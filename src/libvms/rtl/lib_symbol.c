@@ -110,6 +110,13 @@ static int cli_mbx(uint32_t *req, uint32_t *rsp)
 }
 
 /* Ask the CLI. Returns 1 with *rsp filled, 0 when there is no CLI. */
+/* The CLI stopped serving this image (rd vms-fe22): its reply mailbox gave
+ * end-of-file (DCL writes IO$_WRITEOF there when its wait for the image ends,
+ * e.g. at CTRL/Y) or failed. Every later call answers LIB$_UNECLIERR at once:
+ * no request goes to a mailbox nobody reads, no read waits for a reply that
+ * cannot come. */
+static int cli_gone;
+
 static int cli_call(const struct ovmx_cli_req *req, struct ovmx_cli_rsp *rsp)
 {
     uint32_t qc, rc, got = 0;
@@ -131,14 +138,21 @@ static int cli_call(const struct ovmx_cli_req *req, struct ovmx_cli_rsp *rsp)
         rsp->status = LIB$_NOCLI;
         return 1;
     }
+    if (cli_gone) {
+        pthread_mutex_unlock(&cli_mutex);
+        rsp->status = LIB$_UNECLIERR;
+        return 1;
+    }
     uint32_t st = vms_kif_mbx_write(qc, req, (uint32_t)sizeof *req);
     if (st & 1)
         st = vms_kif_mbx_read(rc, rsp, (uint32_t)sizeof *rsp, &got, 0);
-    pthread_mutex_unlock(&cli_mutex);
+    /* NEGCTL-ANCHORED (cli-continued-image-blocks) */
     if (!(st & 1) || got != (uint32_t)sizeof *rsp) {
+        cli_gone = 1;                      /* the CLI went away (EOF) or failed */
         memset(rsp, 0, sizeof *rsp);
-        rsp->status = LIB$_UNECLIERR;      /* the CLI went away mid-call */
+        rsp->status = LIB$_UNECLIERR;
     }
+    pthread_mutex_unlock(&cli_mutex);
     return 1;
 }
 

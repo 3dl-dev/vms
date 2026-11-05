@@ -29,11 +29,17 @@
  * NOT VACUOUS: the trace saw DCL's /dev/vms ioctls, and the classifier flags a
  * control child that calls poll().
  *
+ * PART C -- THE CLI LEAVES (rd vms-fe22). When DCL's wait ends it writes an
+ * end-of-file into the reply mailbox and deassigns. Asserted: an image's CLI
+ * call in flight at that moment, and the calls of an image CONTINUEd after a
+ * stop, each return LIB$_UNECLIERR and none blocks.
+ *
  * CTRL/Y (the executive stopping the image and telling DCL's mailbox) needs a
  * keystroke on the executive terminal: tests/qemu/test_run_status_e2e.sh
  * types it at an image that ignores SIGTSTP.
  *
- * NEGATIVE CONTROL: tests/qemu/defects.d/cli-wait-no-termination-message.defect.
+ * NEGATIVE CONTROLS: tests/qemu/defects.d/cli-wait-no-termination-message.defect,
+ * cli-continued-image-blocks.defect.
  * No /dev/vms -> honest SKIP (77).
  */
 #ifndef _GNU_SOURCE
@@ -193,6 +199,98 @@ static void part_a(void)
           "...with the final condition the task recorded");
     (void)vms_kif_dassgn(m.qc);
     (void)vms_kif_dassgn(m.rc);
+}
+
+/* ---- Part C: the CLI leaves (rd vms-fe22) -------------------------------- */
+/* The image side: `served` calls first (each answered SS$_NORMAL), a stop
+ * (DCL's CTRL/Y) if `stop`, then two calls that must each answer
+ * LIB$_UNECLIERR without blocking (the inherited SIGALRM bound ends a hang). */
+static void part_c_image(const struct mbx2 *m, int served, int stop)
+{
+    char spec[80];
+    snprintf(spec, sizeof spec, "%s,%s", m->qdev, m->rdev);
+    setenv(OVMX_CLI_MBX_ENV, spec, 1);
+    char n[] = "CLIWAIT_C", v[] = "after the CLI left";
+    struct dsc$descriptor_s dn = dsc(n), dv = dsc(v);
+    for (int i = 0; i < served; i++)
+        if (lib$set_symbol(&dn, &dv, NULL) != SS$_NORMAL)
+            _exit(4);
+    if (stop)
+        raise(SIGSTOP);
+    alarm(10);
+    if (lib$set_symbol(&dn, &dv, NULL) != LIB$_UNECLIERR)
+        _exit(5);
+    if (lib$set_symbol(&dn, &dv, NULL) != LIB$_UNECLIERR)
+        _exit(6);
+    _exit(0);
+}
+
+/* DCL's side as dcl_cli_mbx_close does it: end-of-file into the reply
+ * mailbox, then deassign both. */
+static void part_c_dcl_close(struct mbx2 *m)
+{
+    (void)vms_kif_mbx_write_eof(m->rc);
+    (void)vms_kif_dassgn(m->qc);
+    (void)vms_kif_dassgn(m->rc);
+}
+
+static void part_c(void)
+{
+    static struct ovmx_cli_req rq;
+    struct ovmx_cli_rsp rs;
+    struct mbx2 m;
+    uint32_t len = 0;
+    int st;
+
+    /* 1. a call IN FLIGHT when DCL's wait ends (CTRL/Y mid-call) */
+    CHECK(mbx2_open(&m), "Part C: the request and reply mailboxes are created (in-flight case)");
+    fflush(NULL);
+    pid_t c1 = ovmx_creprc_fork(VMS_CREPRC_PCB_CONTINUE, NULL, NULL);
+    if (c1 == 0)
+        part_c_image(&m, 0, 0);
+    alarm(30);
+    uint32_t r = vms_kif_mbx_read(m.qc, &rq, sizeof rq, &len, 0);
+    alarm(0);
+    CHECK((r & 1) && len == sizeof rq, "the image's call reaches the request mailbox");
+    part_c_dcl_close(&m);
+    st = 0;
+    alarm(30);
+    while (waitpid(c1, &st, 0) < 0 && errno == EINTR)
+        ;
+    alarm(0);
+    /* negctl: cli-continued-image-blocks */
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0,
+          "a call in flight when DCL stops serving returns LIB$_UNECLIERR, and so does the next -- neither blocks");
+
+    /* 2. an image CONTINUEd after CTRL/Y, no call in flight */
+    CHECK(mbx2_open(&m), "Part C: the request and reply mailboxes are created (CONTINUE case)");
+    fflush(NULL);
+    pid_t c2 = ovmx_creprc_fork(VMS_CREPRC_PCB_CONTINUE, NULL, NULL);
+    if (c2 == 0)
+        part_c_image(&m, 1, 1);
+    alarm(30);
+    r = vms_kif_mbx_read(m.qc, &rq, sizeof rq, &len, 0);
+    int served = (r & 1) && len == sizeof rq;
+    if (served) {
+        memset(&rs, 0, sizeof rs);
+        rs.status = SS$_NORMAL;
+        served = (vms_kif_mbx_write(m.rc, &rs, sizeof rs) & 1) != 0;
+    }
+    CHECK(served, "the image's first call is served while DCL waits");
+    st = 0;
+    while (waitpid(c2, &st, WUNTRACED) < 0 && errno == EINTR)
+        ;
+    alarm(0);
+    CHECK(WIFSTOPPED(st), "the image is stopped (CTRL/Y) and DCL's wait ends");
+    part_c_dcl_close(&m);
+    kill(c2, SIGCONT);                          /* CONTINUE */
+    st = 0;
+    alarm(30);
+    while (waitpid(c2, &st, 0) < 0 && errno == EINTR)
+        ;
+    alarm(0);
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0,
+          "an image CONTINUEd after DCL stopped serving gets LIB$_UNECLIERR from its CLI calls, never a hang");
 }
 
 /* ---- Part B: the syscall trace --------------------------------------- */
@@ -413,6 +511,7 @@ int main(int argc, char **argv)
     (void)argv;
 
     part_a();
+    part_c();
     part_b_control();
     if (access(DCL_PATH, X_OK) == 0 && self[0])
         part_b(self);

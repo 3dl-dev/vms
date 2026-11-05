@@ -19,7 +19,11 @@
  *     TERMINATION MAILBOX ($CREPRC mbxunt), so DCL's whole wait for the image
  *     is one blocking mailbox read: a CLI request, the executive's
  *     termination message, or the executive's CTRL/Y message (struct
- *     vms_exec_mbxmsg) -- no host descriptor, no poll. With no executive
+ *     vms_exec_mbxmsg) -- no host descriptor, no poll. When DCL's wait
+ *     for the image ends (its end, or CTRL/Y) DCL writes an end-of-file into
+ *     the REPLY mailbox before deassigning (rd vms-fe22): an image still
+ *     running -- CONTINUEd after CTRL/Y -- reads it and its CLI call returns
+ *     LIB$_UNECLIERR, as does every later one; none blocks. With no executive
  *     there is no mailbox: a named CLI that cannot be reached answers
  *     LIB$_NOCLI.
  *

@@ -2164,12 +2164,18 @@ static void dcl_cli_mbx_open(struct dcl_cli_mbx *m)
 }
 
 /* Deassigning DCL's channels deletes the temporary mailboxes once the image
- * holds none either (its channels go at its rundown). */
+ * holds none either (its channels go at its rundown). First DCL says it has
+ * stopped serving (rd vms-fe22): an end-of-file (IO$_WRITEOF) in the reply
+ * mailbox ends an image's reply read -- one in flight at a CTRL/Y, or the
+ * first call of an image CONTINUEd after it -- with SS$_ENDOFFILE, which the
+ * RTL answers LIB$_UNECLIERR (and every later call too) instead of waiting
+ * for a reply nobody will write. */
 static void dcl_cli_mbx_close(struct dcl_cli_mbx *m)
 {
     if (!m->ok)
         return;
     dcl_wait_mbx_chan = 0;
+    (void)vms_kif_mbx_write_eof(m->rsp_chan);
     (void)vms_kif_dassgn(m->req_chan);
     (void)vms_kif_dassgn(m->rsp_chan);
     m->ok = 0;

@@ -78,10 +78,12 @@
 #include <pthread.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <time.h>
 
 #include "starlet.h"
 #include "descrip.h"
 #include "lnmdef.h"
+#include "iodef.h"
 #include "vms_kif.h"
 #include "dcl/dcl_mbx.h"
 #include "rms_textfile.h"   /* a disk-file SYS$INPUT is read through RMS (rd vms-003b) */
@@ -101,36 +103,35 @@ static int       g_reader_up   = 0;
 static int       g_writer_up   = 0;
 
 /*
- * SYNCHRONOUS PROMPT DRAIN (vms-195). When DCL's SYS$OUTPUT is a mailbox but
- * SYS$INPUT is still an interactive terminal (the live console login: the demo
- * diverts SYS$OUTPUT to an async mailbox writer while the tty stays the command
- * source), DCL's prompt travels the async path -- fd 1 -> pipe -> writer thread
- * -> IO$_WRITEVBLK -> mailbox -- while the KERNEL tty echoes the user's next
- * keystroke synchronously. The newline-less "$ " prompt under _IOLBF is not even
- * auto-flushed, so the echo can land BEFORE the prompt is emitted ("d$ ir").
+ * SYS$OUTPUT A MAILBOX: TWO WRITERS, ONE ORDER (rd vms-1b6a).
  *
- * The cure is a drain barrier: after DCL has written (and fflush'd) the prompt
- * into the output pipe, it calls dcl_mbx_output_drain_sync(), which blocks until
- * the writer thread has pushed every byte then in the pipe out through the real
- * mailbox path -- so the prompt is fully emitted before DCL issues the read that
- * arms the tty echo.
+ * DCL's OWN output -- every record its sink (dcl_out.c) produces -- goes to the
+ * mailbox as a $QIO IO$_WRITEVBLK on a channel DCL $ASSIGNed on its main thread
+ * (dcl_mbx_put_record). What an IMAGE DCL runs writes still arrives on fd 1, a
+ * pipe, and is relayed to the mailbox a line at a time (line_relay_feed): an
+ * image's run-time library writing its descriptor is the image's I/O, not
+ * DCL's, and stays the labelled bridge it was (rd vms-786).
  *
- * HOW THE BARRIER KNOWS THE PIPE IS DRAINED, WITHOUT poll(). The writer reads a
- * blocking first byte, then drains the rest with non-blocking reads until EAGAIN
- * (the pipe is momentarily empty), then bumps a monotonic g_drain_epoch under
- * g_out_mtx. Reaching EAGAIN is only possible once every byte written before it
- * -- FIFO, single reader -- has been pushed to the mailbox. dcl_mbx_output_drain_sync()
- * snapshots the epoch AFTER the caller fflush()ed the prompt into the pipe and
- * waits for it to advance: the next EAGAIN necessarily happens after the prompt
- * entered the pipe (the writer cannot see an empty pipe without first reading the
- * prompt), so the advance proves the prompt reached the mailbox. The prompt bytes
- * themselves guarantee the epoch will advance, so there is no wait-forever case.
- * Only fcntl()/read()/pthread -- all already DECC$SHR universals -- are used; no
- * poll()/select(), so the VMS-native LINK.EXE graph resolves.
+ * Both must reach the mailbox in the order they were produced: an image's
+ * last line before the "MMK____status=" record DCL writes after it (rd
+ * vms-d26f). So every read of the pipe and every relayed message happens under
+ * g_out_mtx, with the pipe's read end non-blocking, and DCL's own record first
+ * relays whatever the pipe holds -- everything an image wrote before it --
+ * under the same lock. A blocking read outside the lock could hold bytes it had
+ * taken but not yet sent while DCL's record overtook them. The relay thread
+ * therefore never blocks in read(): it drains, releases the lock, and sleeps a
+ * moment (shorter while output flows, longer while it does not) -- the cost of
+ * having no poll()/select() in the DECC$SHR surface the VMS-native link
+ * resolves.
+ *
+ * vms-195's prompt/echo race (the demo's console: SYS$INPUT the terminal,
+ * SYS$OUTPUT a mailbox): dcl_mbx_output_drain_sync relays, under the lock,
+ * everything then in the pipe before DCL arms its read, so nothing written
+ * before the read can arrive after the echo.
  */
 static pthread_mutex_t g_out_mtx     = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  g_out_cv      = PTHREAD_COND_INITIALIZER;
-static uint64_t        g_drain_epoch = 0;   /* ++ each time the writer drains to empty */
+static int             g_out_stop    = 0;   /* shutdown: the relay thread leaves */
+static uint16_t        g_out_qchan   = 0;   /* DCL's own $QIO channel to the mailbox */
 
 /* Toggle O_NONBLOCK on a fd (fcntl is a DECC$SHR universal; poll is not). */
 static void set_nonblock(int fd, int on)
@@ -140,15 +141,6 @@ static void set_nonblock(int fd, int on)
         return;
     int nf = on ? (fl | O_NONBLOCK) : (fl & ~O_NONBLOCK);
     (void)fcntl(fd, F_SETFL, nf);
-}
-
-/* Bump the drain epoch and wake any waiter (called when the pipe hits empty). */
-static void publish_drained(void)
-{
-    pthread_mutex_lock(&g_out_mtx);
-    g_drain_epoch++;
-    pthread_cond_broadcast(&g_out_cv);
-    pthread_mutex_unlock(&g_out_mtx);
 }
 
 /*
@@ -165,9 +157,12 @@ static int             g_out_sink_fd = -1; /* test-only sink; -1 = mailbox */
 static unsigned        g_out_sink_delay_us = 0;
 #endif
 
+static size_t          g_relayed = 0;       /* bytes relayed (the relay thread's pacing) */
+
 /* Return 1 on success, 0 on failure -- the writer breaks its loop on 0. */
 static int out_sink_write(const char *buf, size_t n)
 {
+    g_relayed += n;
 #ifdef DCL_MBX_TEST_HOOKS
     if (g_out_sink_delay_us)
         usleep(g_out_sink_delay_us);
@@ -465,68 +460,57 @@ static int line_relay_flush_partial(void)
 }
 
 /*
- * writer_main - drain DCL's stdout pipe to the SYS$OUTPUT mailbox, one
- * mailbox message per complete line (line_relay_feed above). Ends when the
- * pipe's last write end is closed (DCL exited and dcl_mbx_shutdown() closed
- * fd 1), which returns 0 from read().
+ * relay_locked - with g_out_mtx held: relay everything now in the image-output
+ * pipe to the mailbox, a message per line, a held partial line last. Returns 1
+ * while the pipe has a writer, 0 at end-of-file or a failed mailbox write.
+ */
+static int relay_locked(void)
+{
+    char buf[DCL_MBX_BUF];
+
+    if (g_out_pipe_r < 0)
+        return 0;
+    for (;;) {
+        ssize_t m = read(g_out_pipe_r, buf, sizeof(buf));
+        if (m > 0) {
+            if (!line_relay_feed(buf, (size_t)m))
+                return 0;
+            continue;
+        }
+        if (m < 0 && errno == EINTR)
+            continue;
+        int open = (m < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
+        return line_relay_flush_partial() && open;
+    }
+}
+
+/*
+ * writer_main - relay image output from the pipe to the SYS$OUTPUT mailbox
+ * while DCL's main thread runs (an image's output must not wait for DCL's next
+ * record). Leaves at end-of-file on the pipe or at shutdown.
  */
 static void *writer_main(void *arg)
 {
-    char buf[DCL_MBX_BUF];
     (void)arg;
+    long idle_ns = 1000000L;                    /* 1 ms */
 
     for (;;) {
-        /* Block for the first byte(s) of the next batch. */
-        set_nonblock(g_out_pipe_r, 0);
-        ssize_t n = read(g_out_pipe_r, buf, sizeof(buf));
-        if (n == 0)
-            break;                          /* write end (fd 1) closed: shutdown */
-        if (n < 0) {
-            if (errno == EINTR)
-                continue;
+        pthread_mutex_lock(&g_out_mtx);
+        size_t before = g_relayed;
+        int live = !g_out_stop && relay_locked();
+        size_t moved = g_relayed - before;
+        pthread_mutex_unlock(&g_out_mtx);
+        if (!live)
             break;
-        }
-        int eof = 0;
-        if (!line_relay_feed(buf, (size_t)n))
-            break;
-
-        /* Drain whatever else is queued without blocking, until the pipe is
-         * momentarily empty (EAGAIN) or closed (0). */
-        set_nonblock(g_out_pipe_r, 1);
-        for (;;) {
-            ssize_t m = read(g_out_pipe_r, buf, sizeof(buf));
-            if (m > 0) {
-                if (!line_relay_feed(buf, (size_t)m)) { eof = 1; break; }
-            } else if (m == 0) {
-                eof = 1;
-                break;
-            } else {
-                if (errno == EINTR) continue;
-                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                eof = 1;
-                break;
-            }
-        }
-
-        /* Pipe drained to empty: flush any held-back partial line (a
-         * newline-less prompt) so every byte written before now is really
-         * out through the mailbox before the epoch advances. */
-        if (!line_relay_flush_partial())
-            eof = 1;
-        publish_drained();
-        if (eof)
-            break;
+        idle_ns = moved ? 1000000L : (idle_ns < 16000000L ? idle_ns * 2 : idle_ns);
+        struct timespec ts = { 0, idle_ns };
+        nanosleep(&ts, NULL);
     }
-
-    /* Release any waiter that would otherwise block past writer exit. */
-    publish_drained();
     return NULL;
 }
 
 /*
- * dcl_mbx_output_is_mailbox - has SYS$OUTPUT been bound to a mailbox (the async
- * writer thread is running)? DCL's interactive prompt loop consults this to
- * decide whether the prompt must be drain-synced (vms-195).
+ * dcl_mbx_output_is_mailbox - has SYS$OUTPUT been bound to a mailbox?
  */
 int dcl_mbx_output_is_mailbox(void)
 {
@@ -534,28 +518,48 @@ int dcl_mbx_output_is_mailbox(void)
 }
 
 /*
- * dcl_mbx_output_drain_sync - block until the writer thread has pushed every
- * byte currently in the output pipe out through the mailbox. The caller must
- * have written and fflush()'d the prompt first, so the prompt bytes are already
- * in the pipe -- they are what guarantees the writer reaches a fresh empty state
- * (and thus a fresh epoch), so this never waits forever. A no-op when SYS$OUTPUT
- * is not mailbox-bound (leaving the ordinary stdio path untouched for a terminal
- * or file SYS$OUTPUT).
+ * dcl_mbx_output_drain_sync - relay, now, everything in the image-output pipe
+ * (and what this process's own stdio holds for it) to the mailbox. A no-op when
+ * SYS$OUTPUT is not mailbox-bound. Never blocks on an empty pipe.
  */
 void dcl_mbx_output_drain_sync(void)
 {
     if (!g_writer_up)
         return;
-
+    dcl_out_stdio_sync();
     pthread_mutex_lock(&g_out_mtx);
-    /* The next drain-to-empty is strictly later than this snapshot (the writer
-     * bumps the epoch under this same mutex), so it necessarily happens after
-     * the prompt entered the pipe -- and the writer cannot see the pipe empty
-     * without having first read the prompt out to the mailbox. */
-    uint64_t want = g_drain_epoch + 1;
-    while (g_drain_epoch < want)
-        pthread_cond_wait(&g_out_cv, &g_out_mtx);
+    (void)relay_locked();
     pthread_mutex_unlock(&g_out_mtx);
+}
+
+/*
+ * dcl_mbx_put_record - one record of DCL's own SYS$OUTPUT to the mailbox: $QIO
+ * IO$_WRITEVBLK on DCL's channel, after whatever an image wrote before it.
+ * 0 when the mailbox took it, -1 when SYS$OUTPUT is not a bound mailbox or the
+ * write failed.
+ */
+int dcl_mbx_put_record(const char *rec, size_t n)
+{
+    int rc = -1;
+
+    if (!g_writer_up)
+        return -1;
+    pthread_mutex_lock(&g_out_mtx);
+    (void)relay_locked();
+#ifdef DCL_MBX_TEST_HOOKS
+    if (g_out_sink_fd >= 0) {
+        rc = out_sink_write(rec, n) ? 0 : -1;
+        pthread_mutex_unlock(&g_out_mtx);
+        return rc;
+    }
+#endif
+    uint16_t iosb[4] = { 0, 0, 0, 0 };
+    uint32_t st = sys$qiow(0, g_out_qchan, IO$_WRITEVBLK, iosb, NULL, 0,
+                           (void *)rec, (uint32_t)n, 0, 0, 0, 0);
+    if ((st & 1) && (iosb[0] & 1))
+        rc = 0;
+    pthread_mutex_unlock(&g_out_mtx);
+    return rc;
 }
 
 int dcl_mbx_bind_std_streams(void)
@@ -624,34 +628,47 @@ int dcl_mbx_bind_std_streams(void)
         }
     }
 
-    /* SYS$OUTPUT: results leave here. */
+    /* SYS$OUTPUT: results leave here -- DCL's own records through its $QIO
+     * channel (dcl_mbx_put_record), an image's output through the relay. */
     if (resolve_to_mailbox("SYS$OUTPUT", dev, sizeof(dev))) {
         uint32_t chan = 0;
-        if (vms_kif_mbx_assign(dev, &chan) & 1) {
+        uint16_t qchan = 0;
+        struct dsc$descriptor_s devdsc;
+        vms_cstr_to_desc(&devdsc, dev);
+        if (!(sys$assign(&devdsc, &qchan, 0, NULL, 0) & 1)) {
+            qchan = 0;
+        } else if (vms_kif_mbx_assign(dev, &chan) & 1) {
             int p[2];
             if (pipe(p) == 0) {
                 dcl_out_flush();
                 g_out_chan   = chan;
-                g_out_pipe_r = p[0];   /* writer toggles O_NONBLOCK per batch */
+                g_out_qchan  = qchan;
+                g_out_pipe_r = p[0];
+                set_nonblock(g_out_pipe_r, 1);   /* read only under g_out_mtx */
                 if (dup2(p[1], STDOUT_FILENO) >= 0 &&
                     pthread_create(&g_writer, NULL, writer_main, NULL) == 0) {
                     g_writer_up = 1;
                     bound |= DCL_MBX_BOUND_OUTPUT;
                     close(p[1]);
                     /* fd 1 is a pipe now, so stdio would fully buffer it;
-                     * line-buffer so each command's output reaches the parent
-                     * as it is produced, not only at exit. */
+                     * line-buffer so an in-process image's lines reach the
+                     * relay as they are produced, not only at exit. */
                     dcl_out_line_buffered();
                 } else {
                     close(p[0]);
                     close(p[1]);
                     g_out_pipe_r = -1;
                     g_out_chan   = 0;
+                    g_out_qchan  = 0;
                     (void)vms_kif_dassgn(chan);
+                    (void)sys$dassgn(qchan);
                 }
             } else {
                 (void)vms_kif_dassgn(chan);
+                (void)sys$dassgn(qchan);
             }
+        } else {
+            (void)sys$dassgn(qchan);
         }
     }
 
@@ -661,14 +678,23 @@ int dcl_mbx_bind_std_streams(void)
 void dcl_mbx_shutdown(void)
 {
     if (g_writer_up) {
-        /* Flush DCL's remaining SYS$OUTPUT into the pipe, then close the last
-         * write end (fd 1) so writer_main() drains it and sees EOF; join so the
-         * final IO$_WRITEVBLK completes before we return (the parent's last
-         * read must not race process exit). */
+        /* DCL's last record, then whatever images left in the pipe, reach the
+         * mailbox before this returns (the parent's last read must not race
+         * process exit); the relay thread then leaves. A process still holding
+         * the pipe's write end cannot keep DCL from exiting. */
         dcl_out_flush();
+        dcl_out_stdio_sync();
         close(STDOUT_FILENO);
+        pthread_mutex_lock(&g_out_mtx);
+        (void)relay_locked();
+        g_out_stop = 1;
+        pthread_mutex_unlock(&g_out_mtx);
         pthread_join(g_writer, NULL);
         g_writer_up = 0;
+        if (g_out_qchan) {
+            (void)sys$dassgn(g_out_qchan);
+            g_out_qchan = 0;
+        }
         if (g_out_pipe_r >= 0) {
             close(g_out_pipe_r);
             g_out_pipe_r = -1;
@@ -702,9 +728,10 @@ int dcl_mbx__test_start_output(int sink_fd, int *out_write_fd)
     int p[2];
     if (pipe(p) != 0)
         return -1;
-    g_out_pipe_r  = p[0];   /* writer toggles O_NONBLOCK per batch */
+    g_out_pipe_r  = p[0];
+    set_nonblock(g_out_pipe_r, 1);
     g_out_sink_fd = sink_fd;
-    g_drain_epoch = 0;
+    g_out_stop    = 0;
     g_linelen     = 0;      /* fresh line-relay state for this hermetic run */
     if (pthread_create(&g_writer, NULL, writer_main, NULL) != 0) {
         close(p[0]); close(p[1]);

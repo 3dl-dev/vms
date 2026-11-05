@@ -238,7 +238,10 @@ foreach(_anchored
         test_syssvc_tcpip_service_db
         # test_syssvc_rms_textfile_threads (rd vms-acf3): rms_textfile from two
         # threads (append + open/getline/close); only through the weak seam.
-        test_syssvc_rms_textfile_threads)
+        test_syssvc_rms_textfile_threads
+        # test_syssvc_dcl_sink_route (rd vms-1b6a): reads DCL's SYS$OUTPUT
+        # file back through rms_textfile, the weak seam.
+        test_syssvc_dcl_sink_route)
     if(TARGET ${_anchored})
         target_sources(${_anchored} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)

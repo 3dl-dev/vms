@@ -1548,10 +1548,18 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
          * control: " " (single space) makes the text one record -- a new line
          * before it, a carriage return after -- and the IOSB counts those
          * three bytes too (VAX V7.3 and Alpha V8.4: 12 bytes written, count
-         * 15; semantic oracle TT.WRITE, rd vms-fc4). With IO$M_NOFORMAT, or
-         * no carriage control, the bytes go as they are. */
+         * 15; semantic oracle TT.WRITE, rd vms-fc4). "$" (prompt) is the new
+         * line before the text and no carriage return after: the record is
+         * left open (rd vms-1b6a). With IO$M_NOFORMAT, or no carriage
+         * control, the bytes go as they are. */
         int record = ((p4 & 0xFF) == 0x20) && !(func & IO$M_NOFORMAT);
-        uint32_t st = (p1 && p2) ? (record ? vms_kif_tt_write_record(ec, p1, p2)
+        int prompt = ((p4 & 0xFF) == 0x24) && !(func & IO$M_NOFORMAT);
+        /* An empty record (P2 = 0, P4 " ") is still a record: its new line and
+         * carriage return show a blank line, as DCL's blank output lines do on
+         * VAX V7.3 (SHOW CPU / SHOW PROCESS goldens, rd vms-1b6a). */
+        uint32_t st = (record && !p2) ? vms_kif_tt_write_record(ec, p1, 0)
+                    : (p1 && p2) ? (record ? vms_kif_tt_write_record(ec, p1, p2)
+                                    : prompt ? vms_kif_tt_write_prompt(ec, p1, p2)
                                     : (func & IO$M_NOFORMAT)
                                            ? vms_kif_tt_write_noformat(ec, p1, p2)
                                            : vms_kif_tt_write(ec, p1, p2))

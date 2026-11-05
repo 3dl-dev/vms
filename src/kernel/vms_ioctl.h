@@ -2203,6 +2203,10 @@ struct vms_tt_write_args {
  * cursor position is left as it was (rd vms-457: the VAX V7.3 console after
  * DIRECTORY/PAGE's pager, keystroke PG.DIR C1) */
 #define VMS_TT_WR_NOFORMAT    0x2u
+/* The bytes OPEN a record and leave it open -- a new line before them, no
+ * carriage return after (IO$_WRITEVBLK with P4 carriage control "$", prompt;
+ * rd vms-1b6a): what a record writer flushes of a line not yet ended */
+#define VMS_TT_WR_PROMPT      0x4u
 
 #define VMS_TT_MODE_PASSALL   0x1u     /* IO$_SETMODE P2 = IO$K_TT_PASSALL */
 struct vms_tt_mode_args {

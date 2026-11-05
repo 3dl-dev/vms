@@ -20,6 +20,8 @@
 #ifndef OVMX_DCL_MBX_H
 #define OVMX_DCL_MBX_H
 
+#include <stddef.h>
+
 /* Return-bit set from dcl_mbx_bind_std_streams(). */
 #define DCL_MBX_BOUND_INPUT   0x1
 #define DCL_MBX_BOUND_OUTPUT  0x2
@@ -67,15 +69,20 @@ void dcl_mbx_shutdown(void);
 int dcl_mbx_output_is_mailbox(void);
 
 /*
- * dcl_mbx_output_drain_sync - block until the writer thread has pushed every
- * byte currently in DCL's output pipe out through the SYS$OUTPUT mailbox. Call
- * it AFTER writing and fflush()'ing the prompt: it guarantees the newline-less
- * prompt is fully emitted over the mailbox before DCL issues the read that arms
- * the terminal's synchronous keystroke echo, closing the prompt/echo race that
- * produced the interleaved "d$ ir" on the interactive console (vms-195). A no-op
- * when SYS$OUTPUT is not mailbox-bound, so the ordinary terminal/file path is
- * unchanged.
+ * dcl_mbx_output_drain_sync - relay every byte now in the image-output pipe to
+ * the SYS$OUTPUT mailbox before returning. Called before DCL arms a terminal
+ * read, so nothing written before the read can reach the console after its
+ * echo -- the interleaved "d$ ir" of vms-195. Never blocks on an empty pipe; a
+ * no-op when SYS$OUTPUT is not mailbox-bound.
  */
 void dcl_mbx_output_drain_sync(void);
+
+/*
+ * dcl_mbx_put_record - one record of DCL's own SYS$OUTPUT to the bound
+ * mailbox: $QIO IO$_WRITEVBLK on DCL's channel, after everything an image
+ * wrote to the relay before it (rd vms-1b6a). 0 when the mailbox took it; -1
+ * when SYS$OUTPUT is not a bound mailbox or the write failed.
+ */
+int dcl_mbx_put_record(const char *rec, size_t n);
 
 #endif /* OVMX_DCL_MBX_H */

@@ -220,11 +220,60 @@ static void test_two_lines_one_read_become_two_messages(void)
           "starting at byte 0 -- echo_ast's marker match would have found it");
 }
 
+/*
+ * test_dcl_record_follows_image_output (rd vms-1b6a) - DCL's own SYS$OUTPUT
+ * record goes to the mailbox by its own $QIO (dcl_mbx_put_record), not through
+ * the image-output relay; it must still arrive AFTER everything an image wrote
+ * before it. An image's last line, and a line it left unended, sit in the relay
+ * pipe; the relay thread is lagged so it has not sent them when DCL writes its
+ * "MMK____status=" record. The record must be the third message, never ahead
+ * of the image's output.
+ */
+static void test_dcl_record_follows_image_output(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) != 0) {
+        CHECK(0, "dcl-record: socketpair()");
+        return;
+    }
+    int img_fd1 = -1;
+    if (dcl_mbx__test_start_output(sv[1], &img_fd1) != 0) {
+        CHECK(0, "dcl-record: start_output()");
+        close(sv[0]); close(sv[1]);
+        return;
+    }
+    dcl_mbx__test_set_sink_delay(WRITER_LAG_US);
+
+    static const char img[] = "%CC-I-DONE, compiled\nunended";
+    (void)!write(img_fd1, img, sizeof img - 1);
+    static const char mark[] = "MMK____status=1\n";
+    CHECK(dcl_mbx_put_record(mark, sizeof mark - 1) == 0,
+          "dcl-record: the mailbox takes DCL's record");
+
+    close(img_fd1);
+    dcl_mbx__test_stop_output();
+    dcl_mbx__test_set_sink_delay(0);
+    close(sv[1]);
+
+    char r1[64] = {0}, r2[64] = {0}, r3[64] = {0};
+    (void)!recv(sv[0], r1, sizeof r1 - 1, 0);
+    (void)!recv(sv[0], r2, sizeof r2 - 1, 0);
+    (void)!recv(sv[0], r3, sizeof r3 - 1, 0);
+    close(sv[0]);
+    CHECK(strcmp(r1, "%CC-I-DONE, compiled\n") == 0,
+          "dcl-record: the image's line is the first message");
+    CHECK(strcmp(r2, "unended") == 0,
+          "dcl-record: the image's unended line is the second message");
+    CHECK(strcmp(r3, mark) == 0,
+          "dcl-record: DCL's record follows everything the image wrote before it");
+}
+
 int main(void)
 {
     test_repro_without_barrier();
     test_fixed_with_barrier();
     test_two_lines_one_read_become_two_messages();
+    test_dcl_record_follows_image_output();
 
     if (failures) {
         fprintf(stderr, "\n%d check(s) failed\n", failures);

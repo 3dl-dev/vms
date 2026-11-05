@@ -131,6 +131,7 @@ int main(void)
     unsigned long tp = tp_read(), got = 0;
     int ok = fork_and_report(tp, &got);
     printf("  creator TP %#lx, task TP %#lx\n", tp, got);
+    /* negctl: task-fork-wrong-thread-pointer */
     CHECK(ok, "vms_kif_task_fork() created a task that reported and exited 0");
     CHECK(ok && got == tp, "the task's thread pointer is the creator's");
 

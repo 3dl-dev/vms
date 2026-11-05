@@ -29,6 +29,7 @@
  */
 
 #include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1703,7 +1704,7 @@ int edt_run(struct dcl_context *ctx, const char *spec, const char *output,
 
     for (;;) {
         if (read_cmd(line, sizeof line) != 0) {
-            if (feof(stdin)) {                /* input exhausted: as QUIT */
+            if (dcl_in_at_eof()) {            /* input exhausted: as QUIT */
                 buf_free(&b);
                 return SS$_NORMAL;
             }

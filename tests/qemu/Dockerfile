@@ -644,7 +644,10 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || \
       { echo "FATAL: DCL.EXE was not built into the static tree -- SHOW SYSTEM would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/bin/DCL.EXE && \
-    cp /initramfs/bin/DCL.EXE /initramfs/tests/DCL.EXE && \
+    # /tests/DCL.EXE is the SAME file as /bin/DCL.EXE: a hard link, which the
+    # newc archive and the guest's rootfs hold once, so the second name costs
+    # none of the initramfs budget (INITRAMFS BUDGET, below).
+    ln /initramfs/bin/DCL.EXE /initramfs/tests/DCL.EXE && \
     # PIPESTAGE.EXE (vms-e9a B2): the representative pipeline-stage image
     # test_syssvc_spawn_pipeline.c $CREPRC's as a stand-in for a real GCC stage.
     # Staged at /bin/PIPESTAGE.EXE (the path the suite hard-codes). It matches no

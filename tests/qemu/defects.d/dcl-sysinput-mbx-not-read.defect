@@ -3,37 +3,39 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "DCL reads SYS\$INPUT from / writes SYS\$OUTPUT to a mailbox device (src/vmsdcl/dcl_mbx.c, vms-786) -- the persistent-DCL-over-mailboxes drive MMK's send_cmd_and_wait stands on (spine #4, vms-b23)";;
-        targets)      echo "vmsdcl/dcl_mbx.c";;
-        suites_red)   echo "test_syssvc_mbx_dcldrv test_syssvc_dcl_sink_route";;
+        facility)     echo "DCL reads SYS\$INPUT from a mailbox device by \$QIOW IO\$_READVBLK (src/vmsdcl/dcl_in.c, vms-786, vms-4d27) -- the persistent-DCL-over-mailboxes drive MMK's send_cmd_and_wait stands on (spine #4, vms-b23)";;
+        targets)      echo "vmsdcl/dcl_in.c";;
+        suites_red)   echo "test_syssvc_mbx_dcldrv test_syssvc_dcl_sink_route test_syssvc_dcl_input_route";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "dcl_mbx.c's reader thread does the IO\$_READVBLK that pulls each command record out of the SYS\$INPUT mailbox and forwards it (mlen bytes) into the pipe DCL's fgets() loop reads. The mutation forces that forwarded length to zero (mlen = 0), so the reader still drains the mailbox but delivers NOTHING to DCL's command loop -- the child never sees `NUM = 6 * 7` or the WRITE, computes nothing, and delivers no result over SYS\$OUTPUT. The suite's driven-result assertion reddens. What STAYS GREEN pins the mutation to the SYS\$INPUT read path alone: the parent's own \$CREMBX of both mailboxes and its \$QIO WRITEVBLK of both command lines into the input mailbox all still return SS\$_NORMAL -- the child's failure to READ is the only thing broken, exactly the A-writes/B-reads shape INV-6/Rule 11 exists to catch.";;
+        why)          echo "dcl_in.c's mbx_get does the \$QIOW IO\$_READVBLK that takes each command record out of the SYS\$INPUT mailbox on DCL's own channel and hands its n bytes to the command loop. The mutation forces that length to zero (n = 0), so DCL still drains the mailbox but every record it reads is empty -- the child never sees `NUM = 6 * 7` or the WRITE, computes nothing, and delivers no result over SYS\$OUTPUT. The suite's driven-result assertion reddens. What STAYS GREEN pins the mutation to the SYS\$INPUT read path alone: the parent's own \$CREMBX of both mailboxes and its \$QIO WRITEVBLK of both command lines into the input mailbox all still return SS\$_NORMAL -- the child's failure to READ is the only thing broken, exactly the A-writes/B-reads shape INV-6/Rule 11 exists to catch.";;
         require_fail) cat <<'EOF'
 the spawned DCL read its commands from the SYS$INPUT mailbox, executed them, and delivered the computed result over the SYS$OUTPUT mailbox
+mailbox: DCL read its commands, the READ SYS$INPUT data record and a continuation, in order, as SYS$INPUT mailbox messages
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 mailbox: DCL's own SHOW SYMBOL output arrives over the SYS$OUTPUT mailbox as one record
 mailbox: WRITE SYS$OUTPUT arrives over the SYS$OUTPUT mailbox as exactly one record
 file: DCL's SHOW SYMBOL output and its WRITE are records of the SYS$OUTPUT file, read back through RMS
+mailbox: DCL reads LOGOUT from the mailbox and exits
 EOF
                       ;;
-        knock_on_why)  echo "test_syssvc_dcl_sink_route (rd vms-1b6a) drives the shipped DCL over the same SYS\$INPUT command mailbox: a DCL that receives no command writes no SHOW SYMBOL line and no WRITE record, to its SYS\$OUTPUT mailbox or to its SYS\$OUTPUT file -- the same single defect, observed where that suite looks for DCL's output";;
+        knock_on_why)  echo "test_syssvc_dcl_sink_route (rd vms-1b6a) drives the shipped DCL over the same SYS\$INPUT command mailbox: a DCL that receives no command writes no SHOW SYMBOL line and no WRITE record, to its SYS\$OUTPUT mailbox or to its SYS\$OUTPUT file -- the same single defect, observed where that suite looks for DCL's output; test_syssvc_dcl_input_route (rd vms-4d27) drives the same read -- a DCL that reads only empty records never reads its LOGOUT, so it does not exit";;
         esac
 
 }
 
 defect_apply() {
-        # UNIQUE TEXT, no range anchor needed: `uint32_t mlen = actlen;` occurs
-        # exactly once in dcl_mbx.c -- the reader thread's per-message length
-        # (the count of bytes IO$_READVBLK pulled out of the SYS$INPUT mailbox).
-        # Forcing it to zero makes the reader drain the SYS$INPUT mailbox but
-        # forward NOTHING into DCL's command loop, so the driven DCL never
-        # receives a command. After substitution the text no longer matches, so a
-        # second apply is a no-op (the selftest requires).
-        sed -i 's|uint32_t mlen = actlen;|uint32_t mlen = 0; /* NEGCTL dcl-sysinput-mbx-not-read */|' "$_file"
+        # UNIQUE TEXT, no range anchor needed: `size_t n = iosb[1];` occurs
+        # exactly once in dcl_in.c -- mbx_get's per-message length (the count
+        # of bytes IO$_READVBLK took out of the SYS$INPUT mailbox). Forcing it
+        # to zero makes DCL drain the SYS$INPUT mailbox but read only empty
+        # records, so the driven DCL never receives a command. After
+        # substitution the text no longer matches, so a second apply is a no-op
+        # (the selftest requires).
+        sed -i 's|size_t n = iosb\[1\];|size_t n = 0; /* NEGCTL dcl-sysinput-mbx-not-read */|' "$_file"
 
     :
 }

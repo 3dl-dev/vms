@@ -900,6 +900,10 @@ static void kp_command_line(struct kp *k)
     line_cmd(k->b, cmdl, skip(cmdl), skip(cmdl));
     if (cap) {
         dcl_out_flush();
+        /* the sink stops gathering into pg.tmp before it is closed: DCL's
+         * next record (the "$ " after QUIT) must not go to a freed stream
+         * (keystroke EDT.KEYPAD2 Q, rd vms-1b6a) */
+        dcl_out_capture(NULL);
         dup2(pg.save, 1);
         close(pg.save);
         rewind(pg.tmp);

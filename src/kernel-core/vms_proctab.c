@@ -2117,6 +2117,44 @@ out:
 }
 
 /*
+ * The SYSGEN PQL_DPGFLQUOTA / PQL_MPGFLQUOTA pair (rd vms-89dd8), loaded by
+ * STARTUP.EXE from OVMXVMSSYS.PAR through VMS_IOCTL_PQL_LOAD. The executive has
+ * no default of its own: pql_loaded == 0 means "never told". Guarded by
+ * vms_proc_hash_lock.
+ */
+static uint32_t pql_dpgflquota, pql_mpgflquota;
+static int pql_loaded;
+
+long vms_ioctl_pql_load(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_pql_load_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    if (args.flags & ~VMS_PQL_LOAD_F_CLEAR) {
+        args.status = SS__BADPARAM;
+    } else if (!(proc->cur_privs & VMS_PRV_M_CMKRNL)) {
+        args.status = SS__NOPRIV;
+    } else {
+        exec_lock(&vms_proc_hash_lock);
+        if (args.flags & VMS_PQL_LOAD_F_CLEAR) {
+            pql_loaded = 0;
+            pql_dpgflquota = pql_mpgflquota = 0;
+        } else {
+            pql_dpgflquota = args.dpgflquota;
+            pql_mpgflquota = args.mpgflquota;
+            pql_loaded = 1;
+        }
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NORMAL;
+    }
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_creprc_pcb - $CREPRC's creator creates the new process's PCB
  * (rd vms-c43, design note 3.1). The caller is the creator; the target is a
  * task it forked and is holding before exec. A DETACHED identity is the one
@@ -2146,7 +2184,7 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
     given = (args.flags & VMS_CREPRC_PCB_F_IDENTITY) != 0;
     network = (args.flags & VMS_CREPRC_PCB_F_NETWORK) != 0;
     if ((args.flags & ~(0xFFu | VMS_CREPRC_PCB_F_LOGIN | VMS_CREPRC_PCB_F_IDENTITY |
-                        VMS_CREPRC_PCB_F_NETWORK)) != 0 ||
+                        VMS_CREPRC_PCB_F_NETWORK | VMS_CREPRC_PCB_F_QUOTA)) != 0 ||
         (network && kind != VMS_CREPRC_PCB_DETACHED) ||
         (kind != VMS_CREPRC_PCB_SUBPROCESS && kind != VMS_CREPRC_PCB_DETACHED &&
          kind != VMS_CREPRC_PCB_CONTINUE) ||
@@ -2180,7 +2218,8 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
      * activations' worth (vms_proc_image_activated counts them down). A
      * subprocess with a GIVEN identity ($CREPRC uic/prvadr) takes it now,
      * from the executive, instead of stamping it itself. */
-    if ((args.status & 1) && (login || given || network)) {
+    if ((args.status & 1) && (login || given || network ||
+                              (args.flags & VMS_CREPRC_PCB_F_QUOTA))) {
         struct vms_proc *np;
 
         exec_lock(&vms_proc_hash_lock);
@@ -2191,6 +2230,37 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
          * as the executive says, never a guess from its missing terminal. */
         if (np && network)
             np->network = 1;
+        /* The quota list ($CREPRC "quota", rd vms-89dd8): the EXECUTIVE sources
+         * the new process's PGFLQUOTA -- the listed PQL$_PGFLQUOTA, else the
+         * SYSGEN default PQL_DPGFLQUOTA -- clamped up to PQL_MPGFLQUOTA, and
+         * marks the block sourced so va_quota_check enforces it. The other
+         * limits are the creator's when it has a sourced block (a subprocess
+         * shares its job's limits), otherwise left zero/unsourced. The child
+         * has not been released yet, so nothing runs against the block. */
+        /* NEGCTL-ANCHORED (creprc-quota-list-ignored) */
+        if (np && (args.flags & VMS_CREPRC_PCB_F_QUOTA)) {
+            uint32_t pg = args.pgflquota;
+            uint32_t dpg, mpg;
+            int loaded;
+
+            /* vms_proc_hash_lock is held here; it also guards the pair. */
+            dpg = pql_dpgflquota;
+            mpg = pql_mpgflquota;
+            loaded = pql_loaded;
+            /* NEGCTL-ANCHORED (creprc-pql-default-hardcoded) */
+            if (loaded) {
+                if (pg == 0)
+                    pg = dpg;
+                if (pg < mpg)
+                    pg = mpg;
+                if (proc->quota_valid)
+                    np->quota = proc->quota;
+                np->quota.pgflquota = pg;
+                np->quota_valid = 1;
+            }
+            /* else: no SYSGEN state was ever loaded -- no invented value, the
+             * child stays unsourced as before. */
+        }
         exec_unlock(&vms_proc_hash_lock);
         if (np && given)
             vms_proc_apply_ticket_identity(np, args.username, args.uic, args.privs);

@@ -1519,6 +1519,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_BRKAUTH:
 	case VMS_IOCTL_PROCCTL:
 	case VMS_IOCTL_CREPRC_PCB:
+	case VMS_IOCTL_PQL_LOAD:
 	case VMS_IOCTL_SPAWN_NOTIFY:
 	case VMS_IOCTL_CREPRC_SYNC:
 		uarg = data;
@@ -1576,6 +1577,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_procctl(proc, (unsigned long)uarg);          break;
 		case VMS_IOCTL_CREPRC_PCB:   /* rd vms-c43 */
 			r = vms_ioctl_creprc_pcb(proc, (unsigned long)uarg);       break;
+		case VMS_IOCTL_PQL_LOAD:     /* rd vms-89dd8 */
+			r = vms_ioctl_pql_load(proc, (unsigned long)uarg);         break;
 		/* /NOWAIT subprocess-exit completion arm (vms-e9a B1) */
 		case VMS_IOCTL_SPAWN_NOTIFY:
 			r = vms_ioctl_spawn_notify(proc, (unsigned long)uarg);     break;

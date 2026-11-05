@@ -1548,6 +1548,22 @@ static uint32_t load_cluster_sysgen_params(void)
         args.auth_valid = 1;
     }
 
+    /* The PQL page-file pair $CREPRC sources a quota-list child from (rd
+     * vms-89dd8): read here, in the same staging scope, and handed to the
+     * executive. A record absent from an older .PAR takes the SYSGEN table
+     * default (sysgen_params.h), as CLUSTER_CREDITS does. */
+    {
+        uint32_t dpg = SYSGEN_DEFAULT_PQL_DPGFLQUOTA;
+        uint32_t mpg = SYSGEN_DEFAULT_PQL_MPGFLQUOTA;
+        uint32_t v;
+
+        if (sysgen_read_param("PQL_DPGFLQUOTA", &v) == 0)
+            dpg = v;
+        if (sysgen_read_param("PQL_MPGFLQUOTA", &v) == 0)
+            mpg = v;
+        (void)vms_kif_pql_load(dpg, mpg, 0);
+    }
+
 #if defined(OVMX_BOOT_ACP_BRIDGE)
     if (staged_params)
         unsetenv("OVMX_SYSGEN_PATH");

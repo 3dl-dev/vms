@@ -2052,6 +2052,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_procctl(proc, arg);
     case VMS_IOCTL_CREPRC_PCB:        /* rd vms-c43 */
         return vms_ioctl_creprc_pcb(proc, arg);
+    case VMS_IOCTL_PQL_LOAD:          /* rd vms-89dd8 */
+        return vms_ioctl_pql_load(proc, arg);
 
     /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
     case VMS_IOCTL_SPAWN_NOTIFY:

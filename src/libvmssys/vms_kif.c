@@ -2411,12 +2411,36 @@ uint32_t vms_kif_brkauth(uint32_t sndtyp)
     return args.status;
 }
 
+/* VMS_IOCTL_PQL_LOAD (rd vms-89dd8): give the executive the SYSGEN
+ * PQL_DPGFLQUOTA/PQL_MPGFLQUOTA pair; flags VMS_PQL_LOAD_F_CLEAR forgets it. */
+uint32_t vms_kif_pql_load(uint32_t dpgflquota, uint32_t mpgflquota, uint32_t flags)
+{
+    struct vms_pql_load_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.dpgflquota = dpgflquota;
+    args.mpgflquota = mpgflquota;
+    args.flags = flags;
+    KIF_CALL(VMS_IOCTL_PQL_LOAD, &args);
+    return args.status;
+}
+
 /* $CREPRC's creator creates the new process's PCB (rd vms-c43): `child_pid`
  * is the substrate pid of the task it forked and holds; flags =
  * VMS_CREPRC_PCB_SUBPROCESS (identity from the creator) or _DETACHED (the
  * given user name, UIC and privileges, authorized by the creator's row). */
 uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *username,
                             uint32_t uic, uint64_t privs, uint32_t *vms_pid)
+{
+    return vms_kif_creprc_pcb_q(child_pid, flags, username, uic, privs, 0, vms_pid);
+}
+
+/* The same, with the $CREPRC quota list's PQL$_PGFLQUOTA (rd vms-89dd8):
+ * `flags` carries VMS_CREPRC_PCB_F_QUOTA when a list was given, `pgflquota`
+ * the value it named (0 = none named). The executive sources the limit. */
+uint32_t vms_kif_creprc_pcb_q(uint32_t child_pid, uint32_t flags, const char *username,
+                              uint32_t uic, uint64_t privs, uint32_t pgflquota,
+                              uint32_t *vms_pid)
 {
     struct vms_creprc_pcb_args args;
 
@@ -2427,6 +2451,7 @@ uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *user
         vms_strncpy(args.username, username, VMS_USERNAME_SIZE - 1);
     args.uic = uic;
     args.privs = privs;
+    args.pgflquota = pgflquota;
 
     KIF_CALL(VMS_IOCTL_CREPRC_PCB, &args);
 

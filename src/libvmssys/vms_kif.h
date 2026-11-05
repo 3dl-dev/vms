@@ -893,6 +893,10 @@ uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *user
  * the op's SS$_ status; SS$_ABORT means the other side died or gave up. */
 uint32_t vms_kif_creprc_sync(uint32_t op, uint32_t *rec, uint32_t *pid,
                              uint32_t *value, uint32_t *vms_pid);
+uint32_t vms_kif_pql_load(uint32_t dpgflquota, uint32_t mpgflquota, uint32_t flags);
+uint32_t vms_kif_creprc_pcb_q(uint32_t child_pid, uint32_t flags, const char *username,
+                              uint32_t uic, uint64_t privs, uint32_t pgflquota,
+                              uint32_t *vms_pid);
 uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
                              uint32_t cap, uint32_t *count);
 

@@ -35,6 +35,10 @@
 #include "vms_kif.h"
 #include "vms/pcb.h"
 #include "ovmx_test_fork.h"
+#include "pqldef.h"
+#include "descrip.h"
+#include "tcg_deadline.h"
+#include <fcntl.h>
 
 #define EXIT_SKIP 77
 
@@ -117,6 +121,137 @@ static int child_quota(void)
     return fail ? 1 : 0;
 }
 
+/*
+ * ---- 5. $CREPRC'S QUOTA LIST sources a subprocess's PGFLQUOTA (rd vms-89dd8) ----
+ *
+ * The creator $CREPRCs THIS binary as the subprocess; VA_CREPRC_OUT names the
+ * file the subprocess reports its checks into, VA_CREPRC_WANT the PGFLQUOTA
+ * (pagelets) the executive must report for it. The child holds no identity of
+ * its own and sources nothing: whatever limit it sees, the executive gave it.
+ */
+static int creprc_child(const char *out, unsigned int want)
+{
+    struct vms_va_args a;
+    void *r[2];
+    char tmp[300], buf[256];
+    int fd, bad = 0;
+
+    snprintf(buf, sizeof buf, "creprc child: ");
+    if (want == 0) {                    /* nothing loaded: left unsourced */
+        if (q(&a) && a.quota_sourced == 0 && sys$expreg(64, r, 0, 0) == SS$_NORMAL)
+            snprintf(buf, sizeof buf, "OK\n");
+        else {
+            bad++;
+            snprintf(buf, sizeof buf, "BAD: sourced=%u, want unsourced\n", a.quota_sourced);
+        }
+    } else if (!(q(&a) && a.quota_sourced == 1 && a.pgflquota == want)) {
+        bad++;
+        snprintf(buf, sizeof buf, "BAD: sourced=%u pgflquota=%llu want=%u\n",
+                 q(&a) ? a.quota_sourced : 99u, (unsigned long long)a.pgflquota, want);
+    } else if (sys$expreg(64, r, 0, 0) != SS$_NORMAL) {
+        bad++;
+        snprintf(buf, sizeof buf, "BAD: a request inside the quota was refused\n");
+    } else if (sys$expreg(want + 512, r, 0, 0) != SS$_EXQUOTA) {
+        bad++;
+        snprintf(buf, sizeof buf, "BAD: a request past the quota was not SS$_EXQUOTA\n");
+    } else
+        snprintf(buf, sizeof buf, "OK\n");
+    snprintf(tmp, sizeof tmp, "%s.tmp", out);
+    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) {
+        if (write(fd, buf, strlen(buf)) < 0) bad++;
+        close(fd);
+        rename(tmp, out);
+    }
+    return bad ? 1 : 0;
+}
+
+/* $CREPRC a subprocess of this binary with `quota` (NULL = none); returns the
+ * subprocess's report ("OK", or its BAD line), or "" if it never reported. */
+static const char *creprc_probe(const void *quota, unsigned int want, char *rep, size_t n)
+{
+    static int seq;
+    char out[128], exe[256], want_s[16];
+    struct dsc$descriptor_s img;
+    uint32_t pid = 0, st;
+    ssize_t k;
+    int fd, t;
+
+    snprintf(out, sizeof out, "/tmp/va_creprc.%d.%d", (int)getpid(), ++seq);
+    unlink(out);
+    snprintf(want_s, sizeof want_s, "%u", want);
+    setenv("VA_CREPRC_OUT", out, 1);
+    setenv("VA_CREPRC_WANT", want_s, 1);
+    k = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    if (k <= 0) { rep[0] = 0; return rep; }
+    exe[k] = 0;
+    img.dsc$w_length = (unsigned short)k;
+    img.dsc$b_dtype = 14; img.dsc$b_class = 1; img.dsc$a_pointer = exe;
+    fflush(NULL);
+    st = sys$creprc(&pid, &img, NULL, NULL, NULL, NULL, quota, NULL, 0, 0, 0, 0);
+    rep[0] = 0;
+    if (!(st & 1)) { snprintf(rep, n, "CREPRC %08x", st); return rep; }
+    for (t = 0; t < (int)ovmx_tcg_ms(30000) / 100; t++) {
+        fd = open(out, O_RDONLY);
+        if (fd >= 0) {
+            k = read(fd, rep, n - 1);
+            close(fd);
+            rep[k > 0 ? k : 0] = 0;
+            unlink(out);
+            return rep;
+        }
+        usleep(100000);
+    }
+    return rep;
+}
+
+#define QENT(code, val) (code), \
+    (unsigned char)((val) & 0xFF), (unsigned char)(((val) >> 8) & 0xFF), \
+    (unsigned char)(((val) >> 16) & 0xFF), (unsigned char)(((val) >> 24) & 0xFF)
+
+/* The SYSGEN pair this test loads into the executive (distinct from any real
+ * system's, so a hard-coded default cannot pass): default 6000, minimum 3000. */
+#define T_DPG 6000u
+#define T_MPG 3000u
+
+static void test_creprc_quota(void)
+{
+    char rep[256];
+    static const unsigned char q5000[] = { QENT(PQL$_PGFLQUOTA, 5000u), PQL$_LISTEND, 0,0,0,0 };
+    static const unsigned char qlow[]  = { QENT(PQL$_PGFLQUOTA, 100u), PQL$_LISTEND, 0,0,0,0 };
+    static const unsigned char qother[] = { QENT(PQL$_FILLM, 50u), PQL$_LISTEND, 0,0,0,0 };
+    static const unsigned char qbad[]  = { QENT(99, 1u), PQL$_LISTEND, 0,0,0,0 };
+    struct dsc$descriptor_s img = { 4, 14, 1, (char *)"/x" };
+    uint32_t pid = 0;
+
+    check((vms_kif_pql_load(T_DPG, T_MPG, 0) & 1) != 0,
+          "creprc: the executive accepts a SYSGEN PQL_DPGFLQUOTA/PQL_MPGFLQUOTA pair (6000/3000)");
+
+    creprc_probe(q5000, 5000, rep, sizeof rep);
+    /* negctl: creprc-quota-list-ignored */
+    check(strcmp(rep, "OK\n") == 0,
+          "creprc: a listed PQL$_PGFLQUOTA of 5000 sources the subprocess's PGFLQUOTA; $EXPREG past it is SS$_EXQUOTA");
+    if (strcmp(rep, "OK\n")) printf("    child said: %s\n", rep);
+    creprc_probe(qlow, T_MPG, rep, sizeof rep);
+    check(strcmp(rep, "OK\n") == 0,
+          "creprc: a listed PGFLQUOTA below the loaded PQL_MPGFLQUOTA is clamped up to it (3000)");
+    if (strcmp(rep, "OK\n")) printf("    child said: %s\n", rep);
+    creprc_probe(qother, T_DPG, rep, sizeof rep);
+    /* negctl: creprc-pql-default-hardcoded */
+    check(strcmp(rep, "OK\n") == 0,
+          "creprc: a list without PGFLQUOTA takes the loaded PQL_DPGFLQUOTA (6000)");
+    if (strcmp(rep, "OK\n")) printf("    child said: %s\n", rep);
+    check(sys$creprc(&pid, &img, NULL, NULL, NULL, NULL, qbad, NULL, 0, 0, 0, 0) == SS$_BADPARAM,
+          "creprc: an unknown PQL$_ code in the list is SS$_BADPARAM");
+
+    check((vms_kif_pql_load(0, 0, VMS_PQL_LOAD_F_CLEAR) & 1) != 0,
+          "creprc: the loaded pair can be cleared (the executive's never-loaded state)");
+    creprc_probe(q5000, 0, rep, sizeof rep);
+    check(strcmp(rep, "OK\n") == 0,
+          "creprc: with no SYSGEN pair loaded the executive invents none: the child is left unsourced");
+    if (strcmp(rep, "OK\n")) printf("    child said: %s\n", rep);
+}
+
 int main(void)
 {
     struct vms_va_args a0, a;
@@ -130,6 +265,11 @@ int main(void)
     uint64_t dlen = 0;
 
     setvbuf(stdout, NULL, _IOLBF, 0);
+    if (getenv("VA_CREPRC_OUT")) {          /* the $CREPRC'd subprocess (section 5) */
+        if (!vms_pcb_init(0xFFFFFFFFFFFFFFFFULL) || vms_kif_open() < 0)
+            return 1;
+        return creprc_child(getenv("VA_CREPRC_OUT"), (unsigned int)atoi(getenv("VA_CREPRC_WANT")));
+    }
     printf("=== test_syssvc_va: $EXPREG/$CRETVA/$DELTVA and the C RTL heap are the executive's (rd vms-bc53) ===\n");
     if (!vms_pcb_init(0xFFFFFFFFFFFFFFFFULL)) { printf("  FAIL: pcb\n"); return 1; }
     if (vms_kif_open() < 0) {
@@ -193,6 +333,8 @@ int main(void)
           "the quota child's checks all passed");
     check(q(&a) && a.charged == a0.charged && a.extents == a0.extents,
           "the child's heap was charged to the child: this process's accounting did not move");
+
+    test_creprc_quota();
 
     printf("=== test_syssvc_va: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;

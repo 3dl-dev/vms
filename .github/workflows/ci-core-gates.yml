@@ -144,6 +144,10 @@ jobs:
         run: |
           sh tools/cross-alpha-vms/test/check_patch_audit.sh --self-test .
           sh tools/cross-alpha-vms/test/check_patch_audit.sh .
+      - name: check_sysgen_oracle.py (SYSGEN PQL page-file rows match the real-VMS capture)
+        run: |
+          python3 tools/ci/check_sysgen_oracle.py --selftest
+          python3 tools/ci/check_sysgen_oracle.py .
 
   merge-queue-gates:
     # Every gating workflow ends in the merge queue's required `gate` job, and

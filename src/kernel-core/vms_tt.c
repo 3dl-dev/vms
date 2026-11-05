@@ -1817,7 +1817,8 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 		}
 		done += k;
 	}
-	if ((a.flags & VMS_TT_WR_RECORD) && a.status == SS__NORMAL && a.len &&
+	/* a record ends with its carriage return even when it is empty (a blank line) */
+	if ((a.flags & VMS_TT_WR_RECORD) && a.status == SS__NORMAL &&
 	    vms_tt_write(tt, (const uint8_t *)"\n", 1, 4))
 		a.status = SS__ABORT;
 	vms_tt_write_end(tt);

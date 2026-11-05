@@ -417,6 +417,13 @@ int main(void)
         CHECK((pa.fields_valid & VMS_PI_V_BUFIO) && pb.bufio == pa.bufio + 1,
               "one $QIO record write is one buffered I/O (JPI$_BUFIO)");
     }
+    /* an EMPTY record is still a record: it pays the owed line feed and ends
+     * with its carriage return -- a blank line, as DCL's blank output lines
+     * are on VAX V7.3 (SHOW CPU / SHOW PROCESS goldens; rd vms-1b6a) */
+    st = vms_kif_tt_write_record(chan, "", 0);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK((st & 1) && strcmp(scr, "\n\r") == 0,
+          "an empty $QIO record (P2 = 0, P4 \" \") is a blank line: <LF><CR>");
     /* IO$M_NOFORMAT: the bytes go as they are and the driver's idea of the
      * cursor is left alone -- the record after it still pays the line feed
      * the record before it owed (rd vms-457; keystroke PG.DIR C1) */

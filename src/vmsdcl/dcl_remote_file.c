@@ -21,6 +21,7 @@
  * VAX); tests/vmsrms/test_rms_remote.c replays the VAX FAL's own replies and
  * compares this output with the VAX console byte for byte.
  */
+#include "dcl/dcl_out.h"
 #include "dcl/dcl_remote.h"
 
 #include <stdio.h>
@@ -134,7 +135,7 @@ static void put_reason(uint32_t cond)
     (void)sys$getmsg(cond, &tl, &d, 15, NULL);   /* NOMSG text when unknown */
     txt[tl < sizeof txt ? tl : sizeof txt - 1] = '\0';
     if (txt[0] == '%') txt[0] = '-';
-    printf("%s\n", txt);
+    dcl_out_printf("%s\n", txt);
 }
 
 /* The RMS status, then -- for the RMS errors that carry the ACP status in
@@ -262,28 +263,28 @@ static size_t dir_part(const char *r)
 static size_t dir_print_group(const struct found *f, size_t from, size_t to)
 {
     size_t pl = dir_part(f->rsa[from]);
-    printf("\nDirectory %.*s\n\n", (int)pl, f->rsa[from]);
+    dcl_out_printf("\nDirectory %.*s\n\n", (int)pl, f->rsa[from]);
     int col = 0, pend = 0;
     for (size_t i = from; i < to; i++) {
         const char *nm = f->rsa[i] + pl;
         int len = (int)strlen(nm);
-        if (col > 0 && pend > 0) printf("%*s", pend, "");
+        if (col > 0 && pend > 0) dcl_out_printf("%*s", pend, "");
         pend = 0;
-        printf("%s", nm);
+        dcl_out_printf("%s", nm);
         if (len <= DIR_CELL - 1) {
-            printf("%*s", DIR_CELL - 1 - len, "");
+            dcl_out_printf("%*s", DIR_CELL - 1 - len, "");
             if (col == (DIR_COLS - 1) * DIR_CELL) {
-                putchar('\n');
+                dcl_out_putc('\n');
                 col = 0;
             } else {
-                putchar(' ');
+                dcl_out_putc(' ');
                 col += DIR_CELL;
             }
         } else {
             int end = col + len;
             int next = (end / DIR_CELL + 1) * DIR_CELL;
             if (next >= DIR_COLS * DIR_CELL) {
-                putchar('\n');
+                dcl_out_putc('\n');
                 col = 0;
             } else {
                 pend = next - end;
@@ -291,9 +292,9 @@ static size_t dir_print_group(const struct found *f, size_t from, size_t to)
             }
         }
     }
-    if (col > 0) putchar('\n');
+    if (col > 0) dcl_out_putc('\n');
     size_t n = to - from;
-    printf("\nTotal of %zu file%s.\n", n, n == 1 ? "" : "s");
+    dcl_out_printf("\nTotal of %zu file%s.\n", n, n == 1 ? "" : "s");
     return n;
 }
 
@@ -302,7 +303,7 @@ uint32_t dcl_remote_directory(const char *spec)
     char wire[NAM$C_MAXESS + 1];
     if (!spec || default_spec(spec, 1, wire, sizeof wire) != 0) {
         {
-            printf("%%DIRECT-E-OPENIN, error opening %s as input\n", spec ? spec : "");
+            dcl_out_printf("%%DIRECT-E-OPENIN, error opening %s as input\n", spec ? spec : "");
             put_status(RMS$_SYN, 0);
         }
         return RMS$_SYN;
@@ -319,26 +320,26 @@ uint32_t dcl_remote_directory(const char *spec)
         i = j;
     }
     if (groups > 1)
-        printf("\nGrand total of %zu directories, %zu file%s.\n",
+        dcl_out_printf("\nGrand total of %zu directories, %zu file%s.\n",
                 groups, total, total == 1 ? "" : "s");
 
     uint32_t ret = RMS$_NORMAL;
     if (f.end_sts != RMS$_NMF) {
         if (f.n == 0 && f.end_sts == RMS$_FNF) {
-            printf("%%DIRECT-W-NOFILES, no files found\n");
+            dcl_out_printf("%%DIRECT-W-NOFILES, no files found\n");
             ret = RMS$_FNF & ~7u;     /* at warning severity: $STATUS %X10018290 on the VAX */
         } else {
             /* A refused link or search: the live VAX prints %DIRECT-E-OPENIN
              * on what the remote had expanded, then why. */
-            printf("%%DIRECT-E-OPENIN, error opening %s as input\n", f.esa);
+            dcl_out_printf("%%DIRECT-E-OPENIN, error opening %s as input\n", f.esa);
             put_status(f.end_sts, f.end_stv);
             ret = f.end_sts;          /* the RMS status, as the VAX leaves it (%X1001C02A) */
         }
     } else if (f.n == 0) {
-        printf("%%DIRECT-W-NOFILES, no files found\n");
+        dcl_out_printf("%%DIRECT-W-NOFILES, no files found\n");
         ret = RMS$_FNF & ~7u;
     }
-    fflush(stdout);
+    dcl_out_flush();
     found_free(&f);
     return ret;
 }
@@ -400,57 +401,57 @@ static void full_entry(const struct rms_remote_fent *e, long *used, long *alloc)
     const struct rms_fileattr *a = &e->fa;
     const char *nm = name_part(e->name);
     int len = (int)strlen(nm);
-    printf("%s%*sFile ID:  None\n", nm, len < 30 ? 30 - len : 1, "");
+    dcl_out_printf("%s%*sFile ID:  None\n", nm, len < 30 ? 30 - len : 1, "");
     long u = 0, al = 0;
     if (e->have_attr) {
         u = a->efblk ? (a->ffbyte ? (long)a->efblk : (long)a->efblk - 1) : 0;
         al = (long)a->hiblk;
         char sz[40];
         snprintf(sz, sizeof sz, "%ld/%ld", u, al);
-        printf("Size:            %-13s", sz);
-        if (e->have_owner) printf("Owner:    %s", e->owner);
-        putchar('\n');
+        dcl_out_printf("Size:            %-13s", sz);
+        if (e->have_owner) dcl_out_printf("Owner:    %s", e->owner);
+        dcl_out_putc('\n');
     } else if (e->have_owner) {
-        printf("Owner:    %s\n", e->owner);
+        dcl_out_printf("Owner:    %s\n", e->owner);
     }
     char dt[40];
-    if (e->have_cre) { full_date(a->credate, dt, sizeof dt); printf("Created:   %s\n", dt); }
-    else             printf("Created:   <None specified>\n");
+    if (e->have_cre) { full_date(a->credate, dt, sizeof dt); dcl_out_printf("Created:   %s\n", dt); }
+    else             dcl_out_printf("Created:   <None specified>\n");
     if (e->have_rev) {
         full_date(a->revdate, dt, sizeof dt);
-        printf("Revised:   %s (%u)\n", dt, (unsigned)a->revision);
+        dcl_out_printf("Revised:   %s (%u)\n", dt, (unsigned)a->revision);
     } else {
-        printf("Revised:   <None specified>\n");
+        dcl_out_printf("Revised:   <None specified>\n");
     }
-    printf("Expires:   <None specified>\n");
-    printf("Backup:    <No backup recorded>\n");
-    printf("Effective: <None specified>\n");
-    printf("Recording: <None specified>\n");
+    dcl_out_printf("Expires:   <None specified>\n");
+    dcl_out_printf("Backup:    <No backup recorded>\n");
+    dcl_out_printf("Effective: <None specified>\n");
+    dcl_out_printf("Recording: <None specified>\n");
     if (e->have_attr) {
         const char *org = a->org == FAB$C_REL ? "Relative" : a->org == FAB$C_IDX ? "Indexed"
                         : a->org == FAB$C_SEQ ? "Sequential" : "Hashed";
-        printf("File organization:  %s\n", org);
+        dcl_out_printf("File organization:  %s\n", org);
     }
-    printf("Shelved state:      (remote)\n");
-    printf("Caching attribute:  (remote)\n");
+    dcl_out_printf("Shelved state:      (remote)\n");
+    dcl_out_printf("Caching attribute:  (remote)\n");
     if (e->have_attr) {
         char fmt[96], attr[96];
-        printf("File attributes:    Allocation: %ld, Extend: %u, Global buffer count: 0, "
+        dcl_out_printf("File attributes:    Allocation: %ld, Extend: %u, Global buffer count: 0, "
                "Version limit: 0\n", al, (unsigned)a->defext);
         dcl_fmt_recfmt(a->rfm, a->mrs, a->lrl, a->vfcsize, fmt, sizeof fmt);
         dcl_fmt_recattr(a->rat, attr, sizeof attr);
-        printf("Record format:      %s\n", fmt);
-        printf("Record attributes:  %s\n", attr);
+        dcl_out_printf("Record format:      %s\n", fmt);
+        dcl_out_printf("Record attributes:  %s\n", attr);
     }
-    printf("RMS attributes:     None\n");
-    printf("Journaling enabled: None\n");
+    dcl_out_printf("RMS attributes:     None\n");
+    dcl_out_printf("Journaling enabled: None\n");
     if (e->have_prot) {
         char pb[80];
         dcl_fmt_prot_full(a->fileprot, pb, sizeof pb);
-        printf("File protection:    %s\n", pb);
+        dcl_out_printf("File protection:    %s\n", pb);
     }
-    printf("Access Cntrl List:  None\n");
-    printf("Client attributes:  None\n");
+    dcl_out_printf("Access Cntrl List:  None\n");
+    dcl_out_printf("Client attributes:  None\n");
     *used += u;
     *alloc += al;
 }
@@ -459,16 +460,16 @@ uint32_t dcl_remote_directory_full(const char *spec)
 {
     char wire[NAM$C_MAXESS + 1];
     if (!spec || default_spec(spec, 1, wire, sizeof wire) != 0) {
-        printf("%%DIRECT-E-OPENIN, error opening %s as input\n", spec ? spec : "");
+        dcl_out_printf("%%DIRECT-E-OPENIN, error opening %s as input\n", spec ? spec : "");
         put_status(RMS$_SYN, 0);
         return RMS$_SYN;
     }
     struct rms_remote_full f;
     uint32_t st = rms_remote_dirlist_full(wire, &f);
     if (!(st & 1)) {
-        printf("%%DIRECT-E-OPENIN, error opening %s as input\n", spec);
+        dcl_out_printf("%%DIRECT-E-OPENIN, error opening %s as input\n", spec);
         put_status(st, 0);
-        fflush(stdout);
+        dcl_out_flush();
         return st;
     }
     size_t groups = 0, total = 0;
@@ -476,11 +477,11 @@ uint32_t dcl_remote_directory_full(const char *spec)
     for (size_t i = 0; i < f.n; ) {
         size_t pl = dir_part(f.e[i].name), j = i + 1;
         while (j < f.n && dir_part(f.e[j].name) == pl && !strncmp(f.e[j].name, f.e[i].name, pl)) j++;
-        printf("\nDirectory %.*s\n\n", (int)pl, f.e[i].name);
+        dcl_out_printf("\nDirectory %.*s\n\n", (int)pl, f.e[i].name);
         long used = 0, alloc = 0;
         int sep = 0;                       /* a blank line is owed after a full entry */
         for (size_t k = i; k < j; k++) {
-            if (sep) putchar('\n');
+            if (sep) dcl_out_putc('\n');
             sep = 0;
             if (f.e[k].sts) {
                 char tx[300];
@@ -489,38 +490,38 @@ uint32_t dcl_remote_directory_full(const char *spec)
                  * violation"), else with the RMS one */
                 msg_text(f.e[k].stv ? f.e[k].stv : f.e[k].sts, tx, sizeof tx);
                 const char *nm = name_part(f.e[k].name);
-                printf("%-19s %s\n", nm, tx);
+                dcl_out_printf("%-19s %s\n", nm, tx);
             } else {
                 full_entry(&f.e[k], &used, &alloc);
                 sep = 1;
             }
         }
         size_t n = j - i;
-        printf("\nTotal of %zu file%s, %ld/%ld block%s.\n", n, n == 1 ? "" : "s", used, alloc,
+        dcl_out_printf("\nTotal of %zu file%s, %ld/%ld block%s.\n", n, n == 1 ? "" : "s", used, alloc,
                used == 1 ? "" : "s");
         total += n; gused += used; galloc += alloc;
         groups++;
         i = j;
     }
     if (groups > 1)
-        printf("\nGrand total of %zu directories, %zu file%s, %ld/%ld block%s.\n", groups, total,
+        dcl_out_printf("\nGrand total of %zu directories, %zu file%s, %ld/%ld block%s.\n", groups, total,
                total == 1 ? "" : "s", gused, galloc, gused == 1 ? "" : "s");
 
     uint32_t ret = RMS$_NORMAL;
     if (f.end_sts != RMS$_NMF) {
         if (f.n == 0 && f.end_sts == RMS$_FNF) {
-            printf("%%DIRECT-W-NOFILES, no files found\n");
+            dcl_out_printf("%%DIRECT-W-NOFILES, no files found\n");
             ret = RMS$_FNF & ~7u;
         } else {
-            printf("%%DIRECT-E-OPENIN, error opening %s as input\n", f.end_what);
+            dcl_out_printf("%%DIRECT-E-OPENIN, error opening %s as input\n", f.end_what);
             put_status(f.end_sts, f.end_stv);
             ret = f.end_sts;
         }
     } else if (f.n == 0) {
-        printf("%%DIRECT-W-NOFILES, no files found\n");
+        dcl_out_printf("%%DIRECT-W-NOFILES, no files found\n");
         ret = RMS$_FNF & ~7u;
     }
-    fflush(stdout);
+    dcl_out_flush();
     rms_remote_full_free(&f);
     return ret;
 }
@@ -532,7 +533,7 @@ uint32_t dcl_remote_type(const char *spec)
     char wire[NAM$C_MAXESS + 1];
     if (!spec || default_spec(spec, 0, wire, sizeof wire) != 0) {
         {
-            printf("%%TYPE-W-SEARCHFAIL, error searching for %s\n", spec ? spec : "");
+            dcl_out_printf("%%TYPE-W-SEARCHFAIL, error searching for %s\n", spec ? spec : "");
             put_status(RMS$_SYN, 0);
         }
         return TYPE_W_SEARCHFAIL;
@@ -541,9 +542,9 @@ uint32_t dcl_remote_type(const char *spec)
     (void)search_all(wire, &f);
     if (f.n == 0) {
         uint32_t sts = f.end_sts == RMS$_NMF ? RMS$_FNF : f.end_sts;
-        printf("%%TYPE-W-SEARCHFAIL, error searching for %s\n", f.esa);
+        dcl_out_printf("%%TYPE-W-SEARCHFAIL, error searching for %s\n", f.esa);
         put_status(sts, f.end_stv);
-        fflush(stdout);
+        dcl_out_flush();
         found_free(&f);
         return TYPE_W_SEARCHFAIL;
     }
@@ -560,7 +561,7 @@ uint32_t dcl_remote_type(const char *spec)
         fab.fab$b_shr = FAB$M_SHRGET;
         uint32_t st = sys$open(&fab, 0, 0);
         if (!(st & 1)) {
-            printf("%%TYPE-W-OPENIN, error opening %s as input\n", what);
+            dcl_out_printf("%%TYPE-W-OPENIN, error opening %s as input\n", what);
             put_status(st, fab.fab$l_stv);
             ret = TYPE_W_OPENIN;
             if (st == RMS_FND) break;          /* the link itself failed: stop */
@@ -573,13 +574,13 @@ uint32_t dcl_remote_type(const char *spec)
         (void)sys$connect(&rab, 0, 0);
         /* The wildcard header, as the VAX prints it: a line holding one
          * blank, the file's full name, another one-blank line. */
-        if (wild) printf(" \n%s\n \n", what);
+        if (wild) dcl_out_printf(" \n%s\n \n", what);
         int broke = 0;
         for (;;) {
             st = sys$get(&rab, 0, 0);
             if (st == RMS$_EOF) break;
             if (!(st & 1)) {
-                printf("%%TYPE-W-READERR, error reading %s\n", what);
+                dcl_out_printf("%%TYPE-W-READERR, error reading %s\n", what);
                 put_status(st, rab.rab$l_stv);
                 ret = st;
                 broke = (rab.rab$l_stv == SS$_ABORT);   /* the link broke: stop */
@@ -587,13 +588,13 @@ uint32_t dcl_remote_type(const char *spec)
             }
             /* A VFC record's fixed control (RHB 0: not asked for) is not
              * part of the record $GET returns; TYPE shows the data. */
-            if (rab.rab$w_rsz) printf("%.*s", (int)rab.rab$w_rsz, rab.rab$l_rbf);
-            putchar('\n');
+            if (rab.rab$w_rsz) dcl_out_printf("%.*s", (int)rab.rab$w_rsz, rab.rab$l_rbf);
+            dcl_out_putc('\n');
         }
         (void)sys$close(&fab, 0, 0);
         if (broke) break;
     }
-    fflush(stdout);
+    dcl_out_flush();
     found_free(&f);
     return ret;
 }
@@ -674,7 +675,7 @@ static uint32_t copy_one(const char *src, const char *dst, int log)
     }
     uint32_t st = sys$open(&in, 0, 0);
     if (!(st & 1)) {
-        printf("%%COPY-E-OPENIN, error opening %s as input\n", src);
+        dcl_out_printf("%%COPY-E-OPENIN, error opening %s as input\n", src);
         put_status(st, in.fab$l_stv);
         return st;
     }
@@ -694,9 +695,9 @@ static uint32_t copy_one(const char *src, const char *dst, int log)
     o.fab$b_fsz = local_attr ? fa.vfcsize : in.fab$b_fsz;
     st = sys$create(&o, 0, 0);
     if (!(st & 1)) {
-        printf("%%COPY-E-OPENOUT, error opening %s as output\n", dshow);
+        dcl_out_printf("%%COPY-E-OPENOUT, error opening %s as output\n", dshow);
         put_status(st, o.fab$l_stv);
-        printf("%%COPY-W-NOTCOPIED, %s not copied\n", src);
+        dcl_out_printf("%%COPY-W-NOTCOPIED, %s not copied\n", src);
         (void)sys$close(&in, 0, 0);
         return st;
     }
@@ -723,7 +724,7 @@ static uint32_t copy_one(const char *src, const char *dst, int log)
         st = sys$get(&ir, 0, 0);
         if (st == RMS$_EOF) break;
         if (!(st & 1)) {
-            printf("%%COPY-E-READERR, error reading %s\n", src);
+            dcl_out_printf("%%COPY-E-READERR, error reading %s\n", src);
             put_status(st, ir.rab$l_stv);
             ret = st;
             break;
@@ -732,7 +733,7 @@ static uint32_t copy_one(const char *src, const char *dst, int log)
         orb.rab$w_rsz = ir.rab$w_rsz;
         st = sys$put(&orb, 0, 0);
         if (!(st & 1)) {
-            printf("%%COPY-E-WRITEERR, error writing %s\n", dshow);
+            dcl_out_printf("%%COPY-E-WRITEERR, error writing %s\n", dshow);
             put_status(st, orb.rab$l_stv);
             ret = st;
             break;
@@ -740,7 +741,7 @@ static uint32_t copy_one(const char *src, const char *dst, int log)
     }
     st = sys$close(&o, 0, 0);
     if ((ret & 1) && !(st & 1)) {
-        printf("%%COPY-E-CLOSEOUT, error closing %s as output\n", dshow);
+        dcl_out_printf("%%COPY-E-CLOSEOUT, error closing %s as output\n", dshow);
         put_status(st, o.fab$l_stv);
         ret = st;
     }
@@ -757,7 +758,7 @@ static uint32_t copy_one(const char *src, const char *dst, int log)
             long used = fa.efblk ? (fa.ffbyte ? (long)fa.efblk : (long)fa.efblk - 1) : 0;
             snprintf(cnt, sizeof cnt, " (%ld block%s)", used, used == 1 ? "" : "s");
         }
-        printf("%%COPY-S-COPIED, %s copied to %s%s\n", src, dshow, cnt);
+        dcl_out_printf("%%COPY-S-COPIED, %s copied to %s%s\n", src, dshow, cnt);
     }
     return ret;
 }
@@ -769,10 +770,10 @@ uint32_t dcl_remote_copy(const char *sx, const char *dx, int log)
     (void)search_all(sx, &f);
     if (f.n == 0) {
         uint32_t sts = f.end_sts == RMS$_NMF ? RMS$_FNF : f.end_sts;
-        printf("%%COPY-E-OPENIN, error opening %s as input\n", f.esa);
+        dcl_out_printf("%%COPY-E-OPENIN, error opening %s as input\n", f.esa);
         put_status(sts, f.end_stv);
         uint32_t ret = (sts == RMS_FND && f.end_stv) ? f.end_stv : sts;
-        fflush(stdout);
+        dcl_out_flush();
         found_free(&f);
         return ret;
     }
@@ -786,8 +787,8 @@ uint32_t dcl_remote_copy(const char *sx, const char *dx, int log)
         else ret = st;
     }
     if (copied > 1)
-        printf("%%COPY-S-NEWFILES, %zu files created\n", copied);
-    fflush(stdout);
+        dcl_out_printf("%%COPY-S-NEWFILES, %zu files created\n", copied);
+    dcl_out_flush();
     found_free(&f);
     return ret;
 }

@@ -6,6 +6,7 @@
  * and nested procedure invocation.
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -159,7 +160,7 @@ static int dcl_run_proc_lines(struct dcl_context *ctx, struct dcl_pf *fp)
 
         /* Verify mode - echo the line */
         if (ctx->verify) {
-            printf("%s\n", line);
+            dcl_out_printf("%s\n", line);
         }
 
         /* Skip leading whitespace */

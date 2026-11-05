@@ -23,6 +23,7 @@
  * section 3. (vms-ca9)
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -120,7 +121,7 @@ static int lbr_create(struct dcl_context *ctx, struct dcl_command *cmd)
     }
     fclose(fp);
 
-    printf("%%LIBRARIAN-S-CREATED, %s library %s created\n",
+    dcl_out_printf("%%LIBRARIAN-S-CREATED, %s library %s created\n",
            lbr_type_name(type), cmd->params[0]);
     return SS$_NORMAL;
 }
@@ -388,7 +389,7 @@ static int lbr_insert(struct dcl_context *ctx, struct dcl_command *cmd)
     }
     fclose(fp);
 
-    printf("%%LIBRARIAN-S-%s, module %s %s\n",
+    dcl_out_printf("%%LIBRARIAN-S-%s, module %s %s\n",
            replacing ? "REPLACED" : "INSERTED",
            mod_name,
            replacing ? "replaced" : "inserted");
@@ -421,11 +422,11 @@ static int lbr_list(struct dcl_context *ctx, struct dcl_command *cmd)
     if (!fp) return SS$_NOSUCHFILE;
     fclose(fp);
 
-    printf("Directory of %s LIBRARY %s\n\n",
+    dcl_out_printf("Directory of %s LIBRARY %s\n\n",
            lbr_type_name(hdr.type), cmd->params[0]);
 
     if (hdr.module_count == 0) {
-        printf("  (empty library)\n");
+        dcl_out_printf("  (empty library)\n");
     } else {
         for (uint32_t i = 0; i < hdr.module_count; i++) {
             char name[LBR_NAME_LEN + 1];
@@ -433,10 +434,10 @@ static int lbr_list(struct dcl_context *ctx, struct dcl_command *cmd)
             name[LBR_NAME_LEN] = '\0';
             for (int j = LBR_NAME_LEN - 1; j >= 0 && (name[j] == '\0' || name[j] == ' '); j--)
                 name[j] = '\0';
-            printf("  %-32s  %u bytes\n", name, modules[i].length);
+            dcl_out_printf("  %-32s  %u bytes\n", name, modules[i].length);
         }
     }
-    printf("\n%u module%s in library\n",
+    dcl_out_printf("\n%u module%s in library\n",
            hdr.module_count, hdr.module_count == 1 ? "" : "s");
 
     free(modules);
@@ -493,7 +494,7 @@ static int lbr_extract(struct dcl_context *ctx, struct dcl_command *cmd)
 
     /* Determine output: /OUTPUT=file or stdout */
     const char *output_file = dcl_qualifier_value(cmd, "OUTPUT");
-    FILE *out = stdout;
+    FILE *out = NULL;          /* NULL: SYS$OUTPUT */
     if (output_file && output_file[0]) {
         char out_path[1024];
         dcl_resolve_path(ctx, output_file, out_path, sizeof(out_path));
@@ -511,13 +512,16 @@ static int lbr_extract(struct dcl_context *ctx, struct dcl_command *cmd)
         size_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
         size_t got = fread(buf, 1, chunk, fp);
         if (got == 0) break;
-        fwrite(buf, 1, got, out);
+        if (out)
+            fwrite(buf, 1, got, out);
+        else
+            dcl_out_write(buf, got);
         remaining -= (uint32_t)got;
     }
 
-    if (out != stdout) {
+    if (out) {
         fclose(out);
-        printf("%%LIBRARIAN-S-EXTRACTED, module %s extracted to %s\n",
+        dcl_out_printf("%%LIBRARIAN-S-EXTRACTED, module %s extracted to %s\n",
                extract_name, output_file);
     }
 
@@ -825,7 +829,7 @@ static int hlp_compile(struct dcl_context *ctx, struct dcl_command *cmd,
     hlp_free_modules(final, final_count);
 
     if ($VMS_STATUS_SUCCESS(st))
-        printf("%%LIBRARIAN-S-%s, help library %s %s (%u module%s)\n",
+        dcl_out_printf("%%LIBRARIAN-S-%s, help library %s %s (%u module%s)\n",
                create ? "CREATED" : "INSERTED", cmd->params[0],
                create ? "created" : "updated", final_count,
                final_count == 1 ? "" : "s");
@@ -940,7 +944,7 @@ static void olb_print_reasons(void)
             continue;
         m[n] = '\0';
         if (m[0] == '%') m[0] = '-';
-        fprintf(stderr, "%s\n", m);
+        dcl_err_printf("%s\n", m);
     }
 }
 
@@ -1062,7 +1066,7 @@ static int olb_insert_files(struct dcl_context *ctx, struct dcl_command *cmd,
             (*members)[*count].len = len;
             (*count)++;
         }
-        printf("%%LIBRARIAN-S-%s, module %s %s\n",
+        dcl_out_printf("%%LIBRARIAN-S-%s, module %s %s\n",
                replaced ? "REPLACED" : "INSERTED", name,
                replaced ? "replaced" : "inserted");
     }
@@ -1103,7 +1107,7 @@ static int olb_create(struct dcl_context *ctx, struct dcl_command *cmd)
         return SS$_FILACCERR;
     }
     olb_free(members, count);
-    printf("%%LIBRARIAN-S-CREATED, object library %s created\n", cmd->params[0]);
+    dcl_out_printf("%%LIBRARIAN-S-CREATED, object library %s created\n", cmd->params[0]);
     return SS$_NORMAL;
 }
 
@@ -1140,14 +1144,14 @@ static int olb_list_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
     int st = olb_load(ctx, cmd->params[0], &members, &count, &cap);
     if (!$VMS_STATUS_SUCCESS(st)) return st;
 
-    printf("\nDirectory of OBJECT library %s\n\n", cmd->params[0]);
+    dcl_out_printf("\nDirectory of OBJECT library %s\n\n", cmd->params[0]);
     if (count == 0) {
-        printf("  (empty library)\n");
+        dcl_out_printf("  (empty library)\n");
     } else {
         for (uint32_t i = 0; i < count; i++)
-            printf("  %-31s  %zu bytes\n", members[i].name, members[i].len);
+            dcl_out_printf("  %-31s  %zu bytes\n", members[i].name, members[i].len);
     }
-    printf("\n%u module%s in library\n", count, count == 1 ? "" : "s");
+    dcl_out_printf("\n%u module%s in library\n", count, count == 1 ? "" : "s");
     olb_free(members, count);
     return SS$_NORMAL;
 }
@@ -1184,10 +1188,10 @@ static int olb_extract_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
             olb_free(members, count);
             return SS$_FILACCERR;
         }
-        printf("%%LIBRARIAN-S-EXTRACTED, module %s extracted to %s\n",
+        dcl_out_printf("%%LIBRARIAN-S-EXTRACTED, module %s extracted to %s\n",
                want, output_file);
     } else if (members[idx].len) {
-        fwrite(members[idx].data, 1, members[idx].len, stdout);
+        dcl_out_write(members[idx].data, members[idx].len);
     }
     olb_free(members, count);
     return SS$_NORMAL;
@@ -1228,7 +1232,7 @@ static int olb_delete_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
         return SS$_FILACCERR;
     }
     olb_free(members, count);
-    printf("%%LIBRARIAN-S-DELETED, module %s deleted\n", want);
+    dcl_out_printf("%%LIBRARIAN-S-DELETED, module %s deleted\n", want);
     return SS$_NORMAL;
 }
 
@@ -1255,7 +1259,7 @@ static int olb_compress(struct dcl_context *ctx, struct dcl_command *cmd)
         return SS$_FILACCERR;
     }
     olb_free(members, count);
-    printf("%%LIBRARIAN-S-COMPRESSED, object library %s compressed (%u module%s)\n",
+    dcl_out_printf("%%LIBRARIAN-S-COMPRESSED, object library %s compressed (%u module%s)\n",
            cmd->params[0], count, count == 1 ? "" : "s");
     return SS$_NORMAL;
 }

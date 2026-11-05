@@ -33,13 +33,13 @@ defect_apply() {
         # The ONE edit: restore a Width/Page line ahead of the characteristic
         # grid, exactly the one-line layout vms-d0b deleted as an invented
         # oracle format. Anchored on the exact original statement
-        # (printf("Terminal Characteristics:\n");, the only occurrence in the
-        # file) and the replacement swaps that trailing printf() for a
-        # behaviourally identical puts() -- same bytes on stdout, since the
-        # format string carries no conversion and puts() supplies its own
+        # (dcl_out_printf("Terminal Characteristics:\n");, the only occurrence in the
+        # file) and the replacement swaps that trailing dcl_out_printf() for a
+        # behaviourally identical dcl_out_puts() -- same bytes on stdout, since the
+        # format string carries no conversion and dcl_out_puts() supplies its own
         # newline -- so the literal anchor text does not survive the edit and
         # a second apply finds no match, which is the no-op the selftest
         # requires.
-        sed -i 's|    printf("Terminal Characteristics:\\n");|    printf("   Width:%4u      Page:%5u\\n\\n", info->width, info->page); /* NEGCTL showterm-width-page-fabricated: restores the deleted one-line layout */ puts("Terminal Characteristics:");|' "$_file"
+        sed -i 's|    dcl_out_printf("Terminal Characteristics:\\n");|    dcl_out_printf("   Width:%4u      Page:%5u\\n\\n", info->width, info->page); /* NEGCTL showterm-width-page-fabricated: restores the deleted one-line layout */ dcl_out_puts("Terminal Characteristics:");|' "$_file"
     :
 }

@@ -4,6 +4,7 @@
  * ASSIGN, DEASSIGN, DEFINE, OPEN, CLOSE, READ, WRITE
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1085,8 +1086,10 @@ static int write_impl(struct dcl_command *cmd)
         int is_mbx = strncasecmp(eq, "MBA", 3) == 0;
         if (!is_mbx && dcl_tt_put_record(text, strlen(text)) == 0)
             return SS$_NORMAL;
-        FILE *out = is_err ? stderr : stdout;
-        fprintf(out, "%s\n", text);
+        if (is_err)
+            dcl_err_printf("%s\n", text);
+        else
+            dcl_out_printf("%s\n", text);
         return SS$_NORMAL;
     }
 
@@ -1164,7 +1167,7 @@ static void dcl_report_device_status(uint32_t st)
     struct dsc$descriptor_s md = { sizeof msg - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, msg };
     if (sys$getmsg(st, &len, &md, MSG$M_ALL, NULL) & 1) {
         msg[len] = '\0';
-        fprintf(stderr, "%s\n", msg);
+        dcl_err_printf("%s\n", msg);
     }
 }
 
@@ -1213,7 +1216,7 @@ int cmd_allocate(struct dcl_command *cmd)
         }
     }
     if (!dcl_nolog(cmd))
-        printf("%%DCL-I-ALLOC, %s allocated\n", phys);
+        dcl_out_printf("%%DCL-I-ALLOC, %s allocated\n", phys);
     return SS$_NORMAL;
 }
 

@@ -6,6 +6,7 @@
  * SHOW INTRUSION.
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -289,7 +290,7 @@ int cmd_submit(struct dcl_command *cmd)
         if (hsts & 1) held = 1;
     }
 
-    printf("%%SUBMIT-S-SUBMITTED, job %s (queue %s, entry %u) %s\n",
+    dcl_out_printf("%%SUBMIT-S-SUBMITTED, job %s (queue %s, entry %u) %s\n",
            upper_name, queue_name, entry_id, held ? "holding" : "queued");
 
     return SS$_NORMAL;
@@ -380,7 +381,7 @@ int cmd_print(struct dcl_command *cmd)
         if (hsts & 1) held = 1;
     }
 
-    printf("%%PRINT-S-QUEUED, job %s (queue %s, entry %u) %s\n",
+    dcl_out_printf("%%PRINT-S-QUEUED, job %s (queue %s, entry %u) %s\n",
            upper_name, queue_name, entry_id, held ? "holding" : "queued");
 
     return SS$_NORMAL;
@@ -422,7 +423,7 @@ int cmd_show_queue(struct dcl_command *cmd)
                                  qinfo.status == VMSQ_STATUS_STOPPED ? "stopped" :
                                  qinfo.status == VMSQ_STATUS_PAUSED  ? "paused" : "unknown";
 
-        printf("  %s queue %s, %s\n", type_str, qinfo.name, status_str);
+        dcl_out_printf("  %s queue %s, %s\n", type_str, qinfo.name, status_str);
 
         if (show_full || show_all) {
             struct vms_queue_entry entries[64];
@@ -434,7 +435,7 @@ int cmd_show_queue(struct dcl_command *cmd)
                     entries[j].status == VMSQ_ENTRY_EXECUTING ? "Executing" :
                     entries[j].status == VMSQ_ENTRY_HOLDING   ? "Holding" :
                     entries[j].status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
-                printf("    entry %-6u %-20s %-12s %-10s\n",
+                dcl_out_printf("    entry %-6u %-20s %-12s %-10s\n",
                        entries[j].entry_id, entries[j].job_name,
                        entries[j].username, entry_status);
             }
@@ -454,7 +455,7 @@ int cmd_show_queue(struct dcl_command *cmd)
                                      qinfo.status == VMSQ_STATUS_STOPPED ? "stopped" :
                                      qinfo.status == VMSQ_STATUS_PAUSED  ? "paused" : "unknown";
 
-            printf("  %s queue %s, %s\n", type_str, qinfo.name, status_str);
+            dcl_out_printf("  %s queue %s, %s\n", type_str, qinfo.name, status_str);
 
             if (show_full || show_all) {
                 struct vms_queue_entry entries[64];
@@ -466,7 +467,7 @@ int cmd_show_queue(struct dcl_command *cmd)
                         entries[j].status == VMSQ_ENTRY_EXECUTING ? "Executing" :
                         entries[j].status == VMSQ_ENTRY_HOLDING   ? "Holding" :
                         entries[j].status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
-                    printf("    entry %-6u %-20s %-12s %-10s\n",
+                    dcl_out_printf("    entry %-6u %-20s %-12s %-10s\n",
                            entries[j].entry_id, entries[j].job_name,
                            entries[j].username, entry_status);
                 }
@@ -510,14 +511,14 @@ int cmd_set_entry(struct dcl_command *cmd)
             dcl_error("JBC", 2, "NOSUCHENT", "no such entry");
             return sts;
         }
-        printf("%%SET-S-MODIFIED, entry %u set to HOLD\n", entry_id);
+        dcl_out_printf("%%SET-S-MODIFIED, entry %u set to HOLD\n", entry_id);
     } else if (dcl_has_qualifier(cmd, "RELEASE")) {
         sts = vmsq_release_entry(entry_id);
         if (!(sts & 1)) {
             dcl_error("JBC", 2, "NOSUCHENT", "no such entry");
             return sts;
         }
-        printf("%%SET-S-MODIFIED, entry %u released\n", entry_id);
+        dcl_out_printf("%%SET-S-MODIFIED, entry %u released\n", entry_id);
     } else {
         dcl_error("SET", 2, "IVQUAL",
                   "specify /HOLD or /RELEASE with SET ENTRY");
@@ -568,9 +569,9 @@ int cmd_show_entry(struct dcl_command *cmd)
             entry.status == VMSQ_ENTRY_HOLDING   ? "Holding" :
             entry.status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
 
-        printf("  Entry  Jobname         Username     Status\n");
-        printf("  -----  -------         --------     ------\n");
-        printf("  %5u  %-15s %-12s %s\n",
+        dcl_out_printf("  Entry  Jobname         Username     Status\n");
+        dcl_out_printf("  -----  -------         --------     ------\n");
+        dcl_out_printf("  %5u  %-15s %-12s %s\n",
                entry.entry_id, entry.job_name, entry.username, status_str);
 
         /* Show submission time and queue */
@@ -580,7 +581,7 @@ int cmd_show_entry(struct dcl_command *cmd)
             time_t t = (time_t)unix_secs;
             struct tm tm;
             localtime_r(&t, &tm);
-            printf("         Submitted %2d-%s-%04d %02d:%02d on queue %s\n",
+            dcl_out_printf("         Submitted %2d-%s-%04d %02d:%02d on queue %s\n",
                    tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
                    tm.tm_hour, tm.tm_min, entry.queue_name);
         }
@@ -596,8 +597,8 @@ int cmd_show_entry(struct dcl_command *cmd)
             if (count == 0) continue;
 
             if (!found) {
-                printf("  Entry  Jobname         Username     Status\n");
-                printf("  -----  -------         --------     ------\n");
+                dcl_out_printf("  Entry  Jobname         Username     Status\n");
+                dcl_out_printf("  -----  -------         --------     ------\n");
                 found = 1;
             }
 
@@ -607,7 +608,7 @@ int cmd_show_entry(struct dcl_command *cmd)
                     entries[j].status == VMSQ_ENTRY_EXECUTING ? "Executing" :
                     entries[j].status == VMSQ_ENTRY_HOLDING   ? "Holding" :
                     entries[j].status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
-                printf("  %5u  %-15s %-12s %s\n",
+                dcl_out_printf("  %5u  %-15s %-12s %s\n",
                        entries[j].entry_id, entries[j].job_name,
                        entries[j].username, status_str);
                 if (entries[j].submit_time) {
@@ -616,7 +617,7 @@ int cmd_show_entry(struct dcl_command *cmd)
                     time_t t = (time_t)unix_secs;
                     struct tm tm;
                     localtime_r(&t, &tm);
-                    printf("         Submitted %2d-%s-%04d %02d:%02d on queue %s\n",
+                    dcl_out_printf("         Submitted %2d-%s-%04d %02d:%02d on queue %s\n",
                            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
                            tm.tm_hour, tm.tm_min, entries[j].queue_name);
                 }
@@ -624,7 +625,7 @@ int cmd_show_entry(struct dcl_command *cmd)
         }
 
         if (!found) {
-            printf("%%SHOW-I-NOENTRY, no entries found\n");
+            dcl_out_printf("%%SHOW-I-NOENTRY, no entries found\n");
         }
     }
 
@@ -669,21 +670,21 @@ int cmd_set_queue(struct dcl_command *cmd)
             dcl_error("OVMX", 2, "QUESETERR", "failed to stop queue %s", queue_name);
             return sts;
         }
-        printf("%%SET-S-QUEMOD, queue %s stopped\n", queue_name);
+        dcl_out_printf("%%SET-S-QUEMOD, queue %s stopped\n", queue_name);
     } else if (dcl_has_qualifier(cmd, "START")) {
         sts = vmsq_set_queue_status(queue_name, VMSQ_STATUS_STARTED);
         if (!(sts & 1)) {
             dcl_error("OVMX", 2, "QUESETERR", "failed to start queue %s", queue_name);
             return sts;
         }
-        printf("%%SET-S-QUEMOD, queue %s started\n", queue_name);
+        dcl_out_printf("%%SET-S-QUEMOD, queue %s started\n", queue_name);
     } else if (dcl_has_qualifier(cmd, "PAUSE")) {
         sts = vmsq_set_queue_status(queue_name, VMSQ_STATUS_PAUSED);
         if (!(sts & 1)) {
             dcl_error("OVMX", 2, "QUESETERR", "failed to pause queue %s", queue_name);
             return sts;
         }
-        printf("%%SET-S-QUEMOD, queue %s paused\n", queue_name);
+        dcl_out_printf("%%SET-S-QUEMOD, queue %s paused\n", queue_name);
     } else {
         dcl_error("SET", 2, "IVQUAL",
                   "specify /STOP, /START, or /PAUSE with SET QUEUE");
@@ -705,7 +706,7 @@ int cmd_show_intrusion(struct dcl_command *cmd)
     const char *intrusion_path = VMS_MANAGER_DIR "/INTRUSION.DAT";
     FILE *fp = fopen(intrusion_path, "r");
     if (!fp) {
-        printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
+        dcl_out_printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
         return SS$_NORMAL;
     }
 
@@ -737,18 +738,18 @@ int cmd_show_intrusion(struct dcl_command *cmd)
         *count_str++ = '\0';
 
         if (!found) {
-            printf("Intrusion   Type    Count  Expiration          Source\n");
+            dcl_out_printf("Intrusion   Type    Count  Expiration          Source\n");
             found = 1;
         }
 
-        printf("%-11s %-7s %5s  %-19s %s\n",
+        dcl_out_printf("%-11s %-7s %5s  %-19s %s\n",
                type, username, count_str, timestamp, source);
     }
 
     fclose(fp);
 
     if (!found) {
-        printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
+        dcl_out_printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
     }
 
     return SS$_NORMAL;
@@ -810,7 +811,7 @@ static void run_print_condition(uint32_t status, int chained)
         sec[sec_len] = '\0';
         /* A chained message is introduced by '-', not '%'. */
         if (chained && sec[0] == '%') sec[0] = '-';
-        fprintf(stderr, "%s\n", sec);
+        dcl_err_printf("%s\n", sec);
     }
 }
 
@@ -1363,7 +1364,7 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
 
     /* VMS reports the created process's ID, which is the EXECUTIVE's,
      * not a Linux pid $GETJPI could not resolve. */
-    printf("%%RUN-S-PROC_ID, identification of created process is %08X\n",
+    dcl_out_printf("%%RUN-S-PROC_ID, identification of created process is %08X\n",
            pid);
     return SS$_NORMAL;
 }
@@ -2238,26 +2239,26 @@ static uint32_t dcl_report_actimage(const char *display_name,
                                     const char *linux_path, int err)
 {
     dcl_error("DCL", 0, "ACTIMAGE", "error activating image %s", display_name);
-    fprintf(stderr, "-CLI-E-IMGNAME, image file %s\n", linux_path);
+    dcl_err_printf("-CLI-E-IMGNAME, image file %s\n", linux_path);
 
     switch (err) {
     case ENOENT:
-        fprintf(stderr, "-RMS-E-FNF, file not found\n");
+        dcl_err_printf("-RMS-E-FNF, file not found\n");
         /* The image file itself being PRESENT means what the substrate could
          * not open is the activator the image names, not the image. Saying
          * "file not found" about a file that exists would be false, so name
          * the real condition -- from an access() probe, not a guess. */
         if (access(linux_path, F_OK) == 0)
-            fprintf(stderr, "-DCL-I-ACTIVATOR, the image is present; the "
+            dcl_err_printf("-DCL-I-ACTIVATOR, the image is present; the "
                             "activator it names could not be opened\n");
         return SS$_NOSUCHFILE;
     case EACCES:
     case EPERM:
-        fprintf(stderr, "-RMS-E-PRV, insufficient privilege or file "
+        dcl_err_printf("-RMS-E-PRV, insufficient privilege or file "
                         "protection violation\n");
         return SS$_NOPRIV;
     default:
-        fprintf(stderr, "-SYSTEM-F-ABORT, abort (%s)\n", strerror(err));
+        dcl_err_printf("-SYSTEM-F-ABORT, abort (%s)\n", strerror(err));
         return SS$_ABORT;
     }
 }
@@ -2481,7 +2482,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
             dcl_running_child = 0;
             if (exec_pipe[0] >= 0)
                 close(exec_pipe[0]);
-            printf("\nInterrupt\n");
+            dcl_out_printf("\nInterrupt\n");
             ctx->interrupted_pid = pid;
             return SS$_ABORT;
         }
@@ -2963,7 +2964,7 @@ int cmd_spawn(struct dcl_command *cmd)
          * OpenVMS VAX V7.3 (cited above). The scratch SYS$INPUT is left for
          * the unwaited subprocess to consume (its reclamation is B1's
          * exit-notification job, as in lib$spawn/NOWAIT). */
-        printf("%%DCL-S-SPAWNED, process %s spawned\n", final_name);
+        dcl_out_printf("%%DCL-S-SPAWNED, process %s spawned\n", final_name);
         return SS$_NORMAL;
     }
 
@@ -2988,7 +2989,7 @@ int cmd_spawn(struct dcl_command *cmd)
         dcl_running_child = 0;
         if (have_tmp) unlink(cmd_tmp);
         if (WIFSTOPPED(wstatus)) {
-            printf("\nInterrupt\n");
+            dcl_out_printf("\nInterrupt\n");
             spawn_ctx->interrupted_pid = (pid_t)pinfo.linux_pid;
             return SS$_ABORT;
         }
@@ -3223,7 +3224,7 @@ int cmd_pipe(struct dcl_command *cmd)
             /* A VMS process once DCL has made its PCB; then exec vmsdcl -c. */
             dcl_pcb_hold_wait(pcb_hold);
             execl(dcl_exe, "vmsdcl", "-c", segments[i], (char *)NULL);
-            fprintf(stderr, "%%DCL-E-CREPRC, cannot execute - %s\n", dcl_exe);
+            dcl_err_printf("%%DCL-E-CREPRC, cannot execute - %s\n", dcl_exe);
             _exit(127);
         }
 
@@ -3444,7 +3445,7 @@ int cmd_logout(struct dcl_command *cmd)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    printf("  %-12s logged out at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+    dcl_out_printf("  %-12s logged out at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
            upper_user, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
@@ -3480,7 +3481,7 @@ int cmd_continue(struct dcl_command *cmd)
     struct dcl_context *ctx = dcl_get_context();
 
     if (ctx->interrupted_pid <= 0) {
-        printf("%%DCL-I-NOINTER, no interrupted image to continue\n");
+        dcl_out_printf("%%DCL-I-NOINTER, no interrupted image to continue\n");
         return SS$_NORMAL;
     }
 
@@ -3488,7 +3489,7 @@ int cmd_continue(struct dcl_command *cmd)
 
     /* Send SIGCONT to resume the stopped child */
     if (kill(pid, SIGCONT) != 0) {
-        printf("%%DCL-W-NOPROC, process %d no longer exists\n", (int)pid);
+        dcl_out_printf("%%DCL-W-NOPROC, process %d no longer exists\n", (int)pid);
         ctx->interrupted_pid = 0;
         return SS$_NONEXPR;
     }
@@ -3501,7 +3502,7 @@ int cmd_continue(struct dcl_command *cmd)
 
     if (result > 0 && WIFSTOPPED(wstatus)) {
         /* Child was stopped again (another Ctrl-Y during CONTINUE) */
-        printf("\nInterrupt\n");
+        dcl_out_printf("\nInterrupt\n");
         /* Still interrupted — keep interrupted_pid */
     } else {
         /* Child exited or was signaled */

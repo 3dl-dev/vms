@@ -4,6 +4,7 @@
  * All cmd_set_* functions and the SET dispatcher.
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -550,7 +551,7 @@ static int cmd_set_terminal(struct dcl_command *cmd)
             if ((vms_kif_getjpi_self(&pi) & 1) && pi.terminal[0])
                 snprintf(dev, sizeof dev, "%s", pi.terminal[0] == '_' ? pi.terminal + 1 : pi.terminal);
             dcl_error("SET", 0, "NOTSET", "error modifying %s", dev);
-            fprintf(stderr, "-SET-I-UNKTERM, unknown terminal type\n");
+            dcl_err_printf("-SET-I-UNKTERM, unknown terminal type\n");
         }
     }
 
@@ -842,7 +843,7 @@ static int cmd_set_acl(struct dcl_command *cmd)
             const char *m = set_acl_sysmsg(st, &sev);
             const char *rest = acetxt[i] + (ep < strlen(acetxt[i]) ? ep : 0);
             dcl_error("SET", 4, "SYNTAX", "error parsing '%s'", rest + (rest[0] == '(' ? 1 : 0));
-            if (m) fprintf(stderr, "-SYSTEM-%c-%s\n", sev, m);
+            if (m) dcl_err_printf("-SYSTEM-%c-%s\n", sev, m);
             return (int)st;
         }
     }
@@ -886,7 +887,7 @@ static int cmd_set_acl(struct dcl_command *cmd)
                     struct dsc$descriptor_s xd = { sizeof(txt), DSC$K_DTYPE_T, DSC$K_CLASS_S, txt };
                     dcl_error("SET", 0, "NOSUCHACE", "ACE for object %s, does not exist", match);
                     if (sys$format_acl(&ad, &tl, &xd, NULL, NULL, NULL, NULL, NULL) & 1)
-                        fprintf(stderr, "    %.*s\n", (int)tl, txt);
+                        dcl_err_printf("    %.*s\n", (int)tl, txt);
                 }
                 dcl_error("SET", 4, "WRITEERR", "error writing %s", match);
             } else {
@@ -896,8 +897,8 @@ static int cmd_set_acl(struct dcl_command *cmd)
                     dcl_error("SET", 2, "OPENIN", "error opening %s as input", match);
                 else
                     dcl_error("SET", 2, "WRITEERR", "error writing %s", match);
-                if (m) fprintf(stderr, "-SYSTEM-%c-%s\n", sev, m);
-                else fprintf(stderr, "-SYSTEM-E-STATUS, status %%X%08X\n", st);
+                if (m) dcl_err_printf("-SYSTEM-%c-%s\n", sev, m);
+                else dcl_err_printf("-SYSTEM-E-STATUS, status %%X%08X\n", st);
             }
             worst = st;
         }
@@ -986,7 +987,7 @@ static void set_print_cond(uint32_t st, int secondary)
     if (vms_status_string(st, m, sizeof m) > 0) {
         if (secondary && m[0] == '%')
             m[0] = '-';
-        fprintf(stderr, "%s\n", m);
+        dcl_err_printf("%s\n", m);
     }
 }
 
@@ -1202,7 +1203,7 @@ static int dcl_read_noecho_line(char *buf, size_t bufsz)
     int rc = 0;
     int n;
 
-    fflush(stdout);
+    dcl_out_flush();
     n = dcl_tt_read(NULL, 0, buf, bufsz, IO$M_NOECHO, 0, NULL);
     if (n >= 0)
         return 0;
@@ -1349,10 +1350,10 @@ static int cmd_set_password(struct dcl_command *cmd)
 
     char old_pw[128], new_pw[128], verify_pw[128];
 
-    printf("Old password: ");
-    fflush(stdout);
+    dcl_out_printf("Old password: ");
+    dcl_out_flush();
     if (dcl_read_noecho_line(old_pw, sizeof(old_pw)) != 0) {
-        printf("\n");
+        dcl_out_printf("\n");
         return SS$_ABORT;
     }
 
@@ -1362,21 +1363,21 @@ static int cmd_set_password(struct dcl_command *cmd)
      * check -- reused here rather than invented, because this is the same
      * check against the same SYSUAF hash, not a different condition. */
     if (!sysuaf_authenticate(&rec, old_pw)) {
-        printf("\nUser authorization failure\n");
+        dcl_out_printf("\nUser authorization failure\n");
         return SS$_INVLOGIN;
     }
 
-    printf("New password: ");
-    fflush(stdout);
+    dcl_out_printf("New password: ");
+    dcl_out_flush();
     if (dcl_read_noecho_line(new_pw, sizeof(new_pw)) != 0) {
-        printf("\n");
+        dcl_out_printf("\n");
         return SS$_ABORT;
     }
 
-    printf("Verification: ");
-    fflush(stdout);
+    dcl_out_printf("Verification: ");
+    dcl_out_flush();
     if (dcl_read_noecho_line(verify_pw, sizeof(verify_pw)) != 0) {
-        printf("\n");
+        dcl_out_printf("\n");
         return SS$_ABORT;
     }
 
@@ -1432,7 +1433,7 @@ static int cmd_set_password(struct dcl_command *cmd)
         return SS$_FILACCERR;
     }
 
-    printf("%%SET-S-PASSWORD, password for user %s changed\n", ctx->username);
+    dcl_out_printf("%%SET-S-PASSWORD, password for user %s changed\n", ctx->username);
     return SS$_NORMAL;
 }
 
@@ -1742,10 +1743,10 @@ static int cmd_set_process(struct dcl_command *cmd)
              * report per Rule 10. */
             if (st == SS$_DUPLNAM) {
                 dcl_error("SET", 2, "NOTSET", "error modifying process name");
-                fprintf(stderr, "-SYSTEM-F-DUPLNAM, duplicate name\n");
+                dcl_err_printf("-SYSTEM-F-DUPLNAM, duplicate name\n");
             } else if (st == SS$_IVLOGNAM) {
                 dcl_error("SET", 2, "NOTSET", "error modifying process name");
-                fprintf(stderr,
+                dcl_err_printf(
                         "-SYSTEM-F-IVLOGNAM, invalid logical name\n");
             } else
                 dcl_error("OVMX", 2, "SETPRNFAIL",
@@ -2224,7 +2225,7 @@ static int cmd_set_uic(struct dcl_command *cmd)
 
     if (cmd->param_count < 2) {
         /* No argument: display current UIC */
-        printf("  Current UIC: [%03o,%03o]\n", ctx->uic_group, ctx->uic_member);
+        dcl_out_printf("  Current UIC: [%03o,%03o]\n", ctx->uic_group, ctx->uic_member);
         return SS$_NORMAL;
     }
 
@@ -2427,7 +2428,7 @@ static int cmd_set_host(struct dcl_command *cmd)
     dcl_resolve_path(ctx, img_spec, linux_path, sizeof(linux_path));
     if (!dcl_resolve_activatable(ctx, img_spec, linux_path,
                                  resolved, sizeof(resolved))) {
-        printf("%%SET-I-NOTAVAIL, DECnet is not available on this system\n");
+        dcl_out_printf("%%SET-I-NOTAVAIL, DECnet is not available on this system\n");
         return SS$_NORMAL;
     }
     strncpy(linux_path, resolved, sizeof(linux_path) - 1);
@@ -2536,7 +2537,7 @@ static int cmd_set_accounting(struct dcl_command *cmd)
                       VMS_ACCOUNTING_STATE_PATH);
             return SS$_BADPARAM;
         }
-        printf("%%SET-I-INTSET, accounting enabled\n");
+        dcl_out_printf("%%SET-I-INTSET, accounting enabled\n");
     } else if (has_disable) {
         if (ovmx_accounting_set_enabled(0) != 0) {
             dcl_error("OVMX", 2, "WRITEFAIL",
@@ -2544,9 +2545,9 @@ static int cmd_set_accounting(struct dcl_command *cmd)
                       VMS_ACCOUNTING_STATE_PATH);
             return SS$_BADPARAM;
         }
-        printf("%%SET-I-INTSET, accounting disabled\n");
+        dcl_out_printf("%%SET-I-INTSET, accounting disabled\n");
     } else {
-        printf("%%SET-I-INTSET, accounting is %s\n",
+        dcl_out_printf("%%SET-I-INTSET, accounting is %s\n",
                ovmx_accounting_is_enabled() ? "enabled" : "disabled");
     }
     return SS$_NORMAL;

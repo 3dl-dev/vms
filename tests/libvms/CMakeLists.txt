@@ -595,7 +595,8 @@ add_test(NAME test_libvms_struct_layout_gate
 add_executable(test_libvms_ctrl_t_status
     ${CMAKE_CURRENT_SOURCE_DIR}/test_ctrl_t_status.c
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_terminal.c
-    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_memfile.c)
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_memfile.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_out.c)
 target_include_directories(test_libvms_ctrl_t_status PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
     ${VMS_INCLUDE_DIR}

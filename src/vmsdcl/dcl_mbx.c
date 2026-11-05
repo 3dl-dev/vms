@@ -69,6 +69,7 @@
  * per-process substitute for a mailbox.
  */
 
+#include "dcl/dcl_out.h"
 #include <stdint.h>
 #include <string.h>
 #include <ctype.h>
@@ -629,7 +630,7 @@ int dcl_mbx_bind_std_streams(void)
         if (vms_kif_mbx_assign(dev, &chan) & 1) {
             int p[2];
             if (pipe(p) == 0) {
-                fflush(stdout);
+                dcl_out_flush();
                 g_out_chan   = chan;
                 g_out_pipe_r = p[0];   /* writer toggles O_NONBLOCK per batch */
                 if (dup2(p[1], STDOUT_FILENO) >= 0 &&
@@ -640,7 +641,7 @@ int dcl_mbx_bind_std_streams(void)
                     /* fd 1 is a pipe now, so stdio would fully buffer it;
                      * line-buffer so each command's output reaches the parent
                      * as it is produced, not only at exit. */
-                    setvbuf(stdout, NULL, _IOLBF, 0);
+                    dcl_out_line_buffered();
                 } else {
                     close(p[0]);
                     close(p[1]);
@@ -664,7 +665,7 @@ void dcl_mbx_shutdown(void)
          * write end (fd 1) so writer_main() drains it and sees EOF; join so the
          * final IO$_WRITEVBLK completes before we return (the parent's last
          * read must not race process exit). */
-        fflush(stdout);
+        dcl_out_flush();
         close(STDOUT_FILENO);
         pthread_join(g_writer, NULL);
         g_writer_up = 0;

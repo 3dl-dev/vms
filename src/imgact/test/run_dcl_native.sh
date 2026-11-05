@@ -91,7 +91,7 @@ INCS="-I$DCL_DIR/include -I$LIBVMS_INC -I$VMSFS_INC -I$LNM_INC -I$RMS_INC -I$VMS
 TUS="dcl_main dcl_lexer dcl_parser dcl_exec dcl_backup dcl_builtin dcl_cmd_show \
 dcl_cmd_set dcl_cmd_file dcl_remote_file dcl_cmd_process dcl_cmd_io dcl_cmd_misc dcl_disk_logical \
 dcl_editor dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script dcl_memfile \
-dcl_messages dcl_library dcl_help dcl_mbx"
+dcl_messages dcl_library dcl_help dcl_mbx dcl_out"
 DCLOBJS=""
 for t in $TUS; do
     $CC $CFLAGS $DEFS $INCS -c -o "$WORK/$t.o" "$DCL_DIR/$t.c"
@@ -101,12 +101,13 @@ $CC $CFLAGS $DEFS $INCS -c -o "$WORK/vmsqueue.o" "$SRC/vmsqueue/vmsqueue.c"
 DCLOBJS="$DCLOBJS $WORK/vmsqueue.o"
 NOBJ=$(echo $DCLOBJS | wc -w)
 echo "-- $NOBJ DCL objects compiled VMS-native-clean --"
-# 26 vmsdcl TUs + vmsqueue = 27 (dcl_remote_file added by vms-0a7 --
+# 27 vmsdcl TUs + vmsqueue = 28 (dcl_out added by vms-d4a0 -- the one
+# SYS$OUTPUT/SYS$ERROR sink; dcl_remote_file added by vms-0a7 --
 # DIRECTORY/TYPE/COPY node:: over RMS; dcl_disk_logical added by vms-f83;
 # dcl_help added by vms-01b — the hierarchical HELP engine;
 # dcl_mbx added by vms-786 — mailbox-backed SYS$INPUT/SYS$OUTPUT;
 # dcl_memfile added by vms-97c2 — in-memory @-procedure stream).
-[ "$NOBJ" -eq 27 ] || { echo "FAIL: expected 27 DCL objects, got $NOBJ"; exit 1; }
+[ "$NOBJ" -eq 28 ] || { echo "FAIL: expected 28 DCL objects, got $NOBJ"; exit 1; }
 
 echo
 echo "== DCL.EXE reloc/TLS profile (informative) =="

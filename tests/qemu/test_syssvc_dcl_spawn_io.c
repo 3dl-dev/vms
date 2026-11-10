@@ -20,6 +20,10 @@
  *                                                    -> "from CMD", then IN.COM's output;
  *   - SPAWN/INPUT=NOSUCH.COM SHOW TIME               -> "%RMS-E-FNF, file not found",
  *     $STATUS %X00018292, no process.
+ *   - SPAWN/INPUT=H.COM/OUTPUT=S6.LOG, H.COM a HELP/NOPROMPT of a topic in the
+ *     library HLP$LIBRARY names            -> S6.LOG holds the topic's text:
+ *     HELP's display is SYS$OUTPUT records like any other DCL output (DCL
+ *     Dictionary, HELP; rd vms-d1a -- it was written to DCL's substrate stdout).
  *
  * Every file here is made and read through RMS on the ODS-2 volume VDA0: --
  * never a host path. Requires a real, insmod'd vms.ko; without one it SKIPs
@@ -165,17 +169,28 @@ int main(void)
 
     unsigned id = (unsigned)getpid() % 100000u;
     char a_log[64], b_log[64], e_log[64], f_log[64], c_com[64], in_com[64];
+    char g_log[64], h_com[64], h_hlp[64], h_def[160];
     snprintf(a_log, sizeof a_log, DIR "SPA%u.LOG", id);
     snprintf(b_log, sizeof b_log, DIR "SPB%u.LOG", id);
     snprintf(e_log, sizeof e_log, DIR "SPE%u.LOG", id);
     snprintf(f_log, sizeof f_log, DIR "SPF%u.LOG", id);
     snprintf(c_com, sizeof c_com, DIR "SPC%u.COM", id);
     snprintf(in_com, sizeof in_com, DIR "SPI%u.COM", id);
+    snprintf(g_log, sizeof g_log, DIR "SPG%u.LOG", id);
+    snprintf(h_com, sizeof h_com, DIR "SPH%u.COM", id);
+    snprintf(h_hlp, sizeof h_hlp, DIR "SPH%u.HLP", id);
 
     CHECK(rms_textfile_write_line(c_com, "$ WRITE SYS$OUTPUT \"SPAWN_NOWAIT_COM_RAN\"") == 0,
           "a command procedure is laid down on the ODS-2 volume through RMS");
     CHECK(rms_textfile_write_line(in_com, "$ WRITE SYS$OUTPUT \"SPAWN_INPUT_FILE_RAN\"") == 0,
           "an input file is laid down on the ODS-2 volume through RMS");
+    /* a one-topic HELP library and a procedure that asks HELP for it */
+    snprintf(h_def, sizeof h_def, "$ DEFINE HLP$LIBRARY %s", h_hlp);
+    CHECK(rms_textfile_write_line(h_hlp, "1 D1ATOPIC") == 0 &&
+          rms_textfile_append_line(h_hlp, " D1A_HELP_BODY_IN_SYSOUTPUT") == 0 &&
+          rms_textfile_write_line(h_com, h_def) == 0 &&
+          rms_textfile_append_line(h_com, "$ HELP/NOPROMPT D1ATOPIC") == 0,
+          "a HELP library and a HELP procedure are laid down on the ODS-2 volume through RMS");
 
     static char script[2048], out[32768], body[8192];
     snprintf(script, sizeof script,
@@ -186,8 +201,9 @@ int main(void)
              "SPAWN/INPUT=SPI%u.COM/OUTPUT=SPF%u.LOG WRITE SYS$OUTPUT \"SPAWN_CMD_FIRST\"\n"
              "SPAWN/INPUT=NOSUCH%u.COM WRITE SYS$OUTPUT \"NEVER\"\n"
              "WRITE SYS$OUTPUT \"FNF_STATUS=\",$STATUS\n"
+             "SPAWN/INPUT=SPH%u.COM/OUTPUT=SPG%u.LOG\n"
              "SPAWN/NOWAIT/INPUT=NL:/OUTPUT=SPB%u.LOG @SPC%u.COM\n",
-             id, id, id, id, id, id, id);
+             id, id, id, id, id, id, id, id, id);
     CHECK(run_dcl_hold(script, out, sizeof out, b_log, "SPAWN_NOWAIT_COM_RAN") == 0,
           "DCL ran the SPAWN script");
     printf("  ---- DCL ----\n%s  ---- end ----\n", out);
@@ -229,6 +245,16 @@ int main(void)
           "...and leaves $STATUS %X00018292 (RMS$_FNF), as VAX V7.3 does");
     CHECK(strstr(out, "NEVER") == NULL, "...and ran nothing");
 
+    /* (5b) HELP's display is SYS$OUTPUT records (rd vms-d1a) */
+    have = read_file(g_log, body, sizeof body);
+    printf("  ---- %s ----\n%s  ---- end ----\n", g_log, body);
+    /* negctl: dcl-help-to-substrate-stdout */
+    CHECK(have && strstr(body, "D1ATOPIC") != NULL &&
+          strstr(body, "D1A_HELP_BODY_IN_SYSOUTPUT") != NULL,
+          "SPAWN/OUTPUT=file HELP/NOPROMPT topic: the topic's header and text are records of the file");
+    CHECK(strstr(out, "D1A_HELP_BODY_IN_SYSOUTPUT") == NULL,
+          "...not on the creator's terminal");
+
     /* (6) /NOWAIT/OUTPUT=file @procedure: the procedure's output is the file's */
     CHECK(strstr(out, "%DCL-S-SPAWNED, process ") != NULL, "SPAWN/NOWAIT reported %DCL-S-SPAWNED");
     have = read_file(b_log, body, sizeof body);
@@ -240,6 +266,7 @@ int main(void)
 
     erase_all(a_log); erase_all(b_log); erase_all(e_log); erase_all(f_log);
     erase_all(c_com); erase_all(in_com);
+    erase_all(g_log); erase_all(h_com); erase_all(h_hlp);
     (void)vms_kif_acp_dmount(RW_UNIT);
     printf("=== test_syssvc_dcl_spawn_io: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;

@@ -177,4 +177,18 @@ void vms_tt_chan_gone(struct vms_device *dev, pid_t owner_linux_pid, uint32_t ch
  * resumes it. */
 #define VMS_TT_READ_ASTPEND 1
 
+#if defined(OVMX_KTEST_FAULT_INJECT)
+/*
+ * TEST-ONLY (rd vms-ff73). Compiled in ONLY for the out-of-tree QEMU-test
+ * vms.ko (src/kernel/Makefile defines the macro; the bootable overlay does
+ * NOT). The class driver calls it where it has taken bytes out of obuf and not
+ * yet handed them to the port -- the window in which a CPU preempted by its
+ * host leaves the line's output order to whoever runs next. Armed, it holds
+ * the hand-off there for a few milliseconds so test_kmod_tt can show that
+ * nothing framed later reaches the port first; disarmed (the default) it does
+ * nothing. Provided by the substrate rind (vms_tt_linux.c).
+ */
+void vms_tt_ktest_handoff_stall(void);
+#endif
+
 #endif /* VMS_TT_H */

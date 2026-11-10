@@ -352,18 +352,12 @@ if [ "$n_imgact" -lt 2 ]; then
     echo "  a userspace imgact defect would run against a stale pristine binary."
     exit 4
 fi
-( cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz ) || exit 4
-echo "Re-staged initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
-# The same INITRAMFS BUDGET the image build enforces (its value is read from
-# /initramfs.budget, which that build writes): an over-budget defect image
-# fails here, by name, instead of hanging the guest.
+# Re-pack with the image build's own packer and budget (tests/qemu/pack_initramfs.sh,
+# rd vms-802f): the same two archives, each held to /initramfs.budget (which that
+# build writes) and to carrying its whole set -- an over-budget defect image fails
+# here, by name, instead of hanging the guest.
 budget=$(cat /initramfs.budget) || { echo "FATAL: /initramfs.budget missing (the image build writes it)"; exit 4; }
-bytes=$(gzip -dc /initramfs.cpio.gz | wc -c)
-echo "Re-staged initramfs unpacked: $bytes bytes (budget $budget)"
-if [ "$bytes" -gt "$budget" ]; then
-    echo "FATAL: the re-staged initramfs is $bytes bytes, over the $budget-byte budget"
-    exit 4
-fi
+sh /src/repo/tests/qemu/pack_initramfs.sh /initramfs "$budget" || exit 4
 
 # Per-facility negative controls run the ENTIRE suite set in ONE VM per defect
 # (check 5's isolation attribution must see every suite, so suites cannot be

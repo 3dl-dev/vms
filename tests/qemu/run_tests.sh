@@ -119,6 +119,10 @@ fi
 KCMD_CORPUS=""
 if [ "${OVMX_CORPUS_RT:-0}" = "1" ]; then
     KCMD_CORPUS="ovmx.corpus=1"
+    # The corpus programs live in their own archive (rd vms-802f,
+    # tests/qemu/pack_initramfs.sh): /initramfs.cpio.gz carries the executive
+    # suites and no /tests/corpus_rt, so booting it here would run zero programs.
+    INITRD=/initramfs-corpus.cpio.gz
     case "${OVMX_CORPUS_SKIP:-}" in
     ''|*[!A-Za-z0-9_,]*) ;;
     *) KCMD_CORPUS="$KCMD_CORPUS ovmx.corpus_skip=$OVMX_CORPUS_SKIP" ;;

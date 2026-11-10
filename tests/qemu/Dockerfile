@@ -991,9 +991,6 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
         echo "NEGATIVE_CONTROL=1: patched init.sh to skip insmod vms.ko"; \
     fi && \
     chmod +x /initramfs/init && \
-    # Pack initramfs
-    cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz && \
-    echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')" && \
     # INITRAMFS BUDGET (rd vms-0a7 S1, PR #1994). The guest unpacks this archive
     # into RAM-backed rootfs inside run_tests.sh's 512 MB, and the suites stage
     # images into that same rootfs (DCL's lazy SYS$SYSTEM staging, IMGACT's
@@ -1004,11 +1001,14 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # SYS$SYSTEM:LINK.EXE (the fourth image the drive stages); a 182.8 MB one
     # ran clean, and the same 193.1 MB tree passes with -m 1024M. Fail the build here,
     # by name, rather than let a full guest show up as an unrelated suite's red.
-    INITRAMFS_BYTES=$(gzip -dc /initramfs.cpio.gz | wc -c) && \
-    INITRAMFS_BUDGET=$((176 * 1024 * 1024)) && \
-    echo "$INITRAMFS_BUDGET" > /initramfs.budget && \
-    echo "Initramfs unpacked: $INITRAMFS_BYTES bytes (budget $INITRAMFS_BUDGET)" && \
-    { [ "$INITRAMFS_BYTES" -le "$INITRAMFS_BUDGET" ] || { echo "FATAL: the unpacked initramfs is $INITRAMFS_BYTES bytes, over the $INITRAMFS_BUDGET-byte budget -- the 512 MB guest would run out of RAM-backed rootfs mid-run (or fail to unpack it at all). Shrink what the initramfs carries, or raise run_tests.sh's -m together with this budget."; exit 1; }; }
+    #
+    # TWO ARCHIVES (rd vms-802f): the executive suites and the corpus runtime
+    # programs never run in the same boot, so tests/qemu/pack_initramfs.sh packs
+    # this one staged tree twice -- /initramfs.cpio.gz without /tests/corpus_rt,
+    # /initramfs-corpus.cpio.gz without the executive suites -- and holds EACH to
+    # the budget and to carrying its whole set.
+    echo "$((176 * 1024 * 1024))" > /initramfs.budget && \
+    sh /src/repo/tests/qemu/pack_initramfs.sh /initramfs "$(cat /initramfs.budget)"
 
 # --- Per-facility negative controls (vms-e7d) ----------------------------
 #

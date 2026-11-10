@@ -10,9 +10,9 @@ defect_meta() {
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "sysinput_is_terminal() answers from the executive's device row (\`return (st & 1) && cls == DC\$_TERM;\`). The mutation also asks the substrate tty (\`isatty(0)\`, the pre-S2 DECNETD --set-host drop): the trace sees ioctl(TCGETS) from RTPAD.EXE. Non-fatal: SYS\$INPUT is the tracer's pipe, so isatty() says no and the command behaves as before -- only the isatty assertion reddens. The original text is gone after substitution (no-op re-apply).";;
+        why)          echo "sysinput_is_terminal() answers from the executive's device row (\`return (st & 1) && cls == DC\$_TERM;\`). The mutation also asks the substrate tty (\`isatty(0)\`, the pre-S2 DECNETD --set-host drop): the trace sees isatty()'s ioctl from RTPAD.EXE (TIOCGWINSZ under musl, TCGETS under glibc). Non-fatal: SYS\$INPUT is the tracer's pipe, so isatty() says no and the command behaves as before -- only the isatty assertion reddens. The original text is gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOT'
-NO isatty / ioctl(TCGETS) from RTPAD.EXE in SET HOST
+NO isatty / ioctl(TCGETS or TIOCGWINSZ) from RTPAD.EXE in SET HOST
 EOT
                       ;;
         knock_on_fail) echo "";;

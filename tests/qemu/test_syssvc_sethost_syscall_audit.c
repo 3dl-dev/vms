@@ -21,9 +21,10 @@
  *                                                     (host networking);
  *   - execve of anything but that DCL and SYS$SYSTEM:RTPAD.EXE (DECNETD.EXE
  *     above all: the image SET HOST used to run with --set-host);
- *   - ioctl(TCGETS) -- isatty()/tcgetattr() -- from RTPAD.EXE: whether
- *     SYS$INPUT is a terminal is the executive's answer ($GETDVI), not the
- *     substrate tty's.
+ *   - ioctl(TCGETS) or ioctl(TIOCGWINSZ) -- isatty()/tcgetattr(); glibc's
+ *     isatty() issues TCGETS, musl's (the static image's) TIOCGWINSZ -- from
+ *     RTPAD.EXE: whether SYS$INPUT is a terminal is the executive's answer
+ *     ($GETDVI), not the substrate tty's.
  *
  * NOT VACUOUS. For each command the trace must see RTPAD.EXE activated, its
  * /dev/vms executive ioctls, and its real output; and the classifier itself is
@@ -214,6 +215,8 @@ static void classify(struct verdict *v, pid_t pid, pid_t root, const struct sc *
         }
         if (req == (unsigned long)TCGETS && is_rtpad(v, pid))
             flag(v, &v->bad_tty, "ioctl(TCGETS) from RTPAD.EXE (isatty)", s);
+        if (req == (unsigned long)TIOCGWINSZ && is_rtpad(v, pid))
+            flag(v, &v->bad_tty, "ioctl(TIOCGWINSZ) from RTPAD.EXE (musl isatty)", s);
         return;
     }
 #ifdef SYS_poll
@@ -373,6 +376,7 @@ static void control_child(void)
     struct pollfd pf = { -1, 0, 0 };
     struct timespec zero = { 0, 0 };
     struct termios t;
+    struct winsize ws;
     /* pipe2/ppoll: the calls every architecture has (arm64 has no pipe/poll) */
     (void)syscall(SYS_pipe2, pp, 0);
     (void)syscall(SYS_ppoll, &pf, 1, &zero, NULL, 0);
@@ -382,7 +386,8 @@ static void control_child(void)
 #else
     (void)syscall(SYS_clone, CLONE_THREAD, 0, 0, 0, 0); /* EINVAL: CLONE_THREAD needs CLONE_SIGHAND */
 #endif
-    (void)syscall(SYS_ioctl, 0, TCGETS, &t);        /* isatty: this task counts as RTPAD */
+    (void)syscall(SYS_ioctl, 0, TCGETS, &t);        /* glibc isatty: this task counts as RTPAD */
+    (void)syscall(SYS_ioctl, 0, TIOCGWINSZ, &ws);   /* musl isatty */
     char *const av[] = { (char *)"DECNETD.EXE", NULL };
     (void)syscall(SYS_execve, "/nonexistent/DECNETD.EXE", av, NULL);
     syscall(SYS_exit_group, 0);
@@ -497,8 +502,8 @@ int main(int argc, char **argv)
         waitpid(c, &st, 0);
         int rs = trace_all(c, &v, 30, NULL);
         CHECK(rs >= 0 && v.bad_pipe >= 1 && v.bad_wait >= 1 && v.bad_socket >= 1 &&
-              v.bad_thread >= 1 && v.bad_exec >= 1 && v.bad_tty >= 1,
-              "control: the audit flags a pipe, a poll, a socket(AF_INET), a thread, an isatty and an exec of another image");
+              v.bad_thread >= 1 && v.bad_exec >= 1 && v.bad_tty >= 2,
+              "control: the audit flags a pipe, a poll, a socket(AF_INET), a thread, both isatty ioctls (TCGETS, TIOCGWINSZ) and an exec of another image");
     }
 
     if (vms_kif_open() < 0) {
@@ -584,7 +589,7 @@ int main(int argc, char **argv)
     CHECK(socks == 0, "NO socket(AF_INET/INET6/PACKET/NETLINK) in SET HOST");
     CHECK(execs == 0, "NO exec of DECNETD.EXE or any image but DCL and RTPAD.EXE in SET HOST");
     /* negctl: rtpad-terminal-via-isatty */
-    CHECK(ttys == 0, "NO isatty / ioctl(TCGETS) from RTPAD.EXE in SET HOST");
+    CHECK(ttys == 0, "NO isatty / ioctl(TCGETS or TIOCGWINSZ) from RTPAD.EXE in SET HOST");
 
     printf("=== test_syssvc_sethost_syscall_audit: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

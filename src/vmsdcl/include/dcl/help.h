@@ -26,9 +26,10 @@
  * HLP$LIBRARY_1..n search list (help_open_libraries), the documented VMS HELP
  * library search order (VSI OpenVMS DCL Dictionary, HELP).
  *
- * This engine is deliberately free of DCL-context and libvms-runtime
- * dependencies (only <stdio.h> for the FILE* sinks and VMS status codes) so it
- * can be exercised standalone by a hermetic unit test.
+ * This engine is free of DCL-context dependencies. It does no file or
+ * terminal input of its own (libc-drop vms-3381): library files are read
+ * through RMS (dcl_help_acp.c -- $GET for a .HLP, block $READ for a .HLB), and
+ * the interactive prompt reads only through the caller's help_read_fn.
  */
 
 #ifndef OVMX_DCL_HELP_H
@@ -56,18 +57,19 @@ typedef struct help_lib {
 /* Parse a HELP library from an in-memory source string. Returns NULL on OOM. */
 help_lib_t *help_open_text(const char *text);
 
-/* Parse a HELP library from a file (numbered-level .HLP source). Returns NULL
- * if the file cannot be opened or on OOM. */
-help_lib_t *help_open_file(const char *linux_path);
+/* Parse a HELP library from a file (numbered-level .HLP source), read through
+ * RMS. Returns NULL if RMS cannot open the file or on OOM. */
+help_lib_t *help_open_file(const char *spec);
 
 /* Parse a HELP library from a compiled .HLB (the OVMX "LBRO" container written
  * by LIBRARY/HELP/CREATE; dcl/hlb.h). Each module is a level-1 key's subtree;
  * the modules are read in index order and reconstruct the numbered-level tree.
  * Returns NULL if the file is not a readable HELP library or on OOM. */
-help_lib_t *help_open_hlb(const char *linux_path);
+help_lib_t *help_open_hlb(const char *spec);
 
-/* Open one library file, auto-detecting .HLB (LBRO magic) vs .HLP source. */
-help_lib_t *help_open_any(const char *linux_path);
+/* Open one library file through RMS, auto-detecting .HLB (LBRO magic) vs .HLP
+ * source. */
+help_lib_t *help_open_any(const char *spec);
 
 /* Open an ordered HLP$LIBRARY search list and merge it into one library: the
  * paths (each .HLB or .HLP) are loaded in order, so a key defined in an earlier
@@ -126,14 +128,16 @@ void help_show_node(help_node_t *node, const char *const path[], int n,
 int help_render(help_lib_t *lib, const char *const path[], int n, FILE *out);
 
 /* Interactive HELP: display the initial path (top level when ninit == 0), then
- * drive the VMS "Topic?" / "<path> Subtopic?" prompt loop reading from `in`.
- * A blank line pops one level (and exits at the top); EOF exits. */
+ * drive the VMS "Topic?" / "<path> Subtopic?" prompt loop, each line read
+ * through the help_set_reader() reader. A blank line pops one level (and exits
+ * at the top); EOF exits, and so does a loop with no reader set. */
 void help_interactive(help_lib_t *lib, const char *const initial[], int ninit,
-                      FILE *in, FILE *out);
+                      FILE *out);
 
 /* How the prompt loop reads a line at a terminal: prompt (with its own
- * leading CR LF), buffer; 0, or -1 at end of file (CTRL/Z). Unset, the loop
- * writes the prompt to `out` and reads `in`. rd vms-f9e. */
+ * leading CR LF), buffer; 0, or -1 at end of file (CTRL/Z). The reader owns
+ * the prompt's display and the read (DCL: the terminal through $QIO).
+ * rd vms-f9e. */
 typedef int (*help_read_fn)(const char *prompt, char *buf, size_t bufsz);
 void help_set_reader(help_read_fn fn);
 

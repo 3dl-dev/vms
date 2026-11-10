@@ -49,6 +49,24 @@ static const char *SRC =
     "2 /BRIEF\n"
     " Displays only file names.\n";
 
+/* The interactive reader for test 6: the prompt (less its leading CR) to the
+ * output, the next line of the script as the answer; -1 when it runs out. */
+static const char *g_script;
+static FILE *g_script_out;
+
+static int script_reader(const char *prompt, char *buf, size_t bufsz)
+{
+    fputs(prompt + 1, g_script_out);
+    if (!g_script || !*g_script)
+        return -1;
+    size_t n = strcspn(g_script, "\n");
+    if (n >= bufsz) n = bufsz - 1;
+    memcpy(buf, g_script, n);
+    buf[n] = '\0';
+    g_script += n + (g_script[n] == '\n');
+    return 0;
+}
+
 /* Render helpers capturing into a heap buffer via open_memstream. */
 static char *render_path(help_lib_t *lib, const char *const path[], int n,
                          int *status_out)
@@ -131,17 +149,20 @@ int main(void)
         free(out);
     }
 
-    /* 6. Interactive prompt loop: Topic? then COPY Subtopic? */
+    /* 6. Interactive prompt loop: Topic? then COPY Subtopic? The engine reads
+     * each line only through its reader (vms-3381); this one shows the prompt
+     * on the output and answers from the script, as a terminal would. */
     {
         /* Input: select COPY, then blank pops to top, then blank exits. */
-        const char *script = "COPY\n\n\n";
-        FILE *in = fmemopen((void *)script, strlen(script), "r");
         char *buf = NULL;
         size_t sz = 0;
         FILE *out = open_memstream(&buf, &sz);
-        help_interactive(lib, NULL, 0, in, out);
+        g_script = "COPY\n\n\n";
+        g_script_out = out;
+        help_set_reader(script_reader);
+        help_interactive(lib, NULL, 0, out);
+        help_set_reader(NULL);
         fclose(out);
-        fclose(in);
         check(strstr(buf, "Topic? ") != NULL,
               "interactive prints the 'Topic? ' prompt");
         check(strstr(buf, "COPY Subtopic? ") != NULL,

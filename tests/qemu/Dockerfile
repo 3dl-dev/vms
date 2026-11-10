@@ -675,8 +675,15 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/MMK.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE || \
       { echo "FATAL: MMK.EXE was not built into the static tree -- the MMK exec-drive would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE && \
-    cp /initramfs/bin/DCL.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
-    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
+    # SYS$SYSTEM:DCL.EXE is a third hard link to /bin/DCL.EXE, like
+    # /tests/DCL.EXE above: the SAME binary by construction, held once in the
+    # initramfs (a cp here cost 1,383,416 bytes of the INITRAMFS BUDGET for a
+    # byte-identical second copy, rd vms-802f). inject_and_run.sh links it the
+    # same way, and the check below fails the build if the names ever diverge.
+    ln /initramfs/bin/DCL.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
+    { [ /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE -ef /initramfs/bin/DCL.EXE ] && \
+      [ /initramfs/tests/DCL.EXE -ef /initramfs/bin/DCL.EXE ] || \
+      { echo "FATAL: the three DCL.EXE names (/bin, /tests, SYS\$SYSTEM) are not one file -- a suite could drive a different DCL than the one it names"; exit 1; }; } && \
     # TCPIP$DAYTIME.EXE at SYS$SYSTEM (vms-477) -- the REAL standalone RFC 867
     # service image the auxiliary server launches; test_syssvc_tcpip_daytime.c
     # execs it from this path (OVMX_DAYTIME default

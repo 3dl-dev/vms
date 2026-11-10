@@ -1715,9 +1715,9 @@ static void dcl_help_apply_cdu(help_lib_t *lib)
 }
 
 /*
- * THE HELP-LIBRARY ACP READ SEAM (vms-4ac). dcl_help.c is the pure HELP engine
- * and reaches these two functions through WEAK references, so the hermetic
- * engine unit test can link dcl_help.c alone. They live HERE -- in a TU already
+ * THE HELP-LIBRARY RMS READ SEAM (vms-4ac, vms-3381). dcl_help.c is the HELP
+ * engine and reaches these two functions through WEAK references, so the
+ * engine carries no RMS dependency of its own. They live HERE -- in a TU already
  * part of DCL.EXE (native LINK.EXE build + cmake) -- and read the library
  * through DCL's OWN RMS reader (dcl_rms_read_*, the same path TYPE/COPY use over
  * the Files-11 ACP), so the runtime HELP reads SYS$HELP:HELPLIB.HLP over the
@@ -1728,8 +1728,8 @@ static void dcl_help_apply_cdu(help_lib_t *lib)
  * copy of this seam in dcl_help_acp.c (rms_textfile), since it is not DCL.
  *
  * A raw .HLP is line-oriented, so a record-by-record read reconstructs it; a
- * binary .HLB is taken through the POSIX/.HLB-reconstruct path by dcl_help.c
- * (help_type_is_hlb), never this text reader.
+ * binary .HLB is read by block I/O (help_acp_library_bytes below) and
+ * reconstructed by dcl_help.c, never through this text reader.
  */
 char *help_acp_library_text(const char *vms_spec)
 {
@@ -1766,9 +1766,47 @@ char *help_acp_library_text(const char *vms_spec)
     return text;
 }
 
-int help_acp_vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
+/* A library's bytes by RMS block I/O ($OPEN FAC=BIO, $READ): the compiled
+ * .HLB is a binary container, read by block, not by record (vms-3381). */
+char *help_acp_library_bytes(const char *spec, size_t *len_out, uint32_t *rms_status)
 {
-    return $VMS_STATUS_SUCCESS(vmsfs_to_linux_path(vms_spec, buf, bufsz)) ? 1 : 0;
+    struct dcl_context *ctx = dcl_get_context();
+    uint32_t st = 0;
+    if (len_out) *len_out = 0;
+    struct dcl_rms_bio *b = dcl_rms_bio_open(ctx, spec, NULL, &st);
+    if (!b) {
+        if (rms_status) *rms_status = st;
+        return NULL;
+    }
+    char *buf = NULL;
+    size_t len = 0, cap = 0;
+    for (;;) {
+        if (len + 32768 + 1 > cap) {
+            size_t nc = cap ? cap * 2 : 65536;
+            char *nb = realloc(buf, nc);
+            if (!nb) {
+                free(buf);
+                dcl_rms_bio_close(b);
+                if (rms_status) *rms_status = RMS$_DME;
+                return NULL;
+            }
+            buf = nb; cap = nc;
+        }
+        long n = dcl_rms_bio_read(b, buf + len, 32768);
+        if (n < 0) {
+            if (rms_status) *rms_status = dcl_rms_bio_status(b);
+            free(buf);
+            dcl_rms_bio_close(b);
+            return NULL;
+        }
+        len += (size_t)n;
+        if (n < 32768) break;
+    }
+    dcl_rms_bio_close(b);
+    buf[len] = '\0';
+    if (len_out) *len_out = len;
+    if (rms_status) *rms_status = RMS$_NORMAL;
+    return buf;
 }
 
 /*
@@ -1858,7 +1896,7 @@ int cmd_help(struct dcl_command *cmd)
     }
     if (prompting) {
         help_set_reader(dcl_tt_read_line);
-        help_interactive(lib, path, npath, stdin, dcl_out_stream());
+        help_interactive(lib, path, npath, dcl_out_stream());
         help_set_reader(NULL);
     } else {
         status = help_render(lib, path, npath, dcl_out_stream());

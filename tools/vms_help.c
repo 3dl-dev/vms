@@ -32,17 +32,58 @@
 #include "vmsfs/filespec.h"
 #include "vms/logical.h"
 #include "dcl/help.h"
+#include "starlet.h"
+#include "descrip.h"
+#include "iodef.h"
+
+/*
+ * The interactive "Topic?" line, read the VMS way: a channel to SYS$INPUT
+ * ($ASSIGN) and $QIOW IO$_READPROMPT, the prompt riding the read (libc-drop
+ * vms-3381: the engine reads no stream itself). No channel -- no executive
+ * terminal -- is end of input, an honest one: HELP shows what it was asked
+ * and exits.
+ */
+static int help_qio_read(const char *prompt, char *buf, size_t bufsz)
+{
+    static uint16_t chan;
+    static int state;                  /* 0 untried, 1 assigned, -1 none */
+    static const char in[] = "SYS$INPUT";
+    uint16_t iosb[4];
+    uint32_t st;
+    size_t plen = prompt ? strlen(prompt) : 0;
+
+    if (state == 0) {
+        struct dsc$descriptor_s d = { sizeof in - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S,
+                                      (char *)in };
+        state = (sys$assign(&d, &chan, 0, NULL, 0) & 1) ? 1 : -1;
+    }
+    if (state != 1 || !buf || bufsz < 2)
+        return -1;
+    fflush(stdout);
+    memset(iosb, 0, sizeof iosb);
+    st = sys$qiow(0, chan, plen ? IO$_READPROMPT : IO$_READVBLK, iosb, NULL, 0,
+                  buf, (uint32_t)(bufsz - 1), 0, 0, (uintptr_t)prompt, (uint32_t)plen);
+    if (st & 1)
+        st = iosb[0];
+    if (!(st & 1))
+        return -1;
+    size_t n = iosb[1] < bufsz - 1 ? iosb[1] : bufsz - 1;
+    buf[n] = '\0';
+    if (iosb[2] == 26 && n == 0)
+        return -1;                     /* CTRL/Z */
+    return 0;
+}
 
 /*
  * Which HELP library to open. Order (first wins):
  *   1. $OVMX_HELPLIB -- an explicit Linux path (locator override; content still
  *      comes from the real file). The OVMX analogue of VMS "HELP /LIBRARY=".
  *   2. SYS$HELP:HELPLIB.HLP -- the VMS filespec, opened over the Files-11 ACP.
- * help_open_any() (dcl_help.c) routes a VMS spec to the ACP (with a POSIX /vms
- * fallback for host tooling) and a Linux path to a direct read (vms-4ac); the
- * pre-flip fopen(vmsfs_to_linux_path()) here read the retired /vms passthrough
- * and so answered %HELP-E-OPENIN on the runtime even though HELPLIB.HLP is
- * mastered on the volume.
+ * help_open_any() (dcl_help.c) reads the library through RMS only -- $GET for
+ * a .HLP, block $READ for a .HLB (dcl_help_acp.c, vms-3381); the pre-flip
+ * fopen(vmsfs_to_linux_path()) here read the retired /vms passthrough and so
+ * answered %HELP-E-OPENIN on the runtime even though HELPLIB.HLP is mastered
+ * on the volume.
  */
 int main(int argc, char *argv[])
 {
@@ -73,7 +114,9 @@ int main(int argc, char *argv[])
         rc = $VMS_STATUS_SUCCESS(st) ? 0 : 1;
     } else {
         /* Interactive: Topic? / <path> Subtopic? loop from SYS$INPUT. */
-        help_interactive(lib, NULL, 0, stdin, stdout);
+        help_set_reader(help_qio_read);
+        help_interactive(lib, NULL, 0, stdout);
+        help_set_reader(NULL);
     }
 
     help_close(lib);

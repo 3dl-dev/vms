@@ -125,6 +125,120 @@ jobs:
           docker buildx imagetools inspect "${{ steps.ref.outputs.image }}" >/dev/null 2>&1 \
             || echo "::warning::bootable image not in GHCR; consumers will build it themselves (slow path)"
 
+  # vms-7dc2: the keystroke oracle (~19 min) and the release e2e (~10 min)
+  # ran as steps of persistent-boot, serially after the smoke test -- a 36 min
+  # job that was the merge queue's critical path. Each is now its own job over
+  # the SAME per-SHA bootable image (build-image), so they run in parallel.
+  # Same conditions, same commands; the gate needs all three.
+  persistent-boot-keystroke:
+    name: "Keystroke oracle — OVMX terminal vs real OpenVMS (vms-370)"
+    needs: [changes, kernel-base, build-image]
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && needs.changes.outputs.keystroke == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    # 40 (was 30): the SYSBOOT> conversational proof (vms-b81, wired in by
+    # vms-46c) adds a three-boot expect-driven step to this job; the extra
+    # margin keeps a congested runner from tripping the ceiling as a flake.
+    # 60 (was 40): the keystroke oracle (vms-370) plays ~30 timed interactive
+    # cases into one booted console (~10-20 min, longer while OVMX wedges).
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Log in to ghcr.io (pull the prebuilt kernel base)
+        continue-on-error: true
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build bootable image
+        id: build
+        uses: ./.github/actions/boot-image
+        with:
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
+
+      - name: Keystroke oracle — OVMX terminal vs real OpenVMS (vms-370)
+        # CI-speed tier: queue runs it when the console/terminal/boot is
+        # touched; nightly, dispatch and the pre-tag verify always run it.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && needs.changes.outputs.keystroke == 'true' }}
+        run: |
+          KS_ENSURE_WAIT=8 tests/qemu/test_keystroke_oracle.sh keystroke-out
+
+      # vms-9b7. THE RELEASE PATH: boot -> provision -> boot. The operator's
+      # "%OVMX-F-EXECINIT, no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT" happened
+      # on exactly this path and NO COMMITTED TEST COVERED IT -- the persistent
+      # boot test above boots the same disk three times but never CHANGES
+      # SYSUAF between boots, so a system whose authorization file is edited
+      # (the entire point of having one) was untested end to end. Runs four
+      # cases: two controls that isolate the failure to the position of the
+      # sixth field separator rather than to the write path, the row that
+      # reproduced the halt, and a fail-stop negative control (SYSUAF with no
+      # SYSTEM row) proving this rig can still go red.
+
+  persistent-boot-release-e2e:
+    name: "Release e2e — boot, provision, boot"
+    needs: [changes, kernel-base, build-image]
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    # 40 (was 30): the SYSBOOT> conversational proof (vms-b81, wired in by
+    # vms-46c) adds a three-boot expect-driven step to this job; the extra
+    # margin keeps a congested runner from tripping the ceiling as a flake.
+    # 60 (was 40): the keystroke oracle (vms-370) plays ~30 timed interactive
+    # cases into one booted console (~10-20 min, longer while OVMX wedges).
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Log in to ghcr.io (pull the prebuilt kernel base)
+        continue-on-error: true
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build bootable image
+        id: build
+        uses: ./.github/actions/boot-image
+        with:
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
+
+      - name: Release e2e — boot, provision, boot
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_release_e2e.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-0ff. Reuses the image built above (no extra build). Boots the REAL
+      # runtime twice: once with the executive present (must come up), once
+      # with vms.ko removed from the initramfs (must NOT come up). The second
+      # boot is a negative control — it proves this check can actually go red,
+      # which is the only thing that distinguishes a gate from decoration.
+
   persistent-boot:
     name: Persistent Boot Smoke Test
     needs: [changes, kernel-base, build-image]
@@ -199,37 +313,6 @@ jobs:
       # A ratchet like the semantic oracle: a difference not in
       # docs/oracle/keystroke/known-diff.d/ fails, and so does a listed
       # difference that now matches -- the list only shrinks.
-      - name: Keystroke oracle — OVMX terminal vs real OpenVMS (vms-370)
-        # CI-speed tier: queue runs it when the console/terminal/boot is
-        # touched; nightly, dispatch and the pre-tag verify always run it.
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && needs.changes.outputs.keystroke == 'true' }}
-        run: |
-          KS_ENSURE_WAIT=8 tests/qemu/test_keystroke_oracle.sh keystroke-out
-
-      # vms-9b7. THE RELEASE PATH: boot -> provision -> boot. The operator's
-      # "%OVMX-F-EXECINIT, no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT" happened
-      # on exactly this path and NO COMMITTED TEST COVERED IT -- the persistent
-      # boot test above boots the same disk three times but never CHANGES
-      # SYSUAF between boots, so a system whose authorization file is edited
-      # (the entire point of having one) was untested end to end. Runs four
-      # cases: two controls that isolate the failure to the position of the
-      # sixth field separator rather than to the write path, the row that
-      # reproduced the halt, and a fail-stop negative control (SYSUAF with no
-      # SYSTEM row) proving this rig can still go red.
-      - name: Release e2e — boot, provision, boot
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}/tests/qemu/test_release_e2e.sh:/test.sh:ro \
-            --entrypoint bash \
-            ovmx-boot:latest \
-            /test.sh
-
-      # vms-0ff. Reuses the image built above (no extra build). Boots the REAL
-      # runtime twice: once with the executive present (must come up), once
-      # with vms.ko removed from the initramfs (must NOT come up). The second
-      # boot is a negative control — it proves this check can actually go red,
-      # which is the only thing that distinguishes a gate from decoration.
       - name: The executive is integral — OVMX must not boot without it
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
@@ -2023,6 +2106,8 @@ jobs:
       - kernel-base
       - build-image
       - persistent-boot
+      - persistent-boot-keystroke
+      - persistent-boot-release-e2e
       - aarch64-release-set
       - release-sign-key
       - cut-release-a

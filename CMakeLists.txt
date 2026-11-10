@@ -755,6 +755,14 @@ if(BUILD_TESTS)
     set_tests_properties(ci_tiers_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 120)
 
+    # tools/ci/fast.sh (the local pre-queue loop): its tier report and
+    # argument checks; the legs it runs are the existing harnesses.
+    add_test(NAME fast_sh_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_fast_sh.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(fast_sh_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 120)
+
     # Negative controls for the above -- proves the checker actually goes red
     # on an oversized workflow file and respects the threshold boundary,
     # rather than reporting OK no matter what it is handed.

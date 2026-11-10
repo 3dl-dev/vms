@@ -79,6 +79,7 @@
 #include "prvdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 
 #define EXIT_SKIP 77
 
@@ -457,49 +458,39 @@ static pid_t run_dcl(const char *procedure, char *out, size_t outsz,
  *
  * This is process B. SHOW SYSTEM is a READER of the executive's process
  * table, and this is the only environment where that can be proven: ctest
- * never runs anywhere a process table exists (CLAUDE.md Rule 9).
+ * never runs anywhere a process table exists (CLAUDE.md Rule 9). Its output
+ * comes back from DCL's SYS$OUTPUT mailbox (rd vms-2f39).
  */
 static int run_show_system(char *out, size_t outsz)
 {
-    int in_pipe[2], out_pipe[2];
+    int in_pipe[2];
+    struct ovmx_dcl_sysout so;
 
     out[0] = '\0';
-    if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+    if (!(ovmx_dcl_sysout_open(&so) & 1)) return -1;
+    if (pipe(in_pipe) < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
 
     pid_t pid = ovmx_fork_subprocess();   /* a subprocess this suite creates (rd vms-3fa) */
-    if (pid < 0) return -1;
+    if (pid < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
 
     if (pid == 0) {
+        ovmx_dcl_sysout_child(&so);
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
         execl(DCL_IMAGE, "DCL.EXE", (char *)NULL);
         _exit(127);
     }
 
     close(in_pipe[0]);
-    close(out_pipe[1]);
     const char *script = "SHOW SYSTEM\nLOGOUT\n";
     ssize_t w = write(in_pipe[1], script, strlen(script));
     (void)w;
     close(in_pipe[1]);
 
-    size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
-    }
-    out[used] = '\0';
-    close(out_pipe[0]);
-
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
+    ovmx_dcl_sysout_collect(&so, out, outsz);
     return 0;
 }
 

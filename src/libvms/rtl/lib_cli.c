@@ -54,7 +54,9 @@
 #include "stsdef.h"
 #include "libclidef.h"
 #include "clitable.h"
+#ifndef OVMX_LINK_CLI_ARGV
 #include "vms_kif.h"       /* vms_kif_getcli: the command the CLI recorded (vms-f60d) */
+#endif
 
 /* ================================================================
  * Small helpers
@@ -910,6 +912,17 @@ const struct cli_command_table *cli$$dcl_tables(void)
     return t;
 }
 
+#ifdef OVMX_LINK_CLI_ARGV
+/*
+ * OpenVMX/Alpha's host LINK.EXE (tools/cross-alpha-vms/selfhost/build-host-link.sh)
+ * compiles these routines into the image itself, at its own pointer size, and
+ * takes its command as the words the C RTL hands main(), which it parses with
+ * its own CLI$DCL_PARSE (src/vmslink/link_cli.c). It asks the CLI for nothing,
+ * so there is no CLI-recorded command to inherit: the CLI$ routines answer only
+ * from the image's own parse.
+ */
+static void cli_current(void) { }
+#else
 /* The command text an inherited context was parsed from. */
 static char g_inh_cmd[256];
 
@@ -959,6 +972,7 @@ static void cli_current(void)
         memcpy(g_inh_cmd, cmd, sizeof g_inh_cmd);
     }
 }
+#endif /* OVMX_LINK_CLI_ARGV */
 
 /* ================================================================
  * cli$present

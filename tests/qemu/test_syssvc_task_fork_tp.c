@@ -81,6 +81,20 @@ static inline void tp_write(unsigned long v)
 /* Fork a task through vms_kif_task_fork() with the thread pointer set to
  * `use` (Alpha; elsewhere `use` must be the current value) for the length of
  * the fork. Returns 1 and *got = the task's starting thread pointer, or 0. */
+#define EXIT_SKIP 77
+
+/* A process task is an executive object: with no /dev/vms this suite has
+ * nothing to prove and skips honestly (77), never a pass -- the kernel
+ * executive negative control runs every suite with vms.ko absent. */
+static int executive_present(void)
+{
+    int fd = vms_kif_open();
+    if (fd < 0)
+        return 0;
+    vms_kif_close();
+    return 1;
+}
+
 static int fork_and_report(unsigned long use, unsigned long *got)
 {
     int pfd[2];
@@ -127,6 +141,10 @@ int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("=== test_syssvc_task_fork_tp: a forked process task starts with its creator's live thread pointer (rd vms-8960) ===\n");
+    if (!executive_present()) {
+        printf("=== test_syssvc_task_fork_tp: SKIPPED (no /dev/vms) ===\n");
+        return EXIT_SKIP;
+    }
 
     unsigned long tp = tp_read(), got = 0;
     int ok = fork_and_report(tp, &got);

@@ -1,0 +1,28 @@
+# tt-output-turn-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the terminal class driver's output turn: bytes leave for the port in the order the driver framed them -- echo before the next prompt or write (vms_tt.c tt_flush/vms_tt_write, rd vms-ff73; keystroke oracle ERR.DCL E6)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tt_flush() takes the output turn before it drains obuf (\`tt->oown = 1;                /* this flush holds the turn */\`). The mutation drains without it, so while the receive path holds a line's echo between taking it and handing it over, the woken reader's write and next prompt go to the port first. test_kmod_tt holds every hand-off open with the test-only stall, so the echo-order case sees the prompt or OK ahead of the echo. Non-fatal: no buffer or reference changes hands differently. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+100 commands typed in two bursts, each output hand-off held open: every echo goes out whole, before the next prompt and the output (ERR.DCL E6)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "none: the other cases hand off with the stall disarmed, where nothing runs inside the window.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\t\ttt->oown = 1;                /\* this flush holds the turn \*/$|\t\t(void)0; /* NEGCTL tt-output-turn-ignored */|' "$_file"
+    :
+}

@@ -15,6 +15,7 @@ the read returns the type-ahead 'abc' and the RETURN terminator
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
+100 commands typed in two bursts, each output hand-off held open: every echo goes out whole, before the next prompt and the output (ERR.DCL E6)
 CTRL/C with no CTRL/C AST armed fires the CTRL/Y AST
 CTRL/O during a read is neither data nor shown, and does not end the read
 CTRL/O while output runs shows <LF>*OUTPUT OFF*<CR><LF> (the owed line feed first)

@@ -50,6 +50,33 @@
 #include "vms_tt.h"
 #include "vms_prot.h"
 
+#if defined(OVMX_KTEST_FAULT_INJECT)
+#include <linux/delay.h>
+#include <linux/preempt.h>
+#include <linux/irqflags.h>
+/*
+ * TEST-ONLY (rd vms-ff73): the hand-off stall the class driver calls between
+ * taking output bytes and handing them to the port (vms_tt.h). Compiled in
+ * ONLY for the QEMU-test vms.ko; the bootable executive has no such knob.
+ * test_kmod_tt writes a millisecond count to
+ * /sys/module/vms/parameters/vms_ktest_tt_handoff_stall_ms; 0 disarms. The
+ * stall sleeps, so other threads run in the window exactly as they would on
+ * a CPU the host preempted -- and is skipped in any atomic context.
+ */
+static unsigned int vms_ktest_tt_handoff_stall_ms;
+module_param(vms_ktest_tt_handoff_stall_ms, uint, 0600);
+MODULE_PARM_DESC(vms_ktest_tt_handoff_stall_ms,
+    "TEST-ONLY (rd vms-ff73): hold each terminal output hand-off this many ms; 0 disarms");
+
+void vms_tt_ktest_handoff_stall(void)
+{
+	unsigned int ms = READ_ONCE(vms_ktest_tt_handoff_stall_ms);
+
+	if (ms && !in_atomic() && !irqs_disabled())
+		msleep(ms);
+}
+#endif
+
 #define VMS_N_TT        N_DEVELOPMENT
 #define VMS_PORT_RING   8192
 

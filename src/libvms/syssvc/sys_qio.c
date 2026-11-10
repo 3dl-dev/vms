@@ -264,7 +264,10 @@ static uint32_t qio_sync(int fd, uint32_t base_func, void *iosb_ptr,
  */
 extern void vms$$deliver_pending_asts(void);
 
-#if defined(__linux__)
+/* NetBSD (the VAX substrate) has the same POSIX interval timers and realtime
+ * signals, so a $QIO mailbox read is asynchronous there too (rd vms-0a7 S3: a
+ * NETACP that queues its request read must not block in $QIO). */
+#if defined(__linux__) || defined(__NetBSD__)
 #define ASYNC_RD_MAX 16
 static struct async_rd {
     int      in_use;
@@ -282,7 +285,8 @@ static int async_timer_created;
 static int async_timer_armed;
 static int async_handler_set;
 
-static void async_rd_complete(struct async_rd *r, uint32_t st, uint32_t actlen)
+static void async_rd_complete(struct async_rd *r, uint32_t st, uint32_t actlen,
+                              uint32_t sender)
 {
     qio_iosb_t *iosb = r->iosb;
     void (*ast)(uint32_t) = r->astadr;
@@ -299,7 +303,10 @@ static void async_rd_complete(struct async_rd *r, uint32_t st, uint32_t actlen)
     if (iosb) {
         iosb->iosb$w_status = (uint16_t)st;
         iosb->iosb$w_bcnt = (actlen > 65535) ? 65535 : (uint16_t)actlen;
-        iosb->iosb$l_dev_depend = actlen;
+        /* A mailbox READ's second IOSB longword is the writer's PID, as the
+         * synchronous path gives it (qio_mailbox_op); 0 (no writer: $CANCEL) falls
+         * back to the length. */
+        iosb->iosb$l_dev_depend = sender ? sender : actlen;
     }
     if ((efn & 0xFFu) < 128)
         (void)sys$setef(efn);
@@ -340,7 +347,7 @@ static void async_rd_poll(int sig, siginfo_t *si, void *uc)
             pending = 1;
             continue;
         }
-        async_rd_complete(r, st, (st & 1) ? actlen : 0);
+        async_rd_complete(r, st, (st & 1) ? actlen : 0, sender);
     }
     if (!pending)
         async_timer_arm(0);
@@ -400,7 +407,7 @@ static uint32_t qio_mailbox_read_async(uint16_t chan, void *iosb_ptr, void *p1,
         uint32_t actlen = 0, sender = 0;
         uint32_t st = vms_kif_mbx_read_ex(r->exec_chan, p1, p2, &actlen, 1, &sender);
         if (st != SS$_ENDOFFILE || sender != 0) {
-            async_rd_complete(r, st, (st & 1) ? actlen : 0);
+            async_rd_complete(r, st, (st & 1) ? actlen : 0, sender);
             sigprocmask(SIG_SETMASK, &old, NULL);
             return SS$_NORMAL;
         }
@@ -426,7 +433,7 @@ void vms$$qio_cancel_chan(uint16_t chan)
         if (!r->in_use)
             continue;
         if (r->chan == chan)
-            async_rd_complete(r, SS$_ABORT, 0);
+            async_rd_complete(r, SS$_ABORT, 0, 0);
         else
             pending = 1;
     }
@@ -459,7 +466,8 @@ static struct async_rd {
     uint32_t astprm;
 } async_rd[ASYNC_RD_MAX];
 
-static void async_rd_complete(struct async_rd *r, uint32_t st, uint32_t actlen)
+static void async_rd_complete(struct async_rd *r, uint32_t st, uint32_t actlen,
+                              uint32_t sender)
 {
     qio_iosb_t *iosb = r->iosb;
     void (*ast)(uint32_t) = r->astadr;
@@ -472,7 +480,10 @@ static void async_rd_complete(struct async_rd *r, uint32_t st, uint32_t actlen)
     if (iosb) {
         iosb->iosb$w_status = (uint16_t)st;
         iosb->iosb$w_bcnt = (actlen > 65535) ? 65535 : (uint16_t)actlen;
-        iosb->iosb$l_dev_depend = actlen;
+        /* A mailbox READ's second IOSB longword is the writer's PID, as the
+         * synchronous path gives it (qio_mailbox_op); 0 (no writer: $CANCEL) falls
+         * back to the length. */
+        iosb->iosb$l_dev_depend = sender ? sender : actlen;
     }
     if ((efn & 0xFFu) < 128)
         (void)sys$setef(efn);
@@ -496,7 +507,7 @@ static void async_rd_poll(void)
             pending = 1;
             continue;
         }
-        async_rd_complete(r, st, (st & 1) ? actlen : 0);
+        async_rd_complete(r, st, (st & 1) ? actlen : 0, sender);
     }
     if (!pending)
         (void)ovmx$$vt_poll(NULL);
@@ -531,7 +542,7 @@ static uint32_t qio_mailbox_read_async(uint16_t chan, void *iosb_ptr, void *p1,
     uint32_t actlen = 0, sender = 0;
     uint32_t st = vms_kif_mbx_read_ex(r->exec_chan, p1, p2, &actlen, 1, &sender);
     if (st != SS$_ENDOFFILE || sender != 0)
-        async_rd_complete(r, st, (st & 1) ? actlen : 0);
+        async_rd_complete(r, st, (st & 1) ? actlen : 0, sender);
     else if (!ovmx$$vt_poll(async_rd_poll)) {
         r->in_use = 0;
         ovmx$$vt_restore(old);
@@ -550,7 +561,7 @@ void vms$$qio_cancel_chan(uint16_t chan)
         if (!r->in_use)
             continue;
         if (r->chan == chan)
-            async_rd_complete(r, SS$_ABORT, 0);
+            async_rd_complete(r, SS$_ABORT, 0, 0);
         else
             pending = 1;
     }
@@ -560,7 +571,7 @@ void vms$$qio_cancel_chan(uint16_t chan)
 }
 #else  /* no POSIX interval timers/rt signals here -- the read stays synchronous */
 void vms$$qio_cancel_chan(uint16_t chan) { (void)chan; }
-#endif /* __linux__ */
+#endif /* __linux__ || __NetBSD__ */
 
 /* $CANCEL support, io_uring half (vms-c8c): every request queued on the
  * channel's descriptor is cancelled in the kernel and completes with
@@ -1014,6 +1025,14 @@ static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                 /* The query sits at p1 (p3 bytes); the answer replaces it. */
                 st = (!p1 || p3 == 0 || p3 > p2) ? SS$_BADPARAM
                    : dnet_broker_control(&ns->bc, &io, p1, p3, p1, p2, &xfer);
+            } else if (op == DNET_BROKER_OP_OPEN && p3 != 0) {
+                /* IO$_ACCESS with p3 = the size of the p1 buffer (rd vms-0a7
+                 * S3, an OVMX extension, LABELLED): a network server ACCEPTING
+                 * its inbound link (the NCB its SYS$NET names) gets the network
+                 * job's information in place of the NCB -- the user and login
+                 * directory VMS's LOGINOUT would give the job. */
+                st = (!p1 || p3 < p2) ? SS$_BADPARAM
+                   : dnet_broker_xfer(&ns->bc, &io, op, p1, p2, p1, p3, &xfer);
             } else {
                 st = dnet_broker_xfer(&ns->bc, &io, op,
                                       (op == DNET_BROKER_OP_OPEN || op == DNET_BROKER_OP_SEND) ? p1 : NULL,
@@ -1720,7 +1739,7 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
 
     if (vms$$chan_is_mailbox(chan)) {
         uint32_t bf = func & IO$M_FCODE;
-#if defined(__linux__) || OVMX_HOST_ABSENT
+#if defined(__linux__) || defined(__NetBSD__) || OVMX_HOST_ABSENT
         if ((bf == IO$_READVBLK || bf == IO$_READLBLK || bf == IO$_READPBLK) &&
             !(func & IO$M_NOW) && p1)
             return qio_mailbox_read_async(chan, iosb_ptr, p1, p2, efn,

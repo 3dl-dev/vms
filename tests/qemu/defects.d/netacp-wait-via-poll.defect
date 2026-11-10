@@ -1,0 +1,27 @@
+# netacp-wait-via-poll -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the booted NETACP (NETACP.EXE) sleeps the VMS way -- \$SETIMR + \$WFLOR on its timer flag and its async \$QIO request read -- never a Linux poll() (decnetd.c netacp_wait_ms, rd vms-0a7 S3)";;
+        targets)      echo "vmsdecnet/engine/decnetd.c";;
+        suites_red)   echo "test_syssvc_decnetd_syscall_audit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "netacp_wait_ms waits with \`st = sys\$wflor(NETACP_EFN_TMR, mask);\`. The mutation sleeps in poll() on no descriptor for the same interval instead (the shape the pre-S3 loop's host wait had): NETACP still runs its loop, serves and exits 0 on SIGTERM, so only the wait assertion reddens. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+NO poll/ppoll/select/epoll wait on a host descriptor
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    st = sys\$wflor(NETACP_EFN_TMR, mask);$|    { struct pollfd pf = { -1, 0, 0 }; (void)poll(\&pf, 1, (int)ms); st = SS$_NORMAL; } /* NEGCTL netacp-wait-via-poll */|' "$_file"
+    :
+}

@@ -2,7 +2,8 @@
 # test_decnetd_startnet_gate.sh - the DECnet startup GATE + serve-default
 # decision SYS$MANAGER:STARTNET.COM relies on (rd vms-a70 direction B).
 #
-# STARTNET.COM starts the persistent NETACP daemon (SYS$SYSTEM:DECNETD.EXE)
+# STARTNET.COM starts the persistent NETACP daemon (SYS$SYSTEM:NETACP.EXE; this
+# runs the same netacp_run through the test image NETACP_TEST.EXE)
 # detached, with NO argv (VMS RUN passes an image no argv -- exactly as
 # TCPIP$STARTUP starts TCPIP$INETD, which reads its own service DB). Two daemon
 # behaviours make that work, and this test pins BOTH on the host (no CAP_NET_RAW,

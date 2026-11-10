@@ -1,0 +1,13 @@
+03:21:31 VAXC logged in
+03:21:42 VAXC licensed
+03:21:43 VAXC DECnet on
+03:22:06 OVMXA logged in
+03:22:06 sample P0 before
+03:22:22 P1 VAXC SET HOST OVMXA
+03:22:22 sample P1 at Username:
+03:22:23 P2 after wrong password: expect index 0
+03:22:23 sample P2 after wrong password
+03:22:33 P3 after right password: expect index 0 (0 = session ended)
+03:22:35 sample P3 after right password
+03:22:38 sample P4 end
+03:22:38 DONE

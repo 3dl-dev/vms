@@ -1,0 +1,3 @@
+# rd vms-0a7 S3: argv "--" flags still parsed by a shipped src/vmsdecnet image.
+# <file relative to src/vmsdecnet> <flag>. Only ever delete lines.
+# Empty: RTPAD.EXE took SET HOST (S2), so DECNETD.EXE parses no argv.

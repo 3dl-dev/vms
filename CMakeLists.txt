@@ -1466,7 +1466,8 @@ if(BUILD_TOOLS)
         vms_initialize       # INITIALIZE.EXE
         vms_sysgen           # SYSGEN.EXE
         vms_cnxtrace         # CNXTRACE.EXE
-        decnetd_exe          # DECNETD.EXE
+        decnetd_exe          # DECNETD.EXE (retired: exits SS$_UNSUPPORTED until S4 -- vms-0a7)
+        netacp_exe           # NETACP.EXE (rd vms-0a7 S3)
         fal_exe              # FAL.EXE
         rtpad_exe            # RTPAD.EXE
         mail_server_exe      # MAIL_SERVER.EXE

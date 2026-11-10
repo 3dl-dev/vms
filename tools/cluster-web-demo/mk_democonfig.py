@@ -597,9 +597,13 @@ def decnet_ncp_commands(name, roster=None):
     me = me[0]
     if not me.get("decnet"):
         raise ValueError("roster node %s has no DECnet address" % name)
-    cmds = ["SET EXECUTOR ADDRESS %s" % me["decnet"],
-            "SET EXECUTOR NAME %s" % me["name"],
-            "SET EXECUTOR STATE ON"]
+    # DEFINE, the PERMANENT database: this runs offline against a disk image,
+    # with no running system. SET EXECUTOR STATE ON would start the network
+    # now -- NCP $CREPRCs NETACP (rd vms-0a7 S3) -- which is the boot's job
+    # (STARTNET), not the image builder's.
+    cmds = ["DEFINE EXECUTOR ADDRESS %s" % me["decnet"],
+            "DEFINE EXECUTOR NAME %s" % me["name"],
+            "DEFINE EXECUTOR STATE ON"]
     for n in roster:
         if n is not me and n.get("decnet"):
             cmds.append("DEFINE NODE %s NAME %s" % (n["decnet"], n["name"]))

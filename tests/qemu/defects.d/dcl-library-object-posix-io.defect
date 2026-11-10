@@ -3,13 +3,13 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "DCL LIBRARY object-library I/O over the Files-11 ACP (src/vmsdcl/dcl_library.c olb_host_defer, vms-8ca)";;
+        facility)     echo "DCL LIBRARY object-library I/O over the Files-11 ACP through RMS (src/vmsdcl/dcl_library.c lbr_file_read, vms-8ca, vms-f8cd)";;
         targets)      echo "vmsdcl/dcl_library.c";;
         suites_red)   echo "test_syssvc_dcl_library_acp";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "LIBRARY's OBJECT path goes back to a POSIX fopen() of the translated path even with the executive present: objects written through RMS are %LIBRARIAN-E-OPENIN and no library reaches the volume.";;
+        why)          echo "LIBRARY reads its objects and libraries somewhere other than the volume RMS reaches (formerly a POSIX fopen() of the translated path; now the RMS \$OPEN in lbr_file_read is bypassed): objects written through RMS are %LIBRARIAN-E-OPENIN and no library reaches the volume.";;
         require_fail) cat <<'EOF2'
 LIBRARY opened both RMS-written objects (no OPENIN)
 the library is on the volume (read over the ACP) and is an ar container
@@ -25,6 +25,6 @@ EOF2
 }
 
 defect_apply() {
-        sed -i 's|^    return rms_executive_absent() \|\| vmsfs_device_spec_kernel_mounted(spec);$|    return 1; /* NEGCTL dcl-library-object-posix-io */|' "$_file"
+        sed -i 's|^    struct dcl_rms_bio \*b = dcl_rms_bio_open(ctx, spec, NULL, \&st);$|    struct dcl_rms_bio *b = NULL; st = RMS$_FNF; /* NEGCTL dcl-library-object-posix-io */|' "$_file"
     :
 }

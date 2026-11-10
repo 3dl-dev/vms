@@ -10,7 +10,6 @@ dcl_cmd_set.c 1
 dcl_cmd_show.c 7
 dcl_editor.c 2
 dcl_in.c 1
-dcl_library.c 9
 dcl_mbx.c 3
 dcl_memfile.c 7
 dcl_terminal.c 7

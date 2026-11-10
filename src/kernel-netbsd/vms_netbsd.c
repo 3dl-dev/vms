@@ -1041,10 +1041,15 @@ out_read:
 		kbuf = kmem_alloc(VMS_TT_BOUNCE_MAX, KM_SLEEP);
 		r = 0;
 		a->status = SS__NORMAL;
-		/* in slices: a write is not bounded by the line length */
-		while (done < total) {
+		/* in slices: a write is not bounded by the line length. At least
+		 * one pass: an EMPTY record (P2 = 0, P4 " ") is still a record --
+		 * its new line and carriage return are a blank line, as DCL's
+		 * blank output lines are on VAX V7.3 (the vax-show-cpu /
+		 * vax-show-process goldens). Skipping it dropped every blank line
+		 * DCL wrote on NetBSD (rd vms-1b6a). */
+		do {
 			k = total - done > VMS_TT_BOUNCE_MAX ? VMS_TT_BOUNCE_MAX : total - done;
-			if (copyin((void *)(uintptr_t)(ubuf + done), kbuf, k)) {
+			if (k && copyin((void *)(uintptr_t)(ubuf + done), kbuf, k)) {
 				r = -EFAULT;
 				break;
 			}
@@ -1054,7 +1059,7 @@ out_read:
 			if (r != 0 || !(a->status & 1))
 				break;
 			done += k;
-		}
+		} while (done < total);
 		a->buf = ubuf;
 		a->len = total;
 		kmem_free(kbuf, VMS_TT_BOUNCE_MAX);

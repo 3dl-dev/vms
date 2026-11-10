@@ -34,17 +34,21 @@ set_tests_properties(dcl-integration-sysdisk PROPERTIES
     RESOURCE_LOCK "sysdisk"
 )
 
-# Hermetic unit test for the hierarchical HELP engine (vms-01b). Compiles the
-# reader source directly and asserts the topic-tree navigation against library
-# data -- no DCL binary, no /vms, no on-disk library required.
+# Unit test for the hierarchical HELP engine (vms-01b). Compiles the engine
+# directly and asserts the topic-tree navigation against library data -- no DCL
+# binary. The engine reads library files only through RMS (dcl_help_acp.c,
+# libc-drop vms-3381), so the test links the RMS stack the images do.
 add_executable(test_help_engine
     test_help_engine.c
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_help.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_help_acp.c
 )
 target_include_directories(test_help_engine PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
     ${VMS_INCLUDE_DIR}
+    ${VMS_RMS_INCLUDE_DIR}
 )
+target_link_libraries(test_help_engine PRIVATE vms vmsrms vmsfs vmslnm vmsprocess pthread)
 target_compile_definitions(test_help_engine PRIVATE
     _POSIX_C_SOURCE=200809L
     _DEFAULT_SOURCE

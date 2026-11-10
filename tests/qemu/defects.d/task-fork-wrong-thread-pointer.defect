@@ -1,0 +1,39 @@
+# task-fork-wrong-thread-pointer -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process creation: the task vms_kif_task_fork() makes for \$CREPRC / LIB\$SPAWN (src/libvmssys/kif_transport_linux.c, rd vms-8960)";;
+        targets)      echo "libvmssys/kif_transport_linux.c";;
+        suites_red)   echo "test_syssvc_task_fork_tp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+The task a process service forks no longer starts with its creator's thread
+pointer: the x86_64 clone sets the new task's thread pointer (CLONE_SETTLS) to
+0 instead of inheriting it. This is the vms-8960 defect class -- on Alpha the
+task was handed a STALE thread pointer and died on its first errno store
+before it activated its image -- reproduced on the architecture this harness
+runs: everything the task touches through the thread pointer before exec
+faults, so the task never reports and the creator sees it die. The Alpha half
+(drop CLONE_SETTLS from the RDUNIQUE clone) is proven red by the suite under
+qemu-system-alpha (run-syssvc-tests-alpha.sh); this control is the x86_64 one.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+vms_kif_task_fork() created a task that reported and exited 0
+the task's thread pointer is the creator's
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        # The ONE edit: the x86_64 task fork hands the task thread pointer 0.
+        sed -i 's|return (int)vms_sys_clone(17, 0, 0, 0, 0);|return (int)vms_sys_clone(17 \| VMS_CLONE_SETTLS, 0, 0, 0, 0); /* NEGCTL task-fork-wrong-thread-pointer */|' "$_file"
+    :
+}

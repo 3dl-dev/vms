@@ -24,7 +24,26 @@ int kif_xport_task_fork(void)
     /* clone(SIGCHLD) with no shared state is fork(2): the child's exit signals
      * the creator (SIGCHLD is 20 on Alpha, 17 elsewhere). */
 #if defined(__alpha__)
-    return (int)vms_sys_clone(20, 0, 0, 0, 0);
+    /* rd vms-8960: on Alpha the new task is handed the creator's LIVE thread
+     * pointer (CLONE_SETTLS), never left to inheritance. The thread pointer is
+     * the PALcode UNIQUE value; Linux/Alpha's plain-fork copy_thread() gives the
+     * child the creator's in-memory HWPCB copy of it, and PALcode that caches
+     * UNIQUE and writes it back only at SWPCTX (qemu-palcode, the PALcode of the
+     * qemu-system-alpha machine OVMX boots on) leaves that copy holding the value
+     * live at the creator's LAST context switch. An image that set its thread
+     * pointer (DECC$SHR's C RTL start-up, after IMGACT's) and reached $CREPRC
+     * without being switched out since handed its task the STALE pre-DECC$SHR
+     * thread pointer, whose block is gone: the task's first errno store (the
+     * ENOENT of the image-path probe after $HIBER, sys_process.c) faulted with
+     * SIGSEGV before it activated the image, and the creator read SS$_ABORT.
+     * Observed as the JOINT_E2E $CREPRC task dying at DECC$SHR __syscall_ret
+     * (stl to RDUNIQUE-156) in ~2 of 5 driver-gate boots. The same defect, and
+     * the same fix, as musl's own fork on alpha-dec-vms (vms-fb4,
+     * tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork.c);
+     * RDUNIQUE answers from the PALcode's current value on every PALcode. */
+    register unsigned long tp __asm__("$0");
+    __asm__ __volatile__("call_pal 0x9e" : "=r"(tp));   /* RDUNIQUE */
+    return (int)vms_sys_clone(20 | VMS_CLONE_SETTLS, 0, 0, 0, tp);
 #else
     return (int)vms_sys_clone(17, 0, 0, 0, 0);
 #endif

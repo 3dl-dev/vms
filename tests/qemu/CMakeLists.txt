@@ -912,6 +912,19 @@ add_test(
 set_tests_properties(facility_negctl_total_death_check PROPERTIES LABELS "harness")
 
 # ---------------------------------------------------------------------------
+# THE TWO BOOT ARCHIVES (rd vms-802f). tests/qemu/pack_initramfs.sh packs the
+# staged tree into an executive archive (no /tests/corpus_rt) and a corpus
+# archive (no executive suites), each held to the budget. This packs a synthetic
+# tree and asserts each archive carries its whole set, the shared files are in
+# both, neither carries the other's set, and an over-budget pack fails by name.
+add_test(
+    NAME pack_initramfs_check
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/pack_initramfs_check.sh
+            ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(pack_initramfs_check PROPERTIES LABELS "harness")
+
+# ---------------------------------------------------------------------------
 # THE 0.2 DEMO, END TO END (vms-5dd, parent vms-2579).
 #
 # Boots the ACTUAL mastered bootable image (distro/Dockerfile.bootable),

@@ -177,6 +177,9 @@ TIERS = {
         # DECnet / NETACP (DECNETD, NCP, the NET: device) and its startup
         "src/vmsdecnet/**",
         "distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/STARTNET.COM",
+        # the NetBSD executive's own glue (its $QIO terminal write, rd vms-1b6a):
+        # this battery is the only runtime that drives DCL through it
+        "src/kernel-netbsd/**",
     ],
     # TCP/IP on a booted distro (ci-release-e2e tcpip-daytime-boot-e2e, rd
     # vms-d0c4): the inbound DAYTIME proof, the config-survives-reboot proof and

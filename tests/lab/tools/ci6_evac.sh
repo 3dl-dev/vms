@@ -35,6 +35,23 @@
 #    and master, the interim configuration), sees the shared VAX1DATA disk
 #    ($2$DUA1: on the VAXes) as VDA100:, and carries SYS$SYSTEM:EVACWL.EXE
 #    (tests/lab/ci6/mk_evacwl_native.sh). fire checks EVACWL.EXE.
+#
+# CLOCKS (rd vms-6731): C3 compares timestamps written by different nodes, and
+# each node's clock free-runs (OVMX is a TCG guest with no RTC sync or NTP,
+# the VAXes run under SIMH). Just before the workload, fire sets every node's
+# clock from the pod's the way an operator does, DCL SET TIME=<time> on each
+# console (lab-console.sh stamp computes <time> in the pod at the write), then
+# reads each back with F$TIME() into $CAP/clock.txt and aborts the run as a
+# SETUP FAULT if any node is off by more than CI6_CLOCK_TOL (0.30 s). The
+# probe repeats (PREEVAC) just before the STOP; the grader re-checks both.
+#
+# CI6_SHARED=1 fires on the vms-5fa bed instead (an ASYM_MSCP=1 pod, the
+# share subcommand's volume): $2$DUA<CI6_VAX_UNIT>: is VAX1's alone, so OVMX
+# and VAX2 reach it only through VAX1's MSCP server. STEP 0 mounts it /SYSTEM
+# on VAX1 and on OVMX's MSCP unit (as share's S1; CI6_INIT=1 INITIALIZEs it),
+# so there is no STEP 4 volume handoff. VAX1 is the volume's only server, so
+# OVMX's standby writes CI6_TAIL records and ends, OVMX dismounts, and VAX2
+# reads EVAC.DAT back over VAX1's MSCP server BEFORE VAX1 leaves (STEP 6).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 CI6=$HERE/../ci6
@@ -89,16 +106,20 @@ ctrl() {
 	sleep 2
 }
 # The console since this fire's begin marker (consoles are append-only).
+# since <node> [lines] [marker]: a later marker (e.g. CI6EVAC-S3, sent just
+# before a phase) scopes the read to that phase, so an earlier phase's lines
+# -- S2's legitimate OVMX EX grants -- never answer for it.
 since() {
 	[ "$DRY" = 1 ] && return 0
-	timeout 120 "$LC" read "$POD" "$1" "${2:-4000}" | tr -d '\r' | awk -v m="CI6EVAC-BEGIN $RUN" 'index($0,m){b=NR} {l[NR]=$0} END{for(i=b;i<=NR&&b;i++)print l[i]}'
+	timeout 120 "$LC" read "$POD" "$1" "${2:-4000}" | tr -d '\r' | awk -v m="${3:-CI6EVAC-BEGIN} $RUN" 'index($0,m){b=NR} {l[NR]=$0} END{for(i=b;i<=NR&&b;i++)print l[i]}'
 }
-# wait_for <node> <ERE> <seconds>: poll the windowed console for a line.
+# wait_for <node> <ERE> <seconds> [marker]: poll the windowed console for a
+# line, read from [marker] (default the fire's begin marker) on.
 wait_for() {
 	[ "$DRY" = 1 ] && { echo "WAIT $1: /$2/"; return 0; }
 	local i
 	for i in $(seq 0 10 "$3"); do
-		since "$1" | grep -qE -- "$2" && return 0
+		since "$1" 4000 "${4:-CI6EVAC-BEGIN}" | grep -qE -- "$2" && return 0
 		sleep 10
 	done
 	return 1
@@ -122,6 +143,39 @@ stage_mar() {
 	send "$n" "$m :== \$SYS\$LOGIN:$m.EXE"
 	send "$n" "DIRECTORY/SIZE SYS\$LOGIN:$m.EXE"
 	[ "$DRY" = 1 ] || since "$n" | grep -q "$m.EXE;" || die "$m did not build on $n"
+}
+
+# ---- node clocks (rd vms-6731) ---------------------------------------------
+CLK=$CAP/clock.txt
+# clock_probe <console> <NODE> <TAG>: F$TIME() on the node, timed by the pod's
+# clock; one clock.txt line. Echoes the probe's DT (hundredths) for a lead.
+clock_probe() {
+	local out
+	if [ "$DRY" = 1 ]; then echo "STAMP $1: CI6CLK $3 $2 F\$TIME()" >&2; echo 0; return 0; fi
+	out=$(timeout 90 "$LC" stamp "$POD" "$1" 0 "CI6CLK $3 $2 +[ 0-9]?[0-9]-[A-Z]{3}-[0-9]{4} " \
+		"WRITE SYS\$OUTPUT \"CI6CLK $3 $2 \",F\$TIME()")
+	echo "$3 $2 ${out:-WRITE - SEEN - DT - LINE -}" >> "$CLK"
+	tl "CLOCK $3 $2 ${out:-no read-back}" >&2
+	set -- $out
+	case "${6:-}" in ''|*[!0-9]*) echo 0;; *) echo "$6";; esac
+}
+# align_clocks: SET TIME on every node from the pod clock, then gate on the
+# read-back. The SET TIME line carries the pod time plus the node's console
+# delay as measured by its PRE probe, so the time is right when DCL runs it.
+align_clocks() {
+	local n N lead
+	for n in vax1 vax2 "$OCON"; do
+		N=$(echo "$n" | tr a-z A-Z)
+		lead=$(clock_probe "$n" "$N" PRE)
+		if [ "$DRY" = 1 ]; then echo "STAMP $n: SET TIME=%NOW%"
+		else timeout 90 "$LC" stamp "$POD" "$n" "$lead" - 'SET TIME=%NOW%' >/dev/null || die "lab-console stamp to $n failed"
+			sleep 3
+		fi
+		clock_probe "$n" "$N" ALIGN >/dev/null
+	done
+	[ "$DRY" = 1 ] && return 0
+	python3 -I "$HERE/ci6_evac_grade.py" --clock "$CAP" | tee -a "$TL"
+	[ "${PIPESTATUS[0]}" = 0 ] || die "SETUP FAULT: node clocks not aligned (clock.txt); C3 would compare misaligned clocks"
 }
 
 # ovmx_mscp_dev <vax-unit>: the OVMX name of a unit VAX1 serves. FC-P7.1 names
@@ -212,6 +266,7 @@ if [ "$MODE" = share ]; then
 	# ---- S3: evacuation: VAX1 runs it, OVMX stands by, VAX1's copy is stopped --
 	tl "S3 VAX1 EVACWL (EX, forever); $OVMX EVACWL STANDBY $TAIL queued"
 	send vax1 'SPAWN/NOWAIT/PROCESS=EVACVAX1/OUTPUT=SYS$LOGIN:VAX1WL.LOG EVACWL' 10
+	send "$OCON" "! CI6EVAC-S3 $RUN" 2	# S2's OVMX EX grants precede this
 	send "$OCON" 'CREATE SYS$LOGIN:OVSTBY.COM' 2
 	send "$OCON" '$ EVACWL :== $SYS$SYSTEM:EVACWL.EXE' 1
 	send "$OCON" "\$ EVACWL STANDBY NL=5 $TAIL" 1
@@ -219,11 +274,11 @@ if [ "$MODE" = share ]; then
 	send "$OCON" 'SPAWN/NOWAIT @SYS$LOGIN:OVSTBY.COM' 5
 	wait_for "$OCON" 'standby holds EVAC\$WORKLOAD NL' 60 || die "$OVMX standby never took NL"
 	[ "$DRY" = 1 ] || sleep 30
-	since "$OCON" | grep -q 'took EVAC\$WORKLOAD EX' && die "$OVMX took EX while VAX1 ran"
+	since "$OCON" 4000 CI6EVAC-S3 | grep -q 'took EVAC\$WORKLOAD EX' && die "$OVMX took EX while VAX1 ran"
 	tl "S3 EVACUATE: STOP EVACVAX1 on VAX1"
 	send vax1 'STOP EVACVAX1' 5
-	wait_for "$OCON" "EVACWL: $OVMX took EVAC\\\$WORKLOAD EX at seq" 180 || die "$OVMX standby was not granted EX"
-	tl "TAKEOVER: $(since "$OCON" | grep -ao "EVACWL: $OVMX took.*" | tail -1)"
+	wait_for "$OCON" "EVACWL: $OVMX took EVAC\\\$WORKLOAD EX at seq" 180 CI6EVAC-S3 || die "$OVMX standby was not granted EX"
+	tl "TAKEOVER: $(since "$OCON" 4000 CI6EVAC-S3 | grep -ao "EVACWL: $OVMX took.*" | tail -1)"
 	[ "$DRY" = 1 ] || sleep $((TAIL * 2 + 20))
 
 	# ---- S4: OVMX leaves the volume; VAX1 reads it back and checks it ----------
@@ -242,7 +297,14 @@ if [ "$MODE" = share ]; then
 	exit "${PIPESTATUS[0]}"
 fi
 
-tl "T0 $RUN on pod $POD; OVMX node $OVMX; data directory [$DIR]; capture $CAP"
+SHARED=${CI6_SHARED:-0}
+if [ "$SHARED" = 1 ]; then
+	LABEL=${CI6_LABEL:-EVAC1E58}; VUNIT=${CI6_VAX_UNIT:-2}; VDEV="\$2\$DUA$VUNIT:"
+	TAIL=${CI6_TAIL:-60}; NLARG="NL=90 $TAIL"
+else
+	LABEL=VAX1DATA; VDEV='$2$DUA1:'; NLARG=NL=90
+fi
+tl "T0 $RUN on pod $POD; OVMX node $OVMX; data directory [$DIR]; volume $LABEL = VAX1 $VDEV (shared=$SHARED); capture $CAP"
 for n in vax1 vax2 "$OCON"; do send "$n" "! CI6EVAC-BEGIN $RUN" 2; done
 
 # ---- preconditions ----------------------------------------------------------
@@ -289,6 +351,23 @@ fi
 tl "STAGED EVACWL.EXE on VAX1, EVPROBE.EXE on VAX2"
 
 # ---- STEP 0: the shared volume, cluster-mounted from VAX1 ---------------------
+if [ "$SHARED" = 1 ]; then
+	tl "STEP 0 VAX1: MOUNT/SYSTEM $VDEV $LABEL; $OVMX: MOUNT/SYSTEM its MSCP unit; [$DIR]"
+	[ "${CI6_INIT:-0}" = 1 ] && send vax1 "INITIALIZE $VDEV $LABEL" 30
+	send vax1 "MOUNT/SYSTEM $VDEV $LABEL" 20
+	wait_for vax1 "MOUNT-I-MOUNTED, $LABEL mounted" 60 || die "VAX1 could not mount $VDEV"
+	send vax1 "CREATE/DIRECTORY $VDEV[$DIR]" 5
+	send vax1 "DEFINE/SYSTEM EVAC\$DATA $VDEV[$DIR]"
+	send "$OCON" 'SHOW DEVICE D' 8	# vms-582: a prefix matches past the VAX1$ node prefix
+	if [ "$DRY" = 1 ]; then ODEV=${CI6_OVMX_DEV:-VAX1\$DUA16386:}
+	elif [ -z "${CI6_OVMX_DEV:-}" ]; then ODEV=$(ovmx_mscp_dev "$VUNIT"); fi
+	[ -n "$ODEV" ] && [ "$ODEV" != VDA100: ] || die "$OVMX lists no MSCP unit for VAX1 unit $VUNIT"
+	send "$OCON" "MOUNT/SYSTEM $ODEV $LABEL" 20
+	wait_for "$OCON" "MOUNT-I-MOUNTED, $LABEL mounted" 120 || die "$OVMX could not mount $ODEV"
+	send "$OCON" "DEFINE/SYSTEM EVAC\$DATA $ODEV[$DIR]"
+	send vax1 "SHOW DEVICE $VDEV" 5
+	tl "STEP 0 $LABEL mounted on VAX1 ($VDEV) and $OVMX ($ODEV)"
+else
 tl "STEP 0 VAX1: DISMOUNT/CLUSTER, MOUNT/CLUSTER \$2\$DUA1: VAX1DATA; [$DIR]"
 send vax1 'DISMOUNT/CLUSTER $2$DUA1:' 30
 send vax1 'MOUNT/CLUSTER $2$DUA1: VAX1DATA' 40
@@ -296,12 +375,17 @@ send vax1 "CREATE/DIRECTORY \$2\$DUA1:[$DIR]" 5
 send vax1 "DEFINE/SYSTEM EVAC\$DATA \$2\$DUA1:[$DIR]"
 send "$OCON" "DEFINE/SYSTEM EVAC\$DATA $ODEV[$DIR]"
 send vax1 'SHOW DEVICE $2$DUA1:' 5
+fi
+
+# ---- CLOCKS: every node's clock set from the pod's, just before the workload --
+tl "CLOCKS SET TIME on VAX1, VAX2, $OVMX from the pod clock; tolerance ${CI6_CLOCK_TOL:-0.30} s"
+align_clocks
 
 # ---- STEP 1: OVMX standby takes NL first (directory + master), converts at 90 s
-tl "STEP 1 $OVMX: EVACWL STANDBY NL=90 (spawned)"
+tl "STEP 1 $OVMX: EVACWL STANDBY $NLARG (spawned)"
 send "$OCON" 'CREATE SYS$LOGIN:OVSTBY.COM' 2
 send "$OCON" '$ EVACWL :== $SYS$SYSTEM:EVACWL.EXE' 1
-send "$OCON" '$ EVACWL STANDBY NL=90' 1
+send "$OCON" "\$ EVACWL STANDBY $NLARG" 1
 ctrl "$OCON" Z
 send "$OCON" 'SPAWN/NOWAIT @SYS$LOGIN:OVSTBY.COM' 5
 wait_for "$OCON" 'standby holds EVAC\$WORKLOAD NL' 60 || die "$OVMX standby never took NL"
@@ -312,12 +396,17 @@ send vax1 'SPAWN/NOWAIT/PROCESS=EVACVAX1/OUTPUT=SYS$LOGIN:VAX1WL.LOG EVACWL' 5
 [ "$DRY" = 1 ] || sleep 120           # past the standby's 90 s NL hold: its CONVERT queues
 since "$OCON" | grep -q 'took EVAC\$WORKLOAD EX' && die "$OVMX took EX while VAX1 ran"
 send vax1 'SHOW SYSTEM' 5
-send vax1 "DIRECTORY/SIZE=ALL \$2\$DUA1:[$DIR]EVAC.DAT" 5
+send vax1 "DIRECTORY/SIZE=ALL $VDEV[$DIR]EVAC.DAT" 5
 tl "SNAPSHOT VAX1 workload running, $OVMX standby converting behind it"
 
 # ---- STEP 3: evacuate -----------------------------------------------------------
+for n in vax1 vax2 "$OCON"; do clock_probe "$n" "$(echo "$n" | tr a-z A-Z)" PREEVAC >/dev/null; done
 tl "STEP 3 EVACUATE: STOP EVACVAX1 on VAX1"
 send vax1 'STOP EVACVAX1' 5
+if [ "$SHARED" = 1 ]; then	# the volume is already OVMX's too: no handoff
+	wait_for "$OCON" "EVACWL: $OVMX took EVAC\\\$WORKLOAD EX at seq" 180 || die "$OVMX standby was not granted EX"
+	tl "TAKEOVER: $(since "$OCON" | grep -ao "EVACWL: $OVMX took.*" | tail -1)"
+else
 wait_for "$OCON" 'holding EVAC\$WORKLOAD, waiting for' 180 || die "$OVMX standby was not granted EX"
 tl "STEP 3 result: $OVMX standby granted EX"
 
@@ -328,12 +417,26 @@ send vax1 'SHOW DEVICE $2$DUA1:' 5
 send "$OCON" "MOUNT $ODEV VAX1DATA" 10
 wait_for "$OCON" "EVACWL: $OVMX took EVAC\\\$WORKLOAD EX at seq" 180 || die "$OVMX never continued the workload"
 tl "TAKEOVER: $(since "$OCON" | grep -ao "EVACWL: $OVMX took.*" | tail -1)"
+fi
 
 # ---- STEP 5: the exclusion probe, while OVMX holds EX -----------------------------
 [ "$DRY" = 1 ] || sleep 20
 tl "STEP 5 VAX2: EVPROBE (\$ENQW EX NOQUEUE EVAC\$WORKLOAD)"
 send vax2 'EVPROBE' 10
 tl "PROBE: $(since vax2 | grep -ao 'EVPROBE: .*' | tail -1)"
+
+# ---- STEP 5a (shared): VAX1 is the volume's only server, so the seam is read
+# back over its MSCP server before it leaves: OVMX's TAIL ends, OVMX dismounts,
+# VAX2 mounts and types EVAC.DAT.
+if [ "$SHARED" = 1 ]; then
+	[ "$DRY" = 1 ] || sleep $((TAIL * 2 + 20))
+	tl "STEP 5a $OVMX: DISMOUNT $ODEV; VAX2: MOUNT/SYSTEM $VDEV, TYPE EVAC.DAT, DISMOUNT"
+	send "$OCON" "DISMOUNT $ODEV" 15
+	wait_for "$OCON" 'DISMOUNT-I-DISMOUNTED' 90 || die "$OVMX could not dismount $ODEV -- no coherent read-back"
+	send vax2 "MOUNT/SYSTEM $VDEV $LABEL" 20
+	send vax2 "TYPE $VDEV[$DIR]EVAC.DAT" 30
+	send vax2 "DISMOUNT $VDEV" 10
+fi
 
 # ---- STEP 6: VAX1 leaves the cluster ----------------------------------------------
 tl "STEP 6 VAX1: SHUTDOWN, REMOVE_NODE"
@@ -346,6 +449,7 @@ send vax2 'SHOW CLUSTER' 10
 tl "STEP 6 result: VAX1 removed"
 
 # ---- STEP 7: end of workload; read the seam back on real VMS --------------------
+if [ "$SHARED" != 1 ]; then	# shared: read back in STEP 5a; STEP 6 read Q/V last
 [ "$DRY" = 1 ] || sleep 60
 tl "STEP 7 $OVMX: STOP SYSTEM_1 (EVACWL), DISMOUNT $ODEV"
 send "$OCON" 'STOP SYSTEM_1' 5
@@ -361,6 +465,7 @@ send vax2 'MOUNT $2$DUA1: VAX1DATA' 20
 send vax2 "TYPE \$2\$DUA1:[$DIR]EVAC.DAT" 30
 send vax2 'DISMOUNT $2$DUA1:' 10
 send vax2 'WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")' 5
+fi
 tl "END"
 
 # ---- collect + grade ---------------------------------------------------------------

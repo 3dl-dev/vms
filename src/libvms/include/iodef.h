@@ -149,6 +149,14 @@ extern "C" {
  */
 #define TCPIP$C_SOCKOPT     0x4f01  /* OVMX value: P4 list type "socket options" */
 #define TCPIP$C_RCVTIMEO    0x4f02  /* OVMX value: receive timeout (timeval)   */
+/* vms-99f: the same item-list shape carries the integer options the C RTL's
+ * setsockopt()/getsockopt() pass. The LIST type names the option level; each
+ * entry's type is the option name and its address an int (length 4). The
+ * SOL_SOCKET level is TCPIP$C_SOCKOPT itself (TCPIP$C_RCVTIMEO is its one
+ * non-integer entry). IO$_SENSEMODE takes the same P4 list and fills each
+ * entry's int (getsockopt). OVMX values, labelled like the two above. */
+#define TCPIP$C_TCPOPT      0x4f03  /* OVMX value: P4 list type "TCP options" (IPPROTO_TCP) */
+#define TCPIP$C_IPOPT       0x4f04  /* OVMX value: P4 list type "IP options"  (IPPROTO_IP)  */
 
 struct tcpip_item_list_2 {          /* item_list_2: length, type, address */
     unsigned short  length;
@@ -160,6 +168,26 @@ struct tcpip_timeval32 {            /* the RCVTIMEO value: two 32-bit fields */
     int tv_sec;
     int tv_usec;
 };
+
+/*
+ * BGn: IO$_SENSEMODE subfunction selector, passed in P3 (rd vms-99f). OVMX
+ * DESIGN CHOICE (Rule 8), labelled as such like IO$K_SOCK_* above: the public
+ * TCP/IP Services docs describe these as IO$_SENSEMODE requests on the
+ * socket's channel but publish no byte layout we copy.
+ *   IO$K_BG_SENSE_IFLIST  P1 = struct vms_bg_ifent[], P2 = its size in bytes;
+ *                         the IOSB count is the number of interfaces.
+ *   IO$K_BG_SENSE_READY   P1 = struct vms_bg_selent[], P2 = entry count,
+ *                         P4 = timeout in ms (0 = sense only, -1 = no limit);
+ *                         the IOSB count is the number of ready channels.
+ *   IO$K_BG_SENSE_LOCAL / IO$K_BG_SENSE_PEER
+ *                         P1 = the 8-byte family/port/address block out.
+ * With P3 = 0, IO$_SENSEMODE's P4 is a socket-option list (TCPIP$C_SOCKOPT /
+ * TCPIP$C_TCPOPT / TCPIP$C_IPOPT above) whose entries it fills (getsockopt).
+ */
+#define IO$K_BG_SENSE_IFLIST   1
+#define IO$K_BG_SENSE_READY    2
+#define IO$K_BG_SENSE_LOCAL    3
+#define IO$K_BG_SENSE_PEER     4
 
 /*
  * TERMINAL (TTn:/RTAn:/OPA0:) IO$_SETMODE line-discipline selector, passed in P2

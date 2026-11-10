@@ -620,11 +620,29 @@ int dcl_merge_relative_dir(const char *defdir, const char *spec,
     return 0;
 }
 
+/* Does the spec name a node ("::" outside a quoted access string)? */
+static int spec_names_node(const char *s)
+{
+    int q = 0;
+    for (; *s; s++) {
+        if (*s == '"') { q = !q; continue; }
+        if (!q && s[0] == ':' && s[1] == ':') return 1;
+    }
+    return 0;
+}
+
 int dcl_rms_effective_spec(struct dcl_context *ctx, const char *spec,
                            char *out, size_t outsz)
 {
     if (!ctx || !spec || !out || outsz == 0)
         return -1;
+
+    /* A node:: spec is the remote node's to default (rd vms-0a7): RMS hands
+     * it to the node's FAL as given, never under this process's directory. */
+    if (spec_names_node(spec)) {
+        snprintf(out, outsz, "%s", spec);
+        return 0;
+    }
 
     if (spec[0] == '/' || (spec[0] == '.' && (spec[1] == '/' || spec[1] == '.'))) {
         strncpy(out, spec, outsz - 1);
@@ -824,6 +842,48 @@ static struct dcl_rms_writer *rms_write_open(struct dcl_context *ctx, const char
 
     w->rab = cc$rms_rab;
     w->rab.rab$l_fab = &w->fab;
+    st = sys$connect(&w->rab, 0, 0);
+    if (st != RMS$_NORMAL) {
+        if (rms_status) *rms_status = st;
+        sys$close(&w->fab, 0, 0); free(w); return NULL;
+    }
+    w->connected = 1;
+    if (rms_status) *rms_status = RMS$_NORMAL;
+    return w;
+}
+
+/* OPEN/APPEND: the file's end is where the next $PUT lands (RAB$M_EOF); a file
+ * that does not exist yet is created, as VMS does. The record format is the
+ * existing file's own (read from its header), like dcl_rms_read_open. */
+struct dcl_rms_writer *dcl_rms_write_append(struct dcl_context *ctx, const char *spec,
+                                            uint32_t *rms_status)
+{
+    struct dcl_rms_writer *w = calloc(1, sizeof(*w));
+    struct rms_fileattr fa;
+    uint32_t st;
+    if (!w) { if (rms_status) *rms_status = RMS$_DME; return NULL; }
+    if (dcl_rms_effective_spec(ctx, spec, w->spec, sizeof(w->spec)) != 0) {
+        if (rms_status) *rms_status = RMS$_SYN;
+        free(w); return NULL;
+    }
+    if (rms_file_attr(w->spec, &fa) != RMS$_NORMAL) {
+        free(w);                               /* not there: create it */
+        return rms_write_open(ctx, spec, FAB$C_VAR, FAB$M_CR, 0, 0, rms_status);
+    }
+    w->fab = cc$rms_fab;
+    w->fab.fab$l_fna = w->spec;
+    w->fab.fab$b_fns = (uint8_t)strlen(w->spec);
+    w->fab.fab$b_org = FAB$C_SEQ;
+    if (fa.rfm >= FAB$C_FIX && fa.rfm <= FAB$C_STMCR) {
+        w->fab.fab$b_rfm = fa.rfm;
+        if (fa.mrs) w->fab.fab$w_mrs = fa.mrs;
+    }
+    w->fab.fab$b_fac = FAB$M_PUT;
+    st = sys$open(&w->fab, 0, 0);
+    if (!(st & 1)) { if (rms_status) *rms_status = st; free(w); return NULL; }
+    w->rab = cc$rms_rab;
+    w->rab.rab$l_fab = &w->fab;
+    w->rab.rab$l_rop |= RAB$M_EOF;
     st = sys$connect(&w->rab, 0, 0);
     if (st != RMS$_NORMAL) {
         if (rms_status) *rms_status = st;

@@ -84,10 +84,11 @@ This is the part that is genuinely OVMX and is the true work of the port:
   **fail-closed** (`_exit(1)` on failure). This is the LOGINOUT-equivalent drop
   and it **closes `vms-49e`** (the "runs everyone as root" bug) and effectively
   resolves the security concern behind `vms-475`.
-- **LOGINOUT → DCL** — `execl(DCL.EXE, "vmsdcl", "--login", "--lgicmd", <LGICMD>)`
-  (`vmssshd.c` ~`:585`), honoring the account's SYSUAF LGICMD (or
-  `SYS$LOGIN:LOGIN.COM`), with `SYS$LOGIN`/`SYS$LOGIN_DEVICE` established as real
-  `LNM$JOB` logicals by DCL's `--login` path (vms-e48).
+- **LOGINOUT → DCL** — LOGINOUT stores the login data (login, UAF flags, the
+  account's SYSUAF LGICMD or `SYS$LOGIN:LOGIN.COM`) in the executive
+  (`vms_kif_lgi`, rd vms-838b) and execs `DCL.EXE` with no arguments; DCL reads it
+  and establishes `SYS$LOGIN`/`SYS$LOGIN_DEVICE` as real `LNM$JOB` logicals on its
+  login path (vms-e48).
 - **Banner + accounting** — `ovmx_banner_welcome()`, `ovmx_accounting_get_lastlogin`
   / `record_login` (last-interactive-login line).
 - **`term_map.c`** — `vmsssh_map_term_to_device_type()` maps the SSH `TERM` to an
@@ -143,7 +144,7 @@ is exactly how the VSI/HP OpenVMS port was built (GNV; §4). The port replaces
 - **Session launch → OVMX LOGINOUT.** OpenSSH's `session.c` `do_exec_pty()` /
   `do_child()` (the "become the user and exec the shell" hook) is replaced with the
   OVMX sequence: `vms_kif_setident()` → PCB init → banner/accounting →
-  `ovmx_cred_drop_to_uic()` (fail-closed) → `execl(DCL.EXE, --login --lgicmd ...)`.
+  `ovmx_cred_drop_to_uic()` (fail-closed) → `execl(DCL.EXE)` (login data in the executive, vms-838b).
   This is the *same* code the current daemon runs; it moves from libssh's callback
   into OpenSSH's session hook. **Keep `cred_drop.c` and the LOGINOUT block
   verbatim** — they are already unit-tested and carry the vms-49e fix.

@@ -94,6 +94,7 @@
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 #include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
 #include <sys/callout.h>   /* struct callout (exec_timer_t, SS16 -- FC-P0.1) */
+#include <sys/cpu.h>       /* cpu_intr_p (vms-896d: hold an oper line only from thread context) */
 #include <sys/intr.h>      /* IPL_NET (exec_rxlock_t's EXEC_LAN_RX_IPL, FC-P0.16) */
 
 /* ---- primitive types ---- */
@@ -409,6 +410,28 @@ static __inline uint32_t
 exec_current_gid(void)
 {
 	return (uint32_t)kauth_cred_getgid(kauth_cred_get());
+}
+
+/* rd vms-416d: the CURRENT process's id. */
+static __inline uint32_t
+exec_current_pid(void)
+{
+	return (uint32_t)curlwp->l_proc->p_pid;
+}
+
+/* rd vms-416d: nonzero iff process `pid` exists and has not exited. proc_find
+ * (under proc_lock, which it asserts) returns only SACTIVE/SSTOP processes, so
+ * a zombie or a dying process is not running -- the twin of Linux's
+ * exit_state test. Takes proc_lock: never call it holding an exec_lock. */
+static __inline int
+exec_pid_running(uint32_t pid)
+{
+	int running;
+
+	mutex_enter(&proc_lock);
+	running = proc_find((pid_t)pid) != NULL;
+	mutex_exit(&proc_lock);
+	return running;
 }
 
 static __inline int
@@ -1001,6 +1024,7 @@ void exec_socket_release(exec_socket_t s);
 int  exec_socket_connect(exec_socket_t s, uint16_t family, uint16_t port_be, uint32_t addr_be);
 long exec_socket_send(exec_socket_t s, const void *buf, size_t len);
 long exec_socket_recv(exec_socket_t s, void *buf, size_t len);
+long exec_socket_recv_now(exec_socket_t s, void *buf, size_t len);
 int  exec_socket_shutdown(exec_socket_t s);
 int  exec_socket_getname(exec_socket_t s, int peer, uint16_t *family, uint16_t *port_be, uint32_t *addr_be);
 int  exec_socket_setopt_int(exec_socket_t s, int level, int name, int val);
@@ -1013,6 +1037,13 @@ int  exec_socket_set_rcvtimeo(exec_socket_t s, uint32_t timeout_ms);  /* vms-a9e
 int  exec_socket_bind(exec_socket_t s, uint16_t family, uint16_t port_be, uint32_t addr_be);
 int  exec_socket_listen(exec_socket_t s, int backlog);
 int  exec_socket_accept(exec_socket_t s, exec_socket_t *out);
+/* Interface list (rd vms-99f): the stack's interfaces, read live (contract-only
+ * twin -- IFNET_READER_FOREACH / IFADDR_READER_FOREACH, vms_socket_netbsd.c). */
+struct exec_ifent;
+int  exec_socket_iflist(exec_socket_t s, struct exec_ifent *ent, uint32_t max, uint32_t *count);
+/* Readiness wait (rd vms-99f): soreadable/sowritable re-sensed on a kpause tick. */
+int  exec_socket_wait_ready(exec_socket_t *s, uint32_t n, const uint32_t *want,
+                            uint32_t *got, long timeout_ms);
 
 /* ================================================================
  * SS13  Host raw datalink (vms-7eb, auth slice of vms-1e4) -- REAL on NetBSD
@@ -1127,7 +1158,18 @@ void exec_wait_ms(uint32_t ms);
  * the patch's "operator line" flag, so it still reaches the console. On a
  * kernel without the patch TOCONSOP is an unknown bit that kprintf ignores,
  * and this degrades to an ordinary console printf. __printflike keeps the
- * compiler checking every call site, the reason this used to be a macro. */
+ * compiler checking every call site, the reason this used to be a macro.
+ *
+ * rd vms-896d: once OPA0:'s class driver is bound, the console line goes
+ * THROUGH it (vms_tt_oper_line, src/kernel-core/vms_tt_oper.h), not around it.
+ * Written straight to the console, it landed between two pieces of a write
+ * request still going out on OPA0: -- OPCOM's operator-status message -- and
+ * the rest of that record was glued to the end of it ("system OVMXBER10,").
+ * The class driver holds it until the write request ends and writes it on a
+ * line of its own, CR LF after it, as VMS's terminal driver does. The direct
+ * write below stays for what the class driver cannot take: boot, before
+ * OPA0: is bound, and a hardware-interrupt caller (its lock is adaptive). */
+int vms_tt_oper_line(const char *line);      /* src/kernel-core/vms_tt.c */
 #include <sys/kprintf.h>   /* TOCONS, TOLOG, NOTSTAMP */
 #include "vms_cluster_opa0.h"
 #ifndef TOCONSOP
@@ -1164,6 +1206,8 @@ exec_console_printf(const char *fmt, ...)
 	n = strlen(line);
 	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
 		line[--n] = '\0';
+	if (!cpu_intr_p() && vms_tt_oper_line(line))
+		return;
 	exec_console_opa0_put("\n%s", line);
 }
 

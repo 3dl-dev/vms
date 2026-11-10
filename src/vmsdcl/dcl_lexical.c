@@ -5,6 +5,7 @@
  * about strings, times, files, processes, and the environment.
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,16 +67,21 @@ extern int dcl_format_directory(const char *linux_path, char *vms_dir, size_t di
 /*
  * Format current time in VMS format: DD-MMM-YYYY HH:MM:SS.CC
  */
-static void format_vms_time(char *buf, size_t bufsize)
+static uint32_t format_vms_time(char *buf, size_t bufsize)
 {
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    uint32_t st = dcl_system_time(&ts);   /* SYS$GETTIM: the executive's (rd vms-642) */
+    if (!(st & 1)) {
+        buf[0] = '\0';
+        return st;
+    }
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
     int centisec = (int)(ts.tv_nsec / 10000000);
     snprintf(buf, bufsize, "%2d-%s-%04d %02d:%02d:%02d.%02d",
              tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
              tm.tm_hour, tm.tm_min, tm.tm_sec, centisec);
+    return st;
 }
 
 /*
@@ -184,9 +190,11 @@ static void lex_put(char *result, size_t rs, const char *src, size_t n)
 static int lex_time(struct dcl_context *ctx, const char *args,
                     char *result, size_t result_size)
 {
-    (void)ctx;
     (void)args;
-    format_vms_time(result, result_size);
+    /* F$TIME is the system time: SYS$GETTIM, which SET TIME changes (rd vms-642). */
+    uint32_t st = format_vms_time(result, result_size);
+    if (!(st & 1))
+        return lex_fail(ctx, st, result);
     return 0;
 }
 
@@ -1348,7 +1356,7 @@ static int lex_getsyi(struct dcl_context *ctx, const char *args,
         (void)sysgen_read_param(s, &v);
         snprintf(result, result_size, "%u", v);
     } else if (strcmp(s, "BOOTTIME") == 0) {
-        format_vms_time(result, result_size);
+        (void)format_vms_time(result, result_size);
     } else {
         strncpy(result, "0", result_size - 1);
     }
@@ -3439,7 +3447,7 @@ int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,
      */
     dcl_error("DCL", 0, "IVFNAM",
               "invalid lexical function name - check validity and spelling");
-    fprintf(stderr, " \\%s(\\\n", func_name);
+    dcl_err_printf(" \\%s(\\\n", func_name);
     result[0] = '\0';
     if (ctx) ctx->last_status = 0x000381C0;   /* CLI-W-IVFNAM */
     return -1;

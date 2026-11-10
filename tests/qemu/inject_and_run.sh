@@ -184,8 +184,66 @@ echo "--- rebuilding RTPAD.EXE (the subject test_syssvc_sethost_syscall_audit tr
 ( cd /src/repo && cmake --build build-static --target rtpad_exe \
                         --parallel "$(nproc)" ) || exit 4
 
+# IMGACT.EXE is the activator of every IMGACT-activated subject (MMK.EXE,
+# RMHOLD.EXE, CRTLSHR.EXE, ...), and crtl-shr-layer-not-started (rd vms-569)
+# targets src/imgact/imgact.c -- the call that starts an activated image's C RTL
+# layer. Rebuilt unconditionally, same reason as the subjects above, and copied
+# to the initramfs SYS$SYSTEM path the kernel loads it from (PT_INTERP); the
+# system volume re-mastered just below takes the same build.
+echo "--- rebuilding IMGACT.EXE (the image activator) ---"
+( cd /src/repo && make -C src/imgact CC=musl-gcc ARCH="$ARCH" clean >/dev/null 2>&1; \
+  make -C src/imgact CC=musl-gcc ARCH="$ARCH" >/dev/null ) || exit 4
+cp /src/repo/src/imgact/IMGACT.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE || exit 4
+chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE || exit 4
+
+# SYS$SYSTEM:LINK.EXE is a SUBJECT test_syssvc_mmk_build drives through DCL's
+# LINK verb (rd vms-3cb1), and link-image-takes-build-flags targets
+# src/vmslink/link.c, compiled into it. It lives in two places the guest can
+# activate it from -- the initramfs SYSEXE and the ODS-2 system volume -- so it
+# is rebuilt, copied to the first and the volume is re-mastered (one command
+# line, tests/qemu/master_ods2_sysvol.sh, shared with the image build).
+echo "--- rebuilding SYS\$SYSTEM:LINK.EXE (the ODS-2 system volume is re-mastered below, after DECC\$SHR) ---"
+( cd /src/repo && cmake --build build-static --target vmslink_image \
+                        --parallel "$(nproc)" ) || exit 4
+cp /src/repo/build-static/bin/sysexe/LINK.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || exit 4
+chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || exit 4
+
+# DECC$SHR.EXE + SOCKECHO.EXE (rd vms-99f). The C RTL sockets layer
+# (src/vmstcpip/sockets/ovmx_decc_sockets.c, decc-socket-bound-to-musl) is
+# compiled INTO DECC$SHR, which nothing above rebuilds: re-emit it into
+# SYS$LIBRARY with the SAME recipe and inputs the image build's full producer
+# graph used (mk_mmk_native_staged.sh: CC=musl-gcc, the musl libc.a, musl-gcc's
+# libgcc.a), and relink test_syssvc_decc_socket's subject against it. Rebuilt
+# unconditionally, as everything here is; the vector is append-only, so every
+# other activated image still binds the same sv# indices.
+echo "--- rebuilding DECC\$SHR.EXE (SYS\$LIBRARY) + SOCKECHO.EXE ---"
+( cd /src/repo && \
+  CC=musl-gcc sh src/vmslink/mk_decc_shr.sh build-static/bin/LINK.EXE \
+      'build-static/bin/DECC$SHR.EXE' \
+      "$(ls /usr/lib/*-linux-musl/libc.a | head -1)" "$(musl-gcc -print-libgcc-file-name)" && \
+  cp 'build-static/bin/DECC$SHR.EXE' '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' && \
+  IMGACT_INTERP_PATH=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE \
+  sh tests/qemu/sockecho/mk_sockecho_native.sh build-static/bin/LINK.EXE \
+      /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/SOCKECHO.EXE \
+      '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' ) || exit 4
+
+# DECC$SHR.EXE lives in the initramfs SYSLIB AND on the ODS-2 system volume
+# (master_ods2_sysvol.sh masters build-static/bin/DECC$SHR.EXE, LINK.EXE and the
+# rest): a guest activation can resolve it from either, so the rebuilt image goes
+# to both and the volume is re-mastered LAST, after every subject it carries has
+# been rebuilt. Re-mastering before the DECC$SHR rebuild left the volume copy
+# pristine, so a defect in ovmx_decc_sockets.c never reached the suite (vms-99f).
+rm -f /ods2_sysvol.img
+sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img \
+    /initramfs/vms/SYS0/SYSCOMMON/SYSLIB || exit 4
+
 echo "--- re-staging the initramfs ---"
-cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
+# WITHOUT its DWARF, exactly as the image build stages it (tests/qemu/Dockerfile):
+# the debug sections are ~18 MB, and a defect run that put them back pushed the
+# unpacked initramfs over the 512 MB guest's budget -- the guest ran out of
+# RAM-backed rootfs, suites could not write their files, and every control hung
+# to the 50-minute shard wall (#1994 merge group, 2026-11-03).
+objcopy --strip-debug /src/kernel/vms.ko /initramfs/lib/modules/vms.ko || exit 4
 # Absence is FATAL, never skipped, exactly as in the image build: a missing
 # subject would turn the SHOW SYSTEM and RUN/DETACHED assertions into no-ops
 # with the job still green.
@@ -201,9 +259,11 @@ cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # teeth, discovered when showterm-width-page-fabricated (vmsdcl/dcl_cmd_show.c)
 # rebuilt and linked correctly (confirmed with `strings` on the fresh
 # build-static/bin/DCL.EXE) but produced zero effect on test_syssvc_showterm's
-# output. Both copies must be the SAME freshly rebuilt binary.
+# output. Both names must be the SAME freshly rebuilt binary.
 cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || exit 4
-cp /src/repo/build-static/bin/DCL.EXE /initramfs/tests/DCL.EXE || exit 4
+# The second name is a hard link to the first, as tests/qemu/Dockerfile stages
+# it: the SAME binary by construction, and held once in the initramfs budget.
+ln -f /initramfs/bin/DCL.EXE /initramfs/tests/DCL.EXE || exit 4
 
 # INITIALIZE.EXE at /tests/INITIALIZE.EXE (test_syssvc_initialize's
 # OVMX_INITIALIZE default, staged there by tests/qemu/Dockerfile) -- the SAME
@@ -301,6 +361,16 @@ if [ "$n_imgact" -lt 2 ]; then
 fi
 ( cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz ) || exit 4
 echo "Re-staged initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
+# The same INITRAMFS BUDGET the image build enforces (its value is read from
+# /initramfs.budget, which that build writes): an over-budget defect image
+# fails here, by name, instead of hanging the guest.
+budget=$(cat /initramfs.budget) || { echo "FATAL: /initramfs.budget missing (the image build writes it)"; exit 4; }
+bytes=$(gzip -dc /initramfs.cpio.gz | wc -c)
+echo "Re-staged initramfs unpacked: $bytes bytes (budget $budget)"
+if [ "$bytes" -gt "$budget" ]; then
+    echo "FATAL: the re-staged initramfs is $bytes bytes, over the $budget-byte budget"
+    exit 4
+fi
 
 # Per-facility negative controls run the ENTIRE suite set in ONE VM per defect
 # (check 5's isolation attribution must see every suite, so suites cannot be

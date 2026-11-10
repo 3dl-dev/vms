@@ -1,0 +1,26 @@
+# dcl-image-fork-host-pipe -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL's fork-path image activation (RUN, a foreign command, a SYS\$SYSTEM utility, a PIPE segment) makes the task DCL's VMS process through the executive's creation record (dcl_image_fork_mbx -> VMS_IOCTL_CREPRC_SYNC), never a host pipe (src/vmsdcl/dcl_cmd_process.c, rd vms-89bb)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_creprc_nopipe_audit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation puts a host pipe back into dcl_image_fork_mbx: it makes a pipe(2) pair (and closes it) right before the creation-record fork, the shape of the pre-vms-89bb PCB hold. Non-fatal: the activation still runs through the record and the image runs, so only the audit's no-host-pipe assertion for DCL's RUN reddens (it sees the pipe syscall in the traced DCL). The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+DCL's fork-path RUN made NO host pipe (pipe/pipe2) -- DCL or its image task
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i '/NEGCTL-ANCHORED (dcl-image-fork-host-pipe)/{n;s|^    return ovmx_creprc_fork_mbx(kind, mbxunt, pcb_status, NULL);$|    { int hp[2]; if (pipe(hp) == 0) { close(hp[0]); close(hp[1]); } } /* NEGCTL dcl-image-fork-host-pipe */ return ovmx_creprc_fork_mbx(kind, mbxunt, pcb_status, NULL);|}' "$_file"
+    :
+}

@@ -380,13 +380,9 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_zeropsect.sh
 
-      # vms-ce4: LINK.EXE reads the VMS command syntax (LINK /EXECUTABLE=x file,... /
-      # file/OPTIONS / file/LIBRARY / /NOINFORMATIONALS) the way the GCC port's ld
-      # wrapper writes it; every accepted form equals the GNU-style image, every
-      # unsupported qualifier is refused with no image written.
-      - name: Prove LINK.EXE takes the VMS command syntax and refuses what it cannot honour (vms-ce4)
-        run: |
-          sh src/vmslink/test/run_vms_cli.sh
+      # vms-ce4 / rd vms-3cb1: LINK.EXE's VMS command (CLI$DCL_PARSE against the
+      # LINK table) is proven by the ctest vmslink_vms_command in Build & Test
+      # (src/vmslink/test/run_link_command.sh): the shipped image, not the build tool.
 
       # vms-c65: LINK.EXE's EVAX/Alpha path emits a SHAREABLE (a .vms$sv producer)
       # from alpha-dec-vms objects — the half a real Alpha DECC$SHR needs (the

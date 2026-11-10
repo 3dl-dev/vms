@@ -3,7 +3,7 @@
  *
  * Displays a VMS-like login banner, prompts for username and
  * password, authenticates against SYSUAF.DAT, and then execs
- * the DCL shell with --login flag.
+ * the DCL shell, which reads its login data from the executive (rd vms-838b).
  *
  * Build: part of tools/ CMakeLists.txt
  */
@@ -303,6 +303,50 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
 
     /* Record this login now (after showing last, before launching DCL) */
     ovmx_accounting_record_login(rec->username);
+
+    /*
+     * HAND DCL ITS LOGIN DATA THROUGH THE EXECUTIVE (rd vms-838b).
+     *
+     * On VMS LOGINOUT builds the process and the CLI learns from PROCESS
+     * STATE -- never from an argument list -- that it is starting a login,
+     * whether the account is CAPTIVE (or DISCTLY), and which login command
+     * file to run. LOGINOUT writes that state in kernel mode while it logs the
+     * process in; here the executive's PCB holds it (VMS_IOCTL_LGI) and DCL
+     * reads it back when it gets control. DCL.EXE takes no argv flags.
+     *
+     *   VMS_LGI_F_LOGIN  -- DCL runs SYLOGIN and the login command procedure.
+     *   uaf_flags        -- UAI$_FLAGS: CAPTIVE confines the session to its
+     *                       login procedure, CAPTIVE/DISCTLY disable Ctrl/Y
+     *                       (vms-c8fa; OpenVMS Guide to System Security,
+     *                       "Captive Accounts").
+     *   lgicmd           -- the SYSUAF LGICMD field, or the documented
+     *                       SYS$LOGIN:LOGIN.COM default when it is empty
+     *                       (vms-e48); DCL translates it through the SYS$LOGIN
+     *                       logical it defines.
+     *
+     * ORDER: before SETIDENT, which leaves this process with the account's
+     * own privileges -- an ordinary account has no CMKRNL, and the executive
+     * stores login data only for a caller holding it (the SETIDENT gate), so an
+     * image can never rewrite its own. FAILURE IS FATAL, as for SETIDENT: a
+     * session whose CAPTIVE flag the executive did not take would be an
+     * unconfined captive account.
+     */
+    {
+        char login_lgicmd[VMS_LGICMD_SIZE];
+        uint32_t lgi_flags = VMS_LGI_F_LOGIN;
+        uint32_t lgi_uaf   = sysuaf_record_uaf_flags(rec);
+        if (sysuaf_account_captive(rec))
+            lgi_uaf |= UAI$M_CAPTIVE;
+        sysuaf_login_command_file(rec, login_lgicmd, sizeof(login_lgicmd));
+        uint32_t lst = vms_kif_lgi(VMS_LGI_OP_SET, &lgi_flags, &lgi_uaf,
+                                   login_lgicmd, 0);
+        if (!(lst & 1)) {
+            printf("%%OVMX-F-NOLGI, the executive refused the login data "
+                   "(status %u)\n", (unsigned)lst);
+            fflush(stdout);
+            _exit(1);
+        }
+    }
 
     /*
      * ESTABLISH THE AUTHENTICATED IDENTITY IN THE EXECUTIVE (vms-2b8).
@@ -642,30 +686,9 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
         }
     }
 
-    /*
-     * The login command file to run: the SYSUAF LGICMD field, or the
-     * documented SYS$LOGIN:LOGIN.COM default when that field is empty
-     * (vms-e48). LOGINOUT resolves it here (it is the process that read the
-     * SYSUAF record) and hands the resulting VMS filespec to DCL through
-     * --lgicmd; DCL translates it through the SYS$LOGIN logical it is about to
-     * define. This replaces DCL's old hardcoded "<home>/LOGIN.COM".
-     */
-    char login_lgicmd[256];
-    sysuaf_login_command_file(rec, login_lgicmd, sizeof(login_lgicmd));
-
-    /*
-     * CAPTIVE CONFINEMENT (vms-c8fa). A captive account is confined to its
-     * login command procedure: it runs SYLOGIN.COM and the account's LGICMD
-     * and is then logged out -- it never reaches the "$" DCL prompt, and
-     * Ctrl/Y is disabled so the procedure cannot be interrupted to escape to
-     * DCL (OpenVMS Guide to System Security, "Captive Accounts"). LOGINOUT
-     * conveys the CAPTIVE flag to DCL with --captive; DCL disables Ctrl/Y and
-     * logs out instead of entering the interactive REPL. A non-captive
-     * account execs EXACTLY as before -- this is purely additive.
-     */
-    int captive = sysuaf_account_captive(rec);
-
-    /* Exec the DCL shell with --login flag */
+    /* Exec the DCL shell. It takes no arguments: its login data -- that this
+     * is a login, the CAPTIVE flag, the login command file -- is in the
+     * executive (VMS_IOCTL_LGI, set above). */
     char dcl_linux[1024];
     vmsfs_to_linux_path(DCL_SHELL_PATH, dcl_linux, sizeof(dcl_linux));
     /* ATOMIC FLIP (vms-5f0): LOGINOUT execve's DCL.EXE for the session; the
@@ -679,12 +702,7 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
             access(staged, X_OK) == 0)
             snprintf(dcl_linux, sizeof(dcl_linux), "%s", staged);
     }
-    if (captive)
-        execl(dcl_linux, "vmsdcl", "--login", "--captive",
-              "--lgicmd", login_lgicmd, (char *)NULL);
-    else
-        execl(dcl_linux, "vmsdcl", "--login", "--lgicmd", login_lgicmd,
-              (char *)NULL);
+    execl(dcl_linux, "DCL.EXE", (char *)NULL);
 
     /* If exec fails, fall back to sh */
     perror("vmsdcl");

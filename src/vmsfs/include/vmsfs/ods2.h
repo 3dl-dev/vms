@@ -1722,8 +1722,8 @@ ods2_status_t ods2_bdev_relabel(ods2_bdev_t *bv, const char *label,
  * ================================================================ */
 
 /* Storage-bitmap bits per 512-byte BITMAP.SYS data block ([N2]): 128 words *
- * 32 bits. The ACP maps whole-volume bit N (== LBN N, cluster factor 1) to
- * bitmap block N / this and bit N % this. */
+ * 32 bits. Whole-volume bit N (CLUSTER N, see ods2_sbm_alloc) lives in
+ * bitmap block N / this, bit N % this. */
 #define ODS2_SBM_BITS_PER_BLOCK   4096u
 
 /* Append one format-1 FM2 retrieval pointer [lbn, lbn+count) to a file header's
@@ -1751,6 +1751,33 @@ void ods2_fh2_reseal(void *header_block);
 int  ods2_sbm_block_bit_free(const void *bitmap_block, unsigned bit_in_block);
 void ods2_sbm_block_alloc(void *bitmap_block, unsigned bit_in_block);
 void ods2_sbm_block_free(void *bitmap_block, unsigned bit_in_block);
+
+/* Cluster-aware BITMAP.SYS allocation (rd vms-563). Bit N of the storage bitmap
+ * is CLUSTER N: LBNs N*cluster .. N*cluster+cluster-1. The caller supplies the
+ * BITMAP.SYS data-block I/O: `bmvbn` is BITMAP.SYS's VBN (2 = the first bit
+ * block); read returns 0 on success, > 0 when bmvbn is past the bitmap file,
+ * < 0 on an I/O error; write returns 0 on success. */
+typedef struct ods2_sbm_io {
+    void    *ctx;
+    uint32_t volsize;   /* SCB volume size, in blocks */
+    uint32_t cluster;   /* SCB cluster factor, blocks per bit (0 treated as 1) */
+    int    (*read)(void *ctx, uint32_t bmvbn, void *blk);
+    int    (*write)(void *ctx, uint32_t bmvbn, const void *blk);
+} ods2_sbm_io_t;
+
+/* `blocks` rounded up to whole clusters. */
+uint32_t ods2_sbm_round_blocks(uint32_t blocks, uint32_t cluster);
+/* Allocate >= `need` contiguous blocks in whole clusters, searched from LBN
+ * `hint` (0 = first fit) with `room` blocks to grow into. *lbn_out = the first
+ * LBN (a cluster boundary), *count_out = blocks allocated (a cluster multiple).
+ * ODS2_ERR_NOSPACE when no run exists, ODS2_ERR_IO on a block I/O failure.
+ * `bitmap_block` is a 512-byte scratch buffer. */
+ods2_status_t ods2_sbm_alloc(const ods2_sbm_io_t *io, void *bitmap_block,
+                             uint32_t need, uint32_t hint, uint32_t room,
+                             uint32_t *lbn_out, uint32_t *count_out);
+/* Free the clusters wholly inside LBNs [lbn, lbn+count). */
+ods2_status_t ods2_sbm_free_range(const ods2_sbm_io_t *io, void *bitmap_block,
+                                  uint32_t lbn, uint32_t count);
 
 /* ================================================================
  * FILE-HEADER allocation + creation (vms-5303, epic vms-208) -- the IO$_CREATE

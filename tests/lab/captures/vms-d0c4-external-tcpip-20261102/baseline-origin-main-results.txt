@@ -1,0 +1,25 @@
+  PASS: the TCP/IP image boots to login (virtio NIC on tap0)
+  PASS: SYSTEM logs in (OPER: may configure the network)
+  FAIL: with the boot-time 10.0.2.15 address: TELNET 192.168.77.1 fails -SYSTEM-F-UNREACHABLE
+  PASS: TCPIP SET INTERFACE SE0 /HOST=10.0.3.15 /NETWORK_MASK=255.255.255.0 applied
+  PASS: TCPIP SHOW INTERFACE: SE0 10.0.3.15 255.255.255.0 Up
+  FAIL: on the link but before SET ROUTE: TELNET 192.168.77.1 (off-link) still -SYSTEM-F-UNREACHABLE
+  PASS: TCPIP SET ROUTE /DEFAULT /GATEWAY=10.0.3.1 applied to the live routing table
+  PASS: TCPIP SHOW ROUTE: default via 10.0.3.1 on SE0
+  PASS: TELNET 192.168.77.1 connects through the gateway
+  FAIL: the remote shell's output (OVMX-TN-42-END, computed there) comes back during the session
+  FAIL: the server's exit ends the session from the far side (%TELNET-I-SESSEND)
+  FAIL: CTRL/] gives the TELNET> escape prompt
+  FAIL: QUIT at TELNET> closes the session from this side
+  PASS: FTP /GET of a file the server does not have fails honestly (%FTP-E-GETERR)
+  FAIL: FTP /GET=seed.bin: 131072 bytes over a PASV data connection to 192.168.77.1, stored to SEED.BIN
+  FAIL: DIRECTORY/SIZE: SEED.BIN;1 is 256 blocks on the ODS-2 system disk
+  FAIL: FTP /PUT=SEED.BIN /REMOTE=back.bin: 131072 bytes sent back
+  FAIL: back.bin on the server is byte-identical to seed.bin (GET then PUT round trip)
+=== test_tcpip_external_boot_e2e: FAIL ===
+  PASS: wire: the VM (10.0.3.15) opened TCP to 192.168.77.1:23 on the link (SYN captured on tap0)
+  PASS: wire: the VM opened the FTP control connection to 192.168.77.1:21
+  PASS: wire: the VM opened FTP PASV data connections to 192.168.77.1 (non-21/23 ports)
+  PASS: wire: the server host sent data back to the VM
+  PASS: ftpd's own log records the RETR/STOR
+  PASS: tcpsvd/ftpd log the VM's address (10.0.3.15) as the client

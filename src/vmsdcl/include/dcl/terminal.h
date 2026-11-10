@@ -128,6 +128,16 @@ int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
                     char *buf, size_t bufsz, uint16_t *term_out);
 const char *dcl_recall_get(int back);
 int dcl_tt_inquire(char *reply, size_t replysz);
+/* One record to the terminal through $QIO IO$_WRITEVBLK; -1: no executive terminal. */
+int dcl_tt_put_record(const char *text, size_t n);
+/* SYS$OUTPUT/SYS$ERROR on the terminal through its driver (rd vms-1b6a):
+ * dcl_tt_output_ready -- the process's output IS the executive's terminal;
+ * dcl_tt_put_text -- $QIO IO$_WRITEVBLK of one record (P4 " ": a new line
+ * before, a carriage return after) or, `open` set, the text of a record not
+ * yet ended (P4 "$": the new line before, the record left open). 0 when the
+ * driver took it, -1 when not. */
+int dcl_tt_output_ready(void);
+int dcl_tt_put_text(const char *text, size_t n, int open);
 
 /* /PAGE: gather a command's output, then show it a screen at a time (rd
  * vms-457). begin returns 0 when the output is not a terminal (no pager). */

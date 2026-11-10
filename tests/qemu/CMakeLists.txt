@@ -106,8 +106,11 @@ endfunction()
 file(GLOB QEMU_SYSSVC_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_syssvc_*.c)
 # Some suites are registered only where what they test can exist (below).
 # test_syssvc_crtl_static proves the C RTL file layer of a STATIC image (and
-# test_syssvc_crtl_time its clock and time zone, vms-593), which
-# exists only where the build links it (OVMX_CRTL_FD_STATIC: tests/qemu/
+# test_syssvc_crtl_time its clock and time zone, vms-593,
+# test_syssvc_crtl_signal its signals, vms-931, and
+# test_syssvc_crtl_devfd its terminal and mailbox descriptors, vms-a66e, and
+# test_syssvc_crtl_shr the same layer in an activated DECC$SHR image, vms-569),
+# which exists only where the build links it (OVMX_CRTL_FD_STATIC: tests/qemu/
 # Dockerfile, over the x86_64 musl system-call funnel src/crtl-musl-x86_64). A
 # build without that layer -- the Alpha rig, a host build -- has nothing for the
 # suite to test, so it is not registered there, rather than built to SKIP. The
@@ -115,7 +118,9 @@ file(GLOB QEMU_SYSSVC_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_syssvc_*.c)
 option(OVMX_CRTL_FD_STATIC "link the C RTL file layer over RMS into static C images" OFF)
 foreach(_src ${QEMU_SYSSVC_SOURCES})
     get_filename_component(_name ${_src} NAME_WE)
-    if((_name STREQUAL "test_syssvc_crtl_static" OR _name STREQUAL "test_syssvc_crtl_time")
+    if((_name STREQUAL "test_syssvc_crtl_static" OR _name STREQUAL "test_syssvc_crtl_time"
+        OR _name STREQUAL "test_syssvc_crtl_signal" OR _name STREQUAL "test_syssvc_crtl_devfd"
+        OR _name STREQUAL "test_syssvc_crtl_shr")
        AND NOT OVMX_CRTL_FD_STATIC)
         continue()
     endif()
@@ -138,6 +143,14 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
        NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|aarch64|arm64)$")
         continue()
     endif()
+    # test_syssvc_decc_socket drives SOCKECHO.EXE (tests/qemu/sockecho/
+    # mk_sockecho_native.sh): cc'd and LINK.EXE-linked --use DECC$SHR on the same
+    # native backend, so the same arch condition applies for the same reason
+    # (rd vms-99f; TEMPORARY until LINK.EXE produces native Alpha images, vms-b2b).
+    if(_name STREQUAL "test_syssvc_decc_socket" AND
+       NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|aarch64|arm64)$")
+        continue()
+    endif()
     qemu_syssvc_add_test(${_name} ${_src})
 endforeach()
 
@@ -146,6 +159,15 @@ endforeach()
 if(TARGET test_syssvc_va)
     target_sources(test_syssvc_va PRIVATE
         ${CMAKE_SOURCE_DIR}/src/vmslink/ovmx_decc_vm.c)
+endif()
+
+# test_syssvc_crtl_exec (rd vms-e70f): the DEC C RTL's exec*/wait/getpid over
+# $CREPRC and the executive (crtl_exec.c), the code DECC$SHR's entries run.
+if(TARGET test_syssvc_crtl_exec)
+    target_sources(test_syssvc_crtl_exec PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_exec.c)
+    target_include_directories(test_syssvc_crtl_exec PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms)
 endif()
 
 # test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
@@ -206,6 +228,7 @@ foreach(_anchored
         test_syssvc_setuai
         test_syssvc_loginout_acp
         test_syssvc_spawn_input   # vms-ccc: rms_textfile (RMS write + lib$spawn INPUT read) is weak-linked
+        test_syssvc_dcl_spawn_io  # vms-691d: rms_textfile lays down / reads back the SPAWN files
         test_syssvc_tcpip_host_acp
         test_syssvc_tcpip_config_acp
         # test_syssvc_tcpip_service_db (#878, vms-71b): reaches the persistent
@@ -216,7 +239,13 @@ foreach(_anchored
         test_syssvc_tcpip_service_db
         # test_syssvc_rms_textfile_threads (rd vms-acf3): rms_textfile from two
         # threads (append + open/getline/close); only through the weak seam.
-        test_syssvc_rms_textfile_threads)
+        test_syssvc_rms_textfile_threads
+        # test_syssvc_dcl_sink_route (rd vms-1b6a): reads DCL's SYS$OUTPUT
+        # file back through rms_textfile, the weak seam.
+        test_syssvc_dcl_sink_route
+        # test_syssvc_dcl_input_route (rd vms-4d27): lays down DCL's SYS$INPUT
+        # command file and reads its SYS$OUTPUT file back through rms_textfile.
+        test_syssvc_dcl_input_route)
     if(TARGET ${_anchored})
         target_sources(${_anchored} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)
@@ -475,15 +504,17 @@ endforeach()
 if(OVMX_CRTL_FD_STATIC)
     add_library(ovmx_crtl_fd_static OBJECT
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_fd.c
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_devfd.c
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_filespec.c
-        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_time.c)
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_time.c
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_signal.c)
     target_compile_definitions(ovmx_crtl_fd_static PRIVATE OVMX_CRTLFD_STATIC)
     target_compile_options(ovmx_crtl_fd_static PRIVATE -w)
     target_include_directories(ovmx_crtl_fd_static PRIVATE
         ${VMS_INCLUDE_DIR} ${VMS_RMS_INCLUDE_DIR}
         ${CMAKE_SOURCE_DIR}/src/vmsrms
         ${CMAKE_SOURCE_DIR}/src/crtl-musl-x86_64/include)
-    foreach(_t ${_corpus_rt_targets} test_syssvc_crtl_static test_syssvc_crtl_time)
+    foreach(_t ${_corpus_rt_targets} test_syssvc_crtl_static test_syssvc_crtl_time test_syssvc_crtl_signal test_syssvc_crtl_devfd)
         if(TARGET ${_t})
             target_sources(${_t} PRIVATE $<TARGET_OBJECTS:ovmx_crtl_fd_static>)
             target_compile_definitions(${_t} PRIVATE OVMX_CRTLFD_STATIC)

@@ -24,10 +24,17 @@ int main(void) {
     printf("VMS Time Services Test\n");
     printf("=======================\n");
 
-    /* Test 1: sys$gettim - get current time */
-    uint64_t vms_time;
+    /* Tests 1-2 read the SYSTEM time, which the executive keeps (rd vms-642).
+     * This harness runs with no /dev/vms: the honest answer there is
+     * SS$_NOSUCHDEV, never the host clock, and $NUMTIM of a caller-supplied
+     * quadword still converts. Against a real executive the original checks
+     * run (and tests/qemu/test_syssvc_systime.c makes them there). */
+    uint64_t vms_time = 0;
     status = sys$gettim(&vms_time);
-    if ($VMS_STATUS_SUCCESS(status) && vms_time > 0) {
+    if (status == SS$_NOSUCHDEV) {
+        printf("PASS: sys$gettim with no executive is SS$_NOSUCHDEV, not the host clock\n");
+        vms_time = 0x009E663849721A60ULL;   /* a fixed absolute time to convert */
+    } else if ($VMS_STATUS_SUCCESS(status) && vms_time > 0) {
         printf("PASS: sys$gettim returned time (0x%llx)\n",
                (unsigned long long)vms_time);
     } else {

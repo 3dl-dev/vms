@@ -140,8 +140,16 @@
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+dlm-d63-xqp-lock-not-system
+dlm-d63-sub-request-carries-no-hash
+dlm-d63-release-queue-drops-the-value-block
+dlm-d63-request-asks-for-no-value-block
+dlm-d63-release-writes-no-value-block
+dlm-d63-read-holder-writes-the-master-block
+dlm-623-sublock-in-own-directory
 dlm-f29f-deferred-grant-not-read
 dlm-f29f-deferred-grant-declined-by-the-arm
+dlm-7649-f11b-lock-takes-the-mounters-identity
 blk-port-op-not-stamped
 blk-send-data-not-confirmed
 rdev-dismount-absent-status-wrong
@@ -269,6 +277,9 @@ csb-0b01-answer-ignores-join-order
 guard-ignores-category-0b
 refused-send-always-keeps-number
 dir-remove-unregistered-entry
+dir-told-survives-transition
+dirreg-not-sent-at-release-4
+dirreg-answer-not-recorded
 join-lnm-answered-unapplied
 join-lnm-db-not-applied
 join-lnm-db-corrupt-unanswered
@@ -318,6 +329,9 @@ dlm-rebuild-install-ignores-compat
 dlm-rebuild-sent-outside-the-step
 dlm-rebuild-window-opens-early
 dlm-rebuild-records-wait-past-release
+dlm-966e-at-requester-refused
+dlm-966e-elsewhere-refused
+dlm-966e-elsewhere-refused-fuzz
 barrier-step-not-held-for-own-rebuild
 coord-release-not-held-for-own-rebuild
 dlm-rebuild-record-drops-the-granted-valblk
@@ -337,7 +351,10 @@ dlm-5d6-hold-lifted-in-quorum-hang
 dlm-b4d-adopted-tree-dir-untold
 dlm-b4d-undirected-answers-you
 dlm-b4d-undirected-answers-you-fuzz
-dlm-departed-holder-locks-kept"
+dlm-departed-holder-locks-kept
+dlm-1e58-noqueue-not-read
+dlm-1e58-deny-record-not-written
+tt-oper-line-splices-write"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -452,6 +469,23 @@ EOF2
         why)          echo "the op-0x02 branch never matches, so a real VAX master's deferred grant falls to RULE C and is declined (cn->dlm_declined) -- the lab's vms-5fa hang, with the FSM entry intact but unreachable.";;
         require_fail) hd_lines <<'EOF2'
 *** a master's op-0x02 is routed to the FSM's deferred-grant entry ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-7649-f11b-lock-takes-the-mounters-identity)
+        case "$_f" in
+        facility)     echo "the Files-11 XQP's F11B\$v/F11B\$s locks are SYSTEM-WIDE KERNEL-MODE resources (UIC group 0, access mode 0), stated by the executive (vms_lock.c acp_f11b_enq, rd vms-7649) -- VAX1's SDA 'Kernel mode / System' and every captured F11B\$ frame";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_f11b_enq passes no stated identity, so the XQP's locks take the MOUNTing process's (UIC group 1, user mode) -- what shipped before. MEASURED COST 2026-11-02 (tests/lab/captures/vms-5fa-shared-volume-20261102): OVMXE's F11B\$vEVAC5FA request hashed to VAX2 instead of VAX1, VAX2 said 'you master it', and OVMX mastered a second copy of the volume lock, so the two nodes' XQPs never serialized.";;
+        require_fail) hd_lines <<'EOF2'
+*** addressed to VAX1, the resource's directory -- not VAX2, where the lab's went ***
+*** naming UIC group 0, system-wide -- not the mounter's group 1 ***
+*** at access mode 0, kernel -- not the mounter's user mode ***
+  with the proven hash of THAT identity
+*** the F11B$s request names (group 0, kernel) too ***
 EOF2
                       ;;
         esac;;
@@ -589,6 +623,10 @@ EOF
 *** writing NO status: $ENQW has no 'your wait was interrupted' condition value, so userspace re-enters the wait and no caller can observe this ***
   and no status written
 *** and the lock is STILL HELD AT ITS OLD MODE: a failed convert never loses the lock (VMS semantics) ***
+*** the interrupted volume-lock wait COMES BACK: it neither spins nor re-queues in the executive ***
+  and it says so, so the ACP service returns -ERESTARTSYS
+  handing back no lock
+*** the waiter holds NO lock afterwards: its abandoned request was $DEQd, not left queued ***
 EOF
                       ;;
         esac;;
@@ -746,14 +784,29 @@ EOF
         why)          echo "the sub-resource stops inheriting its tree's master, so dlm_resolve_master falls through to the DIRECTORY path and the sub NAME is looked up as if it were a root -- exactly what shipped before. MEASURED COST at two real V7.3 VAXes 2026-10-21 (tests/lab/captures/vms-c2b-ovmx-holder-20261021): OVMX held the ROOT of a tree VAX1 mastered, then sent S0/S1/S2 to VAX2 (the directory) under each sub name's own derived hash, was answered 'no entry', and MASTERED THEM LOCALLY -- reporting lock ids 0100034B/4C/4D granted at CW that VAX1's SDA does not list. A grant no master gave, and one sub-resource name mastered on two nodes at once.";;
         require_fail) hd_lines <<'EOF'
 the sub-lock's request was posted
+*** and carrying the SUB's hash, off its parent's held value -- the value VAX1 finds its own F11B$s<12> RSB by, never the zero that made it grant a fresh RSB (vms-5fa r5) ***
+*** and it carries the SUB's hash, off the root's value (rd vms-d63; the function is VAX2's own on S0 under RMT9, b67a frame 235 -- test_dlm_hash) ***
 *** and it goes to the PARENT'S MASTER -- never to the directory, as 7 of 7 real sub-lock requests do ***
   ...and it is NOT a directory lookup
 *** body[36:40] is OUR OWN handle for the parent, read off the parent LKB ***
 *** body[40:44] is the handle THE PARENT'S MASTER gave it -- the pair that parent's own grant carried ***
-  and NO hash is asserted for a sub name nobody was asked about (Rule 8)
 the posted name is the sub-resource's own
 body[30] is the sub-lock's own requested mode
 its request was posted too
+  and both handles
+  exactly four posts: 2 $ENQ, 2 $DEQ
+  naming its parent by the pair (own handle, master's handle)
+  the file's lock is released FIRST, at its master
+*** a PW $ENQ with LCK$M_VALBLK ***
+*** a SUB-lock: addressed to the tree's MASTER, not the directory ***
+*** and its release is MARKED as writing the value block ***
+*** carrying (3,1): the header counter VAX1 will compare with the 2 it cached -- the rd vms-d63 fix ***
+*** named 'F11B$s' + 0c 00 00 00, COUNTED: 10 bytes with their NULs ***
+*** the caller holds the MASTER's value block (2,1) ***
+the ACP's next block after a header write is (3,1)
+the file's lock was posted
+the master grants the file's lock, with its value block
+two releases were posted
 EOF
                       ;;
         esac;;
@@ -772,6 +825,35 @@ EOF
                       ;;
         esac;;
 
+    dlm-1e58-noqueue-not-read)
+        case "$_f" in
+        facility)     echo "the MASTER hearing a remote requester's LCK\$M_NOQUEUE (vms_dlm_master_req_flags(), vms_dlm_master_wire.h, rd vms-1e58 C4): body[28:30] bit 0x0004 of a received op-0x01 becomes the engine's LCK_M_NOQUEUE";;
+        targets)      echo "kernel-core/vms_dlm_master_wire.h";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "The translation stops reading the NOQUEUE bit, which is exactly the shipped state the ci.6 lab fire caught: the arm never set the master request's flags, so a real VAX's captured EX/NOQUEUE (frame 7310) against an EX this node holds is QUEUED instead of DENIED, and the VAX's \$ENQW completes SS\$_NORMAL inside this node's hold. The same frame's parse is untouched (req_flags still reads 04 00), so only the translation and the outcome redden.";;
+        require_fail) hd_lines <<'EOF'
+*** and the arm's translation hands the master LCK_M_NOQUEUE ***
+*** VAX2's captured EX/NOQUEUE is DENIED -- the lab got QUEUED ***
+  and no lock id is asserted, because no lock exists
+EOF
+                      ;;
+        esac;;
+
+    dlm-1e58-deny-record-not-written)
+        case "$_f" in
+        facility)     echo "the master's DENY answer (vms_dlm_enq_response_build_notqueued(), rd vms-1e58 C4): the request echoed with the b8 09 fc record at body[32:36] that every real deny carries";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "The deny builder writes the QUEUED record (00 00 fb 00) where the NOTQUEUED one (b8 09 fc 00) goes -- the very bytes the lab saw OVMXE send in frame 7312. The engine's decision is untouched (the outcome is still DENIED), so only the answer's record and the requester-side reading of it redden: a VAX told 'queued' about a request it said may not be queued.";;
+        require_fail) hd_lines <<'EOF'
+*** body[32:36] = b8 09 fc 00, the record every real deny carries (0x09b8 = SS$_NOTQUEUED) -- not 00 00 fb 00 ***
+*** and this node's own requester reads it as DENIED ***
+EOF
+                      ;;
+        esac;;
+
     dlm-own-directory-not-consulted)
         case "$_f" in
         facility)     echo "the ENGINE's consultation of THIS NODE's own lock directory before it masters anything (dlm_route_own_directory(), rd vms-025): a name some other system already masters is routed THERE, never mastered a second time here";;
@@ -784,6 +866,7 @@ EOF
   the engine does not claim mastery
 exactly one frame left this node
 *** addressed to the VAX the directory named ***
+  as an op-0x01 request
 *** carrying the hash the VAX ITSELF put on the wire for that name -- never a computed one ***
   and OUR OWN handle, the one this executive minted
 *** and NOTHING is granted yet: the requester waits for the VAX's master, it does not grant itself ***
@@ -950,6 +1033,7 @@ EOF
         require_fail) hd_lines <<'EOF'
 a zero-length name is refused
 a refusal writes nothing (INV-6)
+a zero-length sub name is refused
 EOF
                       ;;
         esac;;
@@ -1028,6 +1112,8 @@ every CITED byte of the real specimen is byte-exact
 OVMX builds the queued answer for pair A
 OVMX builds the queued answer for pair B
 the built queued answer equals the real master's, byte for byte
+  body[20:24] the master's handle (VAX1's grant, frame 1475)
+  body[24:28] the releaser's own handle (frame 1474)
 EOF
                       ;;
         esac;;
@@ -1181,7 +1267,105 @@ EOF
 *** the shipping predicate calls a release a NOTIFICATION: nobody answers one (0 answers in the 41,049 real releases' corpus) ***
 *** and body[4:8] is ZERO: no token is minted on the CSB for a message no peer will ever answer ***
 the shipping composer opens no transaction on it
+a value-block release is still a notification: no transaction
 EOF
+                      ;;
+        esac;;
+
+    dlm-d63-sub-request-carries-no-hash)
+        case "$_f" in
+        facility)     echo "a SUB-resource carries its own hash, computed from its identity and its ROOT parent's held value (vms_lock.c enq_sub_take_tree_hash, vms_dlm_hash.c vms_dlm_sub_name_hash_proven, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the sub request goes out with ZERO at body[128:132], the form of the vms-5fa r5 fire: the real VAX1 master found no RSB by that value and granted every one of 161 OVMX F11B\$s<12> requests on a fresh one, (0,0) vbseq 0, while its own F11B\$s<12> RSB 879D7380 never held OVMX's lock (SDA 0 of 600). Real sub requests carry the sub hash on 28,532 of 28,532.";;
+        require_fail) hd_lines <<'EOF2'
+*** and carrying the SUB's hash, off its parent's held value -- the value VAX1 finds its own F11B$s<12> RSB by, never the zero that made it grant a fresh RSB (vms-5fa r5) ***
+*** and it carries the SUB's hash, off the root's value (rd vms-d63; the function is VAX2's own on S0 under RMT9, b67a frame 235 -- test_dlm_hash) ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-xqp-lock-not-system)
+        case "$_f" in
+        facility)     echo "the XQP's F11B\$s request is a SYSTEM-wide lock (LCK\$M_SYSTEM, wire 0x0010 at body[28:30]) as every real XQP F11B\$ request is (vms_lock.c vms_lock_acp_file_ser, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "the request goes out without SYSTEM, the form of the vms-5fa r4 fire: VAX1 granted every OVMX F11B\$s request an empty value block (vbseq 0), including the one right after OVMX's marked release, so VAX1's own system-wide F11B\$s<12> never saw OVMX's change. SYSTEM goes with the group-0 identity on 76,116 of 76,116 real requests.";;
+        require_fail) hd_lines <<'EOF2'
+*** and SYSTEM (0x0010), as VAX2's: the system-wide resource VAX1's own F11B$s lock is on (rd vms-d63 r4) ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-release-queue-drops-the-value-block)
+        case "$_f" in
+        facility)     echo "the wire arm's RELEASE QUEUE keeps a written value block with the release it stages (vms_dlm_scs_fsm.c relq_record_from_post, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "the staged snapshot keeps its four lock-id fields and drops the engine's write mark and block, so every F11B\$s release leaves unmarked and empty. MEASURED COST (vms-5fa r3, PR #2006 f11b-ser-trace.txt): 48 of 48 OVMX releases of F11B\$s locks unmarked and zero, and VAX1 overwrote OVMX's EVAC.DAT records again.";;
+        require_fail) hd_lines <<'EOF2'
+*** its body[30:36] is VAX2's own form for a written release (01 00 01 00 00 00): the WRITE MARK survived the release queue ***
+*** and body[36:52] carries (3,1) -- VAX2's frame 26 carries its own block there the same way ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-request-asks-for-no-value-block)
+        case "$_f" in
+        facility)     echo "an op-0x01 request carries LCK\$M_VALBLK at body[28] bit 0 (vms_cluster_codec_dlm.c vms_dlm_enq_request_build, rd vms-d63) -- a real master hands a value block only to a request that sets it";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "the request goes out with body[28:30] all zero -- what OVMX sent in the vms-5fa r3 fire, where VAX1 granted its F11B\$s requests with an empty value block (vbseq 0) 48 of 48 times while VAX2's, carrying 0x0239, got (1,1).";;
+        require_fail) hd_lines <<'EOF2'
+*** body[28:30] carries VALBLK (0x0001), as VAX2's F11B$s request (0x0239): the request asks the master for the value block ***
+*** and SYSTEM (0x0010), as VAX2's: the system-wide resource VAX1's own F11B$s lock is on (rd vms-d63 r4) ***
+  and SYNCSTS (0x0008), as VAX2's
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-release-writes-no-value-block)
+        case "$_f" in
+        facility)     echo "a \$DEQ of a lock held at PW/EX with LCK\$M_VALBLK WRITES its value block to the master (vms_lock.c dlm_proxy_fill_post write_valblk on VMS_DLM_POST_DEQ, rd vms-d63) -- how OVMX's F11B\$s release tells a VAX the file header changed";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the release of the XQP's per-file serialization lock goes out unmarked and without its block -- what OVMX did before rd vms-d63. MEASURED COST 2026-11-02 (tests/lab/captures/vms-5fa-shared-volume-r2-20261102): OVMX appended seq 11..20 to EVAC.DAT and rewrote its header, VAX1's cached header never learned of it, and VAX1 wrote its own seq 11..20 over OVMX's records -- the final file held 1169 records, every one VAX1's.";;
+        require_fail) hd_lines <<'EOF2'
+*** and its release is MARKED as writing the value block ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-623-sublock-in-own-directory)
+        case "$_f" in
+        facility)     echo "a SUB-resource is never looked up in, or claimed into, this node's own lock directory: only ROOT resources are in a directory (Davis p. 6-29), and a sub of a tree mastered here is mastered here (vms_lock.c dlm_resolve_master, rd vms-623)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the XQP's F11B\$s<fid> sub-lock (rd vms-d63) is claimed in the own directory under the substrate's placeholder CSID 1 while the node boots alone; once the cluster assigns its CSID the lookup reads that entry as another system's mastery and refuses the \$ENQ SS\$_UNSUPPORTED. MEASURED COST 2026-11-04 (V0.7-15 preflight on a30f53d81, openvmx-site run 41859451749): the cluster web demo's Node A failed IO\$_ACCESS of SYS0.DIR during its join, IMGACT reported %IMGACT-F-IMGNOTFND for DCL.EXE, PROVISION failed and the node powered down.";;
+        require_fail) hd_lines <<'EOF2'
+*** an access after the join takes F11B$s<11> too -- never SS$_UNSUPPORTED (the IMGNOTFND DCL.EXE of rd vms-623) ***
+*** the lock directory is never asked about, or told of, the F11B$s SUB-resource: only roots are in a directory ***
+  and nothing went on the wire: the tree is mastered here
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-read-holder-writes-the-master-block)
+        case "$_f" in
+        facility)     echo "the MASTER stores a peer's released value block only for a lock it holds for that peer at PW/EX (vms_lock.c vms_lock_dlm_xnode_deq, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "a peer's CR (or NL) lock, released with the write mark, overwrites the master's value block -- a block a read-mode holder was never entitled to set, which on an F11B\$s resource is another node's header counter rolled back or forged.";;
+        require_fail) hd_lines <<'EOF2'
+*** a CR holder's marked release writes nothing: only PW/EX may set the block ***
+EOF2
                       ;;
         esac;;
 
@@ -1581,6 +1765,7 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** freeing the mastered resource posts something ***
 *** and tells the directory to drop B's entry ***
+*** an entry told AFTER the transition is removed ***
 EOF
                       ;;
         esac;;
@@ -1865,6 +2050,72 @@ EOF
         why)          echo "dlm_dir_remove_fill() no longer requires that a directory answered the resource's lookup, so a resource mastered before the cluster committed a vector is removed from a directory that never held it. The real V7.3 answers cat-0x02 op-0x19 and bugchecks LOCKMGRERR (4 of 4 captured crashes).";;
         require_fail) hd_lines <<'EOF'
 *** a resource mastered before any directory held an entry for it is NOT removed from the directory ***
+*** a resource whose directory entry a transition discarded is NOT removed from that directory ***
+EOF
+                      ;;
+        esac;;
+
+    dir-told-survives-transition)
+        case "$_f" in
+        facility)     echo "a cluster state transition voids every record of which directory node holds this node's entry, because OVMX re-registers nothing in the rebuild (rd vms-8cb5)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_lock_dlm_directory_discarded() no longer forgets dir_told_csid, so a resource whose directory entry a transition discarded is still removed from that directory afterwards. The real V7.3 answers cat-0x02 op-0x19 and bugchecks LOCKMGRERR (V0.7-15 visitor gate, c-first-legacy).";;
+        require_fail) hd_lines <<'EOF'
+the transition forgets the one directory this node told
+*** a resource whose directory entry a transition discarded is NOT removed from that directory ***
+EOF
+                      ;;
+        esac;;
+
+    dirreg-not-sent-at-release-4)
+        case "$_f" in
+        facility)     echo "a master re-registers each root it masters with its directory node (cat-0x02 op-0x0d) after release 4 of every state transition (rd vms-fdeb)";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_dirreg";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_rm_dr_barrier_released() treats release 4 like any other release, so OVMX re-registers nothing and after any transition a real directory holds no entry for a resource OVMX masters: the next requester is answered 0xf9 and becomes a second master.";;
+        require_fail) hd_lines <<'EOF'
+*** the re-registered entry is removed from the directory that answered ***
+...and every one is recorded told
+...not taken as held, and the window STOPS
+MSCP$LOADBAL goes to the directory node the vector names
+a refused send stops the window and holds nothing
+a transition's start abandons the records in flight
+an answer not stamped 0xf9 is ours...
+both expire at RECNXINTERVAL
+both hold the barrier until answered
+each answer sends the next: all ten
+one left
+release 4: one op-0x0d per root mastered here whose directory is another member
+still two out
+the REAL 82/0d (frame 121) answers our MSCP$LOADBAL record
+the barrier goes on; the window is stopped
+the engine records that directory as told
+the second record is on the wire
+the window's worth go at once
+two out
+with the doors unbound nothing is sent and nothing held
+EOF
+                      ;;
+        esac;;
+
+    dirreg-answer-not-recorded)
+        case "$_f" in
+        facility)     echo "the directory's 82/0d answer to a re-registration records that directory as the one holding the entry, so only it is told to remove it (rd vms-fdeb, rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_dirreg";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_rm_dr_answer() frees the slot without telling the engine, so an entry the directory confirmed is never removed when the resource goes: the directory keeps a stale entry naming OVMX as master.";;
+        require_fail) hd_lines <<'EOF'
+*** the re-registered entry is removed from the directory that answered ***
+...and every one is recorded told
+each answer sends the next: all ten
+every record answered: the barrier goes on
+one left
+the engine records that directory as told
+the same answer twice is not taken twice
 EOF
                       ;;
         esac;;
@@ -3388,6 +3639,52 @@ EOF
                       ;;
         esac;;
 
+    dlm-966e-at-requester-refused)
+        case "$_f" in
+        facility)     echo "a lookup the vector directs at the REQUESTER itself, for a name this node's table names the requester master of, is answered 0xf9 from the entry (vms_dlm_dir_lookup_directed VMS_DLM_DIR_AT_REQUESTER, rd vms-966e)";;
+        targets)      echo "kernel-core/vms_dlm_dir.c";;
+        suites_red)   echo "test_dlm_transition_enq";;
+        isolation)    echo "isolated";;
+        why)          echo "the shipped state the cluster demo caught: VAXC's op-0x01 at barrier step 0x0a, sent under the vector the running join replaced for a lock this node had told it 'you master it', is refused as undirected and never answered, and VAXC hangs in STARTUP before Username: (cap-966e r3 4821, r5 3859).";;
+        require_fail) hd_lines <<'EOF'
+*** r3 (A,B,C), OVMXB: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***
+*** r5 (C,A,B), OVMXA: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***
+*** r10 (C,A,B), OVMXA: VAXC's op-0x01 at step 0x0a, its directory now OVMXB, is ANSWERED you-master-it from the entry naming it -- the demo, on the PR #2023 fix, got no answer ***
+it is counted as the requester's-own-directory answer
+and not as a refusal
+EOF
+                      ;;
+        esac;;
+
+    dlm-966e-elsewhere-refused)
+        case "$_f" in
+        facility)     echo "a lookup the vector directs at a THIRD member, for a name this node's table names the requester master of, is answered 0xf9 from the entry (vms_dlm_dir_lookup_directed VMS_DLM_DIR_ELSEWHERE, rd vms-966e r10)";;
+        targets)      echo "kernel-core/vms_dlm_dir.c";;
+        suites_red)   echo "test_dlm_transition_enq";;
+        isolation)    echo "isolated";;
+        why)          echo "the state ae84d1fc6 shipped: the PR #2023 answer covered only a vector naming the requester; VAXC's step-0x0a re-send of a lookup in flight when its transition began, for a name the new vector directs at OVMXB, is refused and never answered, and VAXC hangs in STARTUP before Username: (cap-966e r10 4179).";;
+        require_fail) hd_lines <<'EOF'
+*** r10 (C,A,B), OVMXA: VAXC's op-0x01 at step 0x0a, its directory now OVMXB, is ANSWERED you-master-it from the entry naming it -- the demo, on the PR #2023 fix, got no answer ***
+it is counted as the requester's-own-directory answer
+and not as a refusal
+EOF
+                      ;;
+        esac;;
+
+    dlm-966e-elsewhere-refused-fuzz)
+        case "$_f" in
+        facility)     echo "the op-0x01 directory fuzz holds that an entry naming the requester answers 0xf9 whether the vector names the requester or a third member (fuzz_dlm_dir_directed, rd vms-966e r10)";;
+        targets)      echo "kernel-core/vms_dlm_dir.c";;
+        suites_red)   echo "fuzz_dlm_dir_directed";;
+        isolation)    echo "isolated";;
+        why)          echo "the same mutation as dlm-966e-elsewhere-refused, observed by the fuzz: a third-member lookup with an entry naming the requester is refused.";;
+        require_fail) hd_lines <<'EOF'
+fuzz-966e-r10: an entry naming the requester is answered you-master-it when the vector names a THIRD member
+fuzz-966e: at the requester, you-master-it comes ONLY from an entry naming it
+EOF
+                      ;;
+        esac;;
+
     dlm-b4d-undirected-answers-you-fuzz)
         case "$_f" in
         facility)     echo "the op-0x01 directory fuzz holds the undirected-never-0xf9 property over random bodies and table state (fuzz_dlm_dir_directed, rd vms-b4d)";;
@@ -3398,6 +3695,8 @@ EOF
         require_fail) hd_lines <<'EOF'
 fuzz-b4d: an undirected name with no entry is never answered you-master-it
 fuzz-b4d: an undirected lookup records nothing
+fuzz-966e: at the requester, you-master-it comes ONLY from an entry naming it
+fuzz-966e: an at-requester lookup records nothing
 EOF
                       ;;
         esac;;
@@ -3815,6 +4114,26 @@ EOF
                       ;;
         esac;;
 
+    tt-oper-line-splices-write)
+        case "$_f" in
+        facility)     echo "an executive operator line never splits a write request going out on the terminal (vms_tt_oper.h vms_tt_oper_submit, rd vms-896d): it is held until the request ends, then written on a line of its own, CR LF after it, as VMS's terminal driver writes a message to a terminal";;
+        targets)      echo "kernel-core/vms_tt_oper.h";;
+        suites_red)   echo "test_tt_oper";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_oper_submit() stops holding a line while a write request is going out (if (writing) -> if (0 && writing)): the line is written the moment it arrives, between two pieces of the request -- the P0-proof console where OPCOM's operator-status record was cut at 'OPER9, OP' and its rest glued on as 'system OVMXBER10,', which the visitor gate read as NOT CN=3.";;
+        require_fail) hd_lines <<'EOF'
+OPCOM's whole record, then the executive line on a line of its own, CR LF after it
+OPCOM's record is not split ('OPER9, OPER10,' intact)
+cuts at which the console differs from record-then-line
+nothing written while the request goes out
+both lines follow the write, in arrival order, each on its own line
+a piece ending is not the request ending
+the hold is bounded
+... and keeps the line held
+EOF
+                      ;;
+        esac;;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -3832,6 +4151,10 @@ EOF
 apply_edit() {
     _file="$1"; _d="$2"
     case "$_d" in
+    tt-oper-line-splices-write)
+        # `\tif (writing) {` is unique in vms_tt_oper.h.
+        sed -i 's|^\tif (writing) {$|\tif (0 \&\& writing) { /* NEGCTL tt-oper-line-splices-write */|' "$_file";;
+
     dlm-f29f-deferred-grant-not-read)
         # The GRANT dispatch with that exact spelling is unique in the file.
         sed -i 's|\treturn dq_dispatch(f, r, DLM_REQ_EV_GRANT, \&e);|\treturn DLM_REQ_E_NOLOCK; /* NEGCTL dlm-f29f-deferred-grant-not-read */|' "$_file";;
@@ -3839,6 +4162,10 @@ apply_edit() {
     dlm-f29f-deferred-grant-declined-by-the-arm)
         # The opcode test is unique in vms_dlm_scs.c.
         sed -i 's|\t    req->opcode == (uint8_t)VMS_DLM_WIREOP_GRANT_NOTIFY) {|\t    req->opcode == (uint8_t)VMS_DLM_WIREOP_GRANT_NOTIFY \&\& 0) { /* NEGCTL dlm-f29f-deferred-grant-declined-by-the-arm */|' "$_file";;
+
+    dlm-7649-f11b-lock-takes-the-mounters-identity)
+        # The XQP's one $ENQ door; its stated-identity argument is unique.
+        sed -i 's|    return vms_enq_core_ident(proc, a, NULL, \&vms_f11b_lock_ident);|    return vms_enq_core_ident(proc, a, NULL, NULL); /* NEGCTL dlm-7649-f11b-lock-takes-the-mounters-identity */|' "$_file";;
 
     quorum-form-set-ignores-peers)
         # The ONE unconditional add of a CSB's votes into the cold-formation
@@ -3909,9 +4236,42 @@ apply_edit() {
         # The release's own admission line, unique in this file.
         sed -i 's|^\tif (op == VMS_DLM_WIREOP_DEQ)$|\tif (0) /* NEGCTL dlm-release-opens-a-transaction */|' "$_file";;
 
+    dlm-d63-release-queue-drops-the-value-block)
+        # The release queue's copy of the write mark; the comment line ahead
+        # of it is unique in vms_dlm_scs_fsm.c.
+        perl -0pi -e 's|(/\* rd vms-d63: the written value block rides with the release\. \*/\n\tif \()p->write_valblk|${1}0 \&\& p->write_valblk /* NEGCTL dlm-d63-release-queue-drops-the-value-block */|' "$_file";;
+
+    dlm-d63-request-asks-for-no-value-block)
+        # The request-flag write; unique in vms_cluster_codec_dlm.c.
+        sed -i 's|^\tif (opcode == VMS_DLM_WIREOP_ENQ \&\& req->req_flags != 0u)$|\tif (0 \&\& opcode == VMS_DLM_WIREOP_ENQ \&\& req->req_flags != 0u) /* NEGCTL dlm-d63-request-asks-for-no-value-block */|' "$_file";;
+
+    dlm-d63-sub-request-carries-no-hash)
+        # The one call that gives a sub-resource its hash; unique. Removing it
+        # consumes the anchor, so a second apply cannot match.
+        sed -i 's|^        enq_sub_take_tree_hash(res);$|        ; /* NEGCTL dlm-d63-sub-request-carries-no-hash */|' "$_file";;
+
+    dlm-d63-xqp-lock-not-system)
+        # The F11B$s request's flags in vms_lock_acp_file_ser; unique.
+        sed -i 's|^    a.flags = LCK_M_SYNC \| LCK_M_VALBLK \| LCK_M_SYSTEM \| LCK_M_SYNCSTS;$|    a.flags = LCK_M_SYNC \| LCK_M_VALBLK \| LCK_M_SYNCSTS; /* NEGCTL dlm-d63-xqp-lock-not-system */|' "$_file";;
+
+    dlm-623-sublock-in-own-directory)
+        # The sub-resource guard on the own-directory consult is one line,
+        # unique in this file; replacing it consumes the anchor.
+        sed -i 's|    if (!inbound \&\& res->parent == NULL \&\&$|    if (!inbound \&\& /* NEGCTL dlm-623-sublock-in-own-directory */|' "$_file";;
+
+    dlm-d63-release-writes-no-value-block)
+        # The $DEQ arm of write_valblk; unique in vms_lock.c.
+        sed -i 's|^                       (op == VMS_DLM_POST_DEQ \&\&$|                       (op == VMS_DLM_POST_DEQ \&\& 0 \&\& /* NEGCTL dlm-d63-release-writes-no-value-block */|' "$_file";;
+
+    dlm-d63-read-holder-writes-the-master-block)
+        # The mode guard on the master's store; unique in vms_lock.c.
+        sed -i 's|^        lock->granted_mode >= LCK_K_PWMODE)$|        1) /* NEGCTL dlm-d63-read-holder-writes-the-master-block */|' "$_file";;
+
     dlm-release-carries-the-lock-mode)
         # The release builder's own measured-cell line, unique in this file.
-        sed -i 's|^\tvms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);$|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_DEQ_REL_CELL, d->rel_cell); /* NEGCTL dlm-release-carries-the-lock-mode */|' "$_file";;
+        # (rd vms-d63 moved the no-write release's cell write into an else
+        # branch, one tab deeper.)
+        sed -i 's|^\t\tvms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);$|\t\tvms_wire_put_u8(\&w, VMS_OFF_DLM_DEQ_REL_CELL, d->rel_cell); /* NEGCTL dlm-release-carries-the-lock-mode */|' "$_file";;
 
     dlm-local-convert-grants-nobody)
         # The immediate convert branch's grant pass. Distinguished from the
@@ -4060,10 +4420,19 @@ apply_edit() {
         sed -i 's|\td->dir_master_unserved++;|\td->dir_self_held++; /* NEGCTL dlm-master-unserved-said-as-not-mastered */|' "$_file"
         sed -i 's|"resource this node MASTERS, and it could not be served as "|"resource this node itself holds locks on and does not "|' "$_file";;
 
+    dlm-1e58-noqueue-not-read)
+        # The NOQUEUE test is unique in the header.
+        sed -i 's|\t    (e->req_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u)|\t    (e->req_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u \&\& 0) /* NEGCTL dlm-1e58-noqueue-not-read */|' "$_file";;
+
+    dlm-1e58-deny-record-not-written)
+        # The NOTQUEUED record's one write is unique in the codec.
+        sed -i 's|vms_wire_put_le32(\&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_NOTQUEUED_REC_VAL);|vms_wire_put_le32(\&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_QUEUED_REC_VAL); /* NEGCTL dlm-1e58-deny-record-not-written */|' "$_file";;
+
     dlm-own-directory-not-consulted)
-        # `if (!inbound && dlm_route_own_directory(res, route, dst_csid, &st))`
-        # is unique in this file.
-        sed -i 's|if (!inbound \&\& dlm_route_own_directory(res, route, dst_csid, \&st))|if (0 \&\& !inbound \&\& dlm_route_own_directory(res, route, dst_csid, \&st)) /* NEGCTL dlm-own-directory-not-consulted */|' "$_file";;
+        # The own-directory consult's second line,
+        # `        dlm_route_own_directory(res, route, dst_csid, &st))`, is unique
+        # in this file (its first line carries rd vms-623's sub-resource guard).
+        sed -i 's|^        dlm_route_own_directory(res, route, dst_csid, \&st))|        0 \&\& dlm_route_own_directory(res, route, dst_csid, \&st)) /* NEGCTL dlm-own-directory-not-consulted */|' "$_file";;
 
     dlm-dir-matched-by-name-alone)
         # `if (e->id.group != b->group || e->id.mode != b->mode)` is unique.
@@ -4611,6 +4980,18 @@ apply_edit() {
         # `if (res->dir_told_csid == 0u || res->dir_told_csid != dir)` is unique in this file.
         sed -i 's#if (res->dir_told_csid == 0u || res->dir_told_csid != dir)#if (0 \&\& res->dir_told_csid != dir) /* NEGCTL dir-remove-unregistered-entry */#' "$_file";;
 
+    dir-told-survives-transition)
+        # `if (res->dir_told_csid != 0u) {` is unique in this file.
+        sed -i 's#if (res->dir_told_csid != 0u) {#if (0 \&\& res->dir_told_csid != 0u) { /* NEGCTL dir-told-survives-transition */#' "$_file";;
+
+    dirreg-not-sent-at-release-4)
+        # `if (step != VMS_DLM_DR_REL_STEP) {` is unique in this file.
+        sed -i 's#if (step != VMS_DLM_DR_REL_STEP) {#if (1 || step != VMS_DLM_DR_REL_STEP) { /* NEGCTL dirreg-not-sent-at-release-4 */#' "$_file";;
+
+    dirreg-answer-not-recorded)
+        # `if (f->ops->dr_told(f->ops->ctx, &s->id, s->dst))` is unique in this file.
+        sed -i 's#if (f->ops->dr_told(f->ops->ctx, &s->id, s->dst))#if (0 \&\& f->ops->dr_told(f->ops->ctx, \&s->id, s->dst)) /* NEGCTL dirreg-answer-not-recorded */#' "$_file";;
+
     pe-blk-frame-unringed)
         # `if (op != 0u && total <= PE_VC_FRAME_MAX)` is unique in this file.
         sed -i 's|if (op != 0u \&\& total <= PE_VC_FRAME_MAX)|if (0 \&\& op != 0u \&\& total <= PE_VC_FRAME_MAX) /* NEGCTL pe-blk-frame-unringed */|' "$_file";;
@@ -4765,6 +5146,14 @@ apply_edit() {
     dlm-b4d-undirected-answers-you)
         # `\tif (directed_here)` is unique (vms_dlm_dir_lookup_directed).
         sed -i 's|^\tif (directed_here)$|\tif (1 \|\| directed_here) /* NEGCTL dlm-b4d-undirected-answers-you */|' "$_file";;
+
+    dlm-966e-at-requester-refused)
+        # The at-requester entry test is the only line of this shape.
+        sed -i 's|^\t\t\t    e->master == requester) {$|\t\t\t    e->master == requester \&\& 0) { /* NEGCTL dlm-966e-at-requester-refused */|' "$_file";;
+
+    dlm-966e-elsewhere-refused|dlm-966e-elsewhere-refused-fuzz)
+        # ae84d1fc6's table: only a vector naming the requester answers from the entry.
+        sed -i 's|^\t\t\t    e->master == requester) {$|\t\t\t    e->master == requester \&\& directed_here != VMS_DLM_DIR_ELSEWHERE) { /* NEGCTL dlm-966e-elsewhere-refused */|' "$_file";;
 
     dlm-b4d-undirected-answers-you-fuzz)
         sed -i 's|^\tif (directed_here)$|\tif (1 \|\| directed_here) /* NEGCTL dlm-b4d-undirected-answers-you-fuzz */|' "$_file";;

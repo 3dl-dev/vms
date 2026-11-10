@@ -384,6 +384,12 @@ struct vms_getcli_args {
 #define VMS_CREPRC_PCB_DETACHED   1u
 #define VMS_CREPRC_PCB_CONTINUE   2u   /* DCL's image task: the SAME VMS process (rd vms-e50) */
 #define VMS_CREPRC_PCB_F_LOGIN    0x100u
+/* OR'd into flags (rd vms-89dd8): $CREPRC was given a quota list. `pgflquota`
+ * carries PQL$_PGFLQUOTA from it (0 = the list did not name one); the executive
+ * sources the new process's PGFLQUOTA from it, else the LOADED SYSGEN
+ * PQL_DPGFLQUOTA, clamped up to the loaded PQL_MPGFLQUOTA (VMS_IOCTL_PQL_LOAD;
+ * never loaded = left unsourced), and marks the quota block sourced (va_quota_check). */
+#define VMS_CREPRC_PCB_F_QUOTA    0x800u
 #define VMS_CREPRC_PCB_F_NETWORK  0x400u   /* detached: PRC$M_NETWRK, a network object's server (JPI$K_NETWORK) */
 #define VMS_CREPRC_PCB_F_IDENTITY 0x200u
 #define VMS_CREPRC_PCB_KIND(f)    ((f) & 0xFFu)
@@ -395,9 +401,85 @@ struct vms_creprc_pcb_args {
     uint32_t vms_pid;                     /* out: the new process's VMS PID    */
     uint64_t privs;                       /* in: DETACHED privileges           */
     uint32_t status;                      /* out: SS$_ status                  */
+    uint32_t pgflquota;                    /* in: PQL$_PGFLQUOTA (F_QUOTA), pagelets */
+    uint32_t mbxunt;                      /* in: termination mailbox unit, 0 = none (rd vms-6d9) */
     uint32_t pad;
 };
+
+/*
+ * THE TERMINATION MAILBOX (rd vms-6d9). `mbxunt` names a mailbox (MBA<mbxunt>:)
+ * the creator holds a channel to -- $CREPRC's mbxunt argument (OpenVMS System
+ * Services Reference, $CREPRC: a mailbox to receive a termination message
+ * when the created process is deleted); a unit the creator holds no channel
+ * to is refused SS$_NOSUCHDEV. When the process is deleted the EXECUTIVE
+ * writes one struct vms_exec_mbxmsg (msgtyp VMS_EXEC_MBXMSG_TERM) into it,
+ * after the process's resources are released.
+ *
+ * For DCL's image task (VMS_CREPRC_PCB_CONTINUE) the same mailbox also hears a
+ * CTRL/Y: when the terminal driver fires a CTRL/Y AST armed by another task
+ * of the image's VMS process (DCL), the executive stops the image task and
+ * writes msgtyp VMS_EXEC_MBXMSG_CTRLY -- so DCL, blocked reading the mailbox,
+ * learns of the interrupt from the executive, whatever the image does with
+ * substrate signals.
+ *
+ * OVMX DESIGN CHOICE (Rule 8): this record is OVMX's own, not the VMS ACC$
+ * termination message (MSG$_DELPRC + accounting), whose full layout is a
+ * follow-on for sys$creprc's mbxunt. finalsts sits at offset 4.
+ */
+#define VMS_EXEC_MBXMSG_TERM  1u
+#define VMS_EXEC_MBXMSG_CTRLY 2u
+struct vms_exec_mbxmsg {
+    uint16_t msgtyp;      /* VMS_EXEC_MBXMSG_*                         */
+    uint16_t has_status;  /* TERM: 1 iff the process recorded finalsts */
+    uint32_t finalsts;    /* TERM: the final condition, else SS$_ABORT */
+    uint32_t pid;         /* the process's VMS PID                     */
+    uint32_t task_pid;    /* its substrate task id                     */
+};
 #define VMS_IOCTL_CREPRC_PCB _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x9a, struct vms_creprc_pcb_args)
+
+/*
+ * $CREPRC's creation record (rd vms-416d; kernel-core/vms_proctab.c,
+ * vms_ioctl_creprc_sync). The creator and the task it forked synchronise
+ * through this executive object -- never a host pipe. ARRIVE and HOLD may be
+ * issued by a task with no PCB (the forked task, the detach intermediate); they
+ * do not make it one.
+ */
+#define VMS_CREPRC_SYNC_OPEN    1u  /* creator: out rec                                */
+#define VMS_CREPRC_SYNC_ARRIVE  2u  /* task: names itself; waits; out value=PCB status, vms_pid */
+#define VMS_CREPRC_SYNC_ACCEPT  3u  /* creator: in pid=fork child to watch; out pid=task */
+#define VMS_CREPRC_SYNC_ANSWER  4u  /* creator: in value=PCB status, vms_pid            */
+#define VMS_CREPRC_SYNC_HOLD    5u  /* detach intermediate: in pid=grandchild to watch   */
+#define VMS_CREPRC_SYNC_REPORT  6u  /* task: in value=creation status                    */
+#define VMS_CREPRC_SYNC_RESULT  7u  /* creator: out value=the task's report              */
+#define VMS_CREPRC_SYNC_CLOSE   8u  /* creator                                           */
+struct vms_creprc_sync_args {
+    uint32_t op;        /* in: VMS_CREPRC_SYNC_*                                 */
+    uint32_t rec;       /* in/out: the record                                    */
+    uint32_t pid;       /* in/out: substrate pid (see the op)                    */
+    uint32_t value;     /* in/out: a posted status (see the op)                  */
+    uint32_t vms_pid;   /* in/out: the new process's VMS PID                     */
+    uint32_t status;    /* out: SS$_ status of the op (SS$_ABORT: the other side
+                         * died or gave up)                                      */
+    uint32_t pad[2];
+};
+#define VMS_IOCTL_CREPRC_SYNC _IOWR(VMS_PROCTAB_IOC_MAGIC, 0xc6, struct vms_creprc_sync_args)
+
+/*
+ * VMS_IOCTL_PQL_LOAD (rd vms-89dd8) -- hand the executive the SYSGEN
+ * PQL_DPGFLQUOTA / PQL_MPGFLQUOTA (pagelets) $CREPRC uses for a process whose
+ * creator gave a quota list. STARTUP.EXE issues it at boot from
+ * SYS$SYSTEM:OVMXVMSSYS.PAR; the executive holds no value of its own, so until
+ * it is called (or after VMS_PQL_LOAD_F_CLEAR) a quota-list child is left
+ * unsourced. Needs CMKRNL, as loading SYSGEN state does.
+ */
+#define VMS_PQL_LOAD_F_CLEAR      1u    /* forget the loaded pair (never-loaded state) */
+struct vms_pql_load_args {
+    uint32_t dpgflquota;                  /* in: PQL_DPGFLQUOTA, pagelets      */
+    uint32_t mpgflquota;                  /* in: PQL_MPGFLQUOTA, pagelets      */
+    uint32_t flags;                       /* in: VMS_PQL_LOAD_F_*              */
+    uint32_t status;                      /* out: SS$_ status                  */
+};
+#define VMS_IOCTL_PQL_LOAD _IOWR(VMS_PROCTAB_IOC_MAGIC, 0xc7, struct vms_pql_load_args)
 
 /*
  * VMS_IOCTL_DASSGN (vms-329) -- $DASSGN, release one assigned channel. Also
@@ -498,6 +580,38 @@ struct vms_pprop_args {
     uint32_t pad;
 };
 #define VMS_IOCTL_PPROP             _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x77, struct vms_pprop_args)
+
+/*
+ * Byte-identical to src/kernel/vms_ioctl.h.
+ * THE LOGIN DATA LOGINOUT LEAVES FOR THE CLI (rd vms-838b). On VMS, LOGINOUT
+ * builds the process and DCL learns from process state, never from an argument
+ * list, that it is starting a login: LOGINOUT writes the process's login data in
+ * KERNEL MODE while it logs the process in, and the CLI reads it when it gets
+ * control. Here the executive's PCB holds it:
+ *   flags     VMS_LGI_F_LOGIN -- LOGINOUT logged this process in (DCL runs
+ *             SYLOGIN and the login command procedure). Clear in every other
+ *             process: a DCL that finds it clear is a plain, non-login CLI.
+ *   uaf_flags the account's SYSUAF login flags, in the UAI$_FLAGS layout $GETUAI
+ *             returns (UAI$M_CAPTIVE, UAI$M_DISCTLY, ...).
+ *   lgicmd    the login command file (SYSUAF LGICMD, or LOGINOUT's documented
+ *             SYS$LOGIN:LOGIN.COM default), NUL-terminated; uaf$t_lgicmd is 64.
+ * VMS_LGI_OP_GET reads the caller's own. VMS_LGI_OP_SET stores it under the SAME
+ * gate as SETIDENT: CMKRNL enabled, in a LOGIN process before the image after
+ * LOGINOUT runs -- no image may write its own login data. OVMX design choice
+ * (Rule 8): the byte layout of this ioctl.
+ */
+#define VMS_LGI_OP_GET   0u
+#define VMS_LGI_OP_SET   1u
+#define VMS_LGI_F_LOGIN  0x00000001u
+#define VMS_LGICMD_SIZE  64
+struct vms_lgi_args {
+    uint32_t op;                     /* in:  VMS_LGI_OP_*              */
+    uint32_t status;                 /* return: SS$_ status            */
+    uint32_t flags;                  /* in (SET) / out (GET): VMS_LGI_F_* */
+    uint32_t uaf_flags;              /* in / out: UAI$_FLAGS layout    */
+    char     lgicmd[VMS_LGICMD_SIZE]; /* in / out: NUL-terminated spec */
+};
+#define VMS_IOCTL_LGI             _IOWR(VMS_PROCTAB_IOC_MAGIC, 0xB6, struct vms_lgi_args)
 
 /*
  * The PROCESS RIGHTS LIST (vms-7d5a): the identifiers a process holds besides its
@@ -626,14 +740,22 @@ _Static_assert(sizeof(struct vms_pprop_args) == 24,
                "vms_pprop_args layout changed: VMS_IOCTL_PPROP ABI break");
 _Static_assert(VMS_IOCTL_PPROP == 0xC0185677u,
                "VMS_IOCTL_PPROP encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_lgi_args) == 16 + VMS_LGICMD_SIZE,
+               "vms_lgi_args layout changed: VMS_IOCTL_LGI ABI break");
+_Static_assert(VMS_IOCTL_LGI == 0xC05056B6u,
+               "VMS_IOCTL_LGI encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_rights_args) == 24 + 8 * VMS_RIGHTS_MAX,
                "vms_rights_args layout changed: VMS_IOCTL_RIGHTS ABI break");
 _Static_assert(sizeof(struct vms_pri_args) == 24,
                "vms_pri_args layout changed: VMS_IOCTL_PRI ABI break");
 _Static_assert(sizeof(struct vms_brkauth_args) == 8,
                "vms_brkauth_args layout changed: VMS_IOCTL_BRKAUTH ABI break");
-_Static_assert(sizeof(struct vms_creprc_pcb_args) == 64,
+_Static_assert(sizeof(struct vms_exec_mbxmsg) == 16,
+               "vms_exec_mbxmsg layout changed: termination mailbox ABI break");
+_Static_assert(sizeof(struct vms_creprc_pcb_args) == 72,
                "vms_creprc_pcb_args layout changed: VMS_IOCTL_CREPRC_PCB ABI break");
+_Static_assert(sizeof(struct vms_creprc_sync_args) == 32,
+               "vms_creprc_sync_args layout changed: VMS_IOCTL_CREPRC_SYNC ABI break");
 _Static_assert(sizeof(struct vms_procctl_args) == 16,
                "vms_procctl_args layout changed: VMS_IOCTL_PROCCTL ABI break");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,

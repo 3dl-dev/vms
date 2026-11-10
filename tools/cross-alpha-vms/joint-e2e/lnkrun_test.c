@@ -62,12 +62,13 @@ int main(void)
     cc[6] = "-o"; cc[7] = "VDA0:[SYSTMP]HELLO.S"; cc[8] = 0;
     as[0] = "as"; as[1] = "-o"; as[2] = "VDA0:[SYSTMP]HELLO.OBJ";
     as[3] = "VDA0:[SYSTMP]HELLO.S"; as[4] = 0;
-    ln[0] = "link"; ln[1] = "--transfer"; ln[2] = "__main";
-    ln[3] = "--use"; ln[4] = "SYS$SHARE:DECC$SHR.EXE";
-    ln[5] = "--use"; ln[6] = "SYS$SHARE:LIBOTS_SHR.EXE";
-    ln[7] = "-o"; ln[8] = "VDA0:[SYSTMP]HELLO.EXE";
-    ln[9] = "SYS$SYSTEM:CRT0.OBJ"; ln[10] = "VDA0:[SYSTMP]HELLO.OBJ";
-    ln[11] = "--library"; ln[12] = "SYS$SYSTEM:STARLET.A"; ln[13] = 0;
+    /* LINK takes the VMS LINK command (rd vms-3cb1); the transfer symbol is the
+     * GCC port's __main, the linker's default for an EVAX executable. */
+    ln[0] = "link"; ln[1] = "/EXECUTABLE=VDA0:[SYSTMP]HELLO.EXE/NOSYSLIB/NOSYSSHR";
+    ln[2] = "SYS$SYSTEM:CRT0.OBJ,VDA0:[SYSTMP]HELLO.OBJ,"
+            "SYS$SHARE:DECC$SHR.EXE/SHAREABLE,SYS$SHARE:LIBOTS_SHR.EXE/SHAREABLE,"
+            "SYS$SYSTEM:STARLET.A/LIBRARY";
+    ln[3] = 0;
     int ok = stage("cc1", "SYS$SYSTEM:CC1.EXE", cc);
     if (ok)
         ok = stage("as", "SYS$SYSTEM:AS.EXE", as);

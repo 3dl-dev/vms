@@ -1,0 +1,26 @@
+# creprc-pql-default-hardcoded -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREPRC quota list: a list without PGFLQUOTA takes the SYSGEN PQL_DPGFLQUOTA the executive was loaded with (VMS_IOCTL_PQL_LOAD), never a constant (vms_ioctl_creprc_pcb, kernel-core/vms_proctab.c, rd vms-89dd8)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_va";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_creprc_pcb ignores the loaded PQL_DPGFLQUOTA and applies a hard-coded default, so a quota list without PGFLQUOTA sources the wrong limit. Proves the executive reads the loaded state.";;
+        require_fail) cat <<'EOF'
+creprc: a list without PGFLQUOTA takes the loaded PQL_DPGFLQUOTA (6000)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^                    pg = dpg;$|                    pg = 131072u; /* NEGCTL creprc-pql-default-hardcoded */|' "$_file"
+    :
+}

@@ -1,0 +1,28 @@
+# creprc-quota-list-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREPRC quota list: the executive sources a new process's PGFLQUOTA from PQL\$_PGFLQUOTA / PQL_D*, clamped by PQL_M* (vms_ioctl_creprc_pcb, kernel-core/vms_proctab.c, rd vms-89dd8)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_va";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_creprc_pcb ignores the quota list: the new process is never given a sourced PGFLQUOTA, so va_quota_check never refuses it. One condition, forced off.";;
+        require_fail) cat <<'EOF'
+creprc: a listed PQL$_PGFLQUOTA of 5000 sources the subprocess's PGFLQUOTA; $EXPREG past it is SS$_EXQUOTA
+creprc: a listed PGFLQUOTA below the loaded PQL_MPGFLQUOTA is clamped up to it (3000)
+creprc: a list without PGFLQUOTA takes the loaded PQL_DPGFLQUOTA (6000)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        if (np \&\& (args.flags \& VMS_CREPRC_PCB_F_QUOTA)) {$|        if (np \&\& 0 /* NEGCTL creprc-quota-list-ignored */) {|' "$_file"
+    :
+}

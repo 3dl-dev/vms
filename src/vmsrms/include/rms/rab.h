@@ -53,6 +53,11 @@ struct RAB {
     uint16_t rab$w_rsz;         /* Record size (after $GET) */
     uint8_t  rab$b_rac;         /* Record access mode */
     uint8_t  rab$b_krf;         /* Key of reference */
+    /* Record header buffer: a VFC record's fixed control area (fab$b_fsz
+     * bytes). $GET moves the control here and the data to UBF; $PUT writes
+     * the control from here (zeroes when 0). VMS RMS Reference, RAB$L_RHB;
+     * in VMS field order, after RBF and before KBF (rabdef.h: 40 / 44 / 48). */
+    char    *rab$l_rhb;
     char    *rab$l_kbf;         /* Key buffer address */
     uint8_t  rab$b_ksz;         /* Key buffer size */
     uint32_t rab$l_bkt;         /* Bucket (relative record number) */

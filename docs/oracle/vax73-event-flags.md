@@ -269,5 +269,5 @@ nobody pinned.
 ## Reproducing
 
 The lab console for VAX1 is reachable on the SIMH DZ mux at `127.0.0.1:2001`; log in
-prompt-synchronised (`Username:` → `SYSTEM`, `Password:` → `system`) — see
+prompt-synchronised (`Username:` → `SYSTEM`, `Password:` → `$LAB_PW`) — see
 `~/vax/cluster/README-lab.md` §"Operator runbook".

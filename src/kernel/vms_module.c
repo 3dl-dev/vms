@@ -1595,6 +1595,7 @@ uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint3
     proc->pid_ref = cpid;               /* the reference find_get_pid took */
     proc->current_mode = PSL_C_USER;
     proc->owner_vms_pid = creator->vms_pid;
+    proc->owner_linux_pid = (uint32_t)creator->linux_pid;
     vms_proc_init_state(proc);
     /* BG channels (rd vms-2a5): an image task (CONTINUE) and a subprocess
      * take the creator's open BGn: channels, by number, host sockets
@@ -1775,6 +1776,12 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * every other ioctl below refuses it with -ESRCH (SS$_NONEXPR). */
     if (cmd == VMS_IOCTL_ESTABLISH_SYSTEM)
         return vms_ioctl_establish_system(vms_proc_find_or_err(), arg);
+    /* $CREPRC's creation record (rd vms-416d): the task $CREPRC forked, and
+     * its detach intermediate, have no PCB yet when they ARRIVE / HOLD; the
+     * facility takes the caller's PCB as NULL then and makes none. Every
+     * creator-side op refuses a caller without one. */
+    if (cmd == VMS_IOCTL_CREPRC_SYNC)
+        return vms_ioctl_creprc_sync(vms_proc_find_or_err(), arg);
 
     /*
      * E47 (docs/cluster-integration-notes.md): the three cluster
@@ -2035,6 +2042,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_ddir(proc, arg);
     case VMS_IOCTL_PPROP:
         return vms_ioctl_pprop(proc, arg);
+    case VMS_IOCTL_LGI:
+        return vms_ioctl_lgi(proc, arg);
     case VMS_IOCTL_RIGHTS:
         return vms_ioctl_rights(proc, arg);
     case VMS_IOCTL_PRI:
@@ -2045,6 +2054,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_procctl(proc, arg);
     case VMS_IOCTL_CREPRC_PCB:        /* rd vms-c43 */
         return vms_ioctl_creprc_pcb(proc, arg);
+    case VMS_IOCTL_PQL_LOAD:          /* rd vms-89dd8 */
+        return vms_ioctl_pql_load(proc, arg);
 
     /* /NOWAIT subprocess-exit completion arm (vms-e9a B1, LIB$SPAWN efn/astadr) */
     case VMS_IOCTL_SPAWN_NOTIFY:
@@ -2126,6 +2137,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_bg_getname(proc, arg);
     case VMS_IOCTL_BG_SOCKOPT:
         return vms_ioctl_bg_sockopt(proc, arg);
+    case VMS_IOCTL_BG_IFLIST:
+        return vms_ioctl_bg_iflist(proc, arg);
+    case VMS_IOCTL_BG_SELECT:
+        return vms_ioctl_bg_select(proc, arg);
     case VMS_IOCTL_BG_BIND:
         return vms_ioctl_bg_bind(proc, arg);
     case VMS_IOCTL_BG_LISTEN:
@@ -2158,6 +2173,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     /* Process virtual address space: $EXPREG/$CRETVA/$DELTVA (rd vms-bc53) */
     case VMS_IOCTL_VA:
         return vms_ioctl_va(proc, arg);
+
+    /* System time: $GETTIM/$GETUTC/$SETIME (rd vms-642, kernel-core/vms_systime.c) */
+    case VMS_IOCTL_SYSTIME:
+        return vms_ioctl_systime(proc, arg);
 
     /* P1 control region (vms-68f.ii, same design, increment (ii)) */
     case VMS_IOCTL_P1_MAP:
@@ -2235,6 +2254,7 @@ static void vms_process_ended(pid_t tgid, struct pid *ref)
         spin_lock(&vms_proc_hash_lock);
         vms_proc_termination_post_locked(&t);
         spin_unlock(&vms_proc_hash_lock);
+        vms_proc_termination_mailbox(&t);            /* may sleep (rd vms-6d9) */
     }
 }
 
@@ -2600,6 +2620,7 @@ static int __init vms_init(void)
         return ret;
     }
     vms_eflag_init();
+    vms_creprc_sync_init();     /* rd vms-416d: $CREPRC's creation record */
 
     /*
      * Bring up the device table before /dev/vms exists, so that the
@@ -2612,6 +2633,7 @@ static int __init vms_init(void)
         pr_err("vms: failed to initialize device table: %d\n", ret);
         vms_lock_cleanup();
         vms_eflag_cleanup();
+        vms_creprc_sync_cleanup();
         kmem_cache_destroy(vms_proc_cache);
         return ret;
     }
@@ -2640,6 +2662,7 @@ static int __init vms_init(void)
         vms_devtab_cleanup();
         vms_lock_cleanup();
         vms_eflag_cleanup();
+        vms_creprc_sync_cleanup();
         kmem_cache_destroy(vms_proc_cache);
         return ret;
     }
@@ -2651,6 +2674,10 @@ static int __init vms_init(void)
     /* Files-11 (ODS-2) ACP mounted-volume table (vms-149) -- starts empty,
      * nothing that can fail here (see vmsfs_acp.c's vms_acp_init()). */
     vms_acp_init();
+
+    /* The system time cell (rd vms-642, kernel-core/vms_systime.c): cannot
+     * fail; exec_lock_destroy is a no-op on Linux, so no unwind. */
+    vms_systime_init();
 
     /* Register /dev/vms */
     /* The process-exit hook comes up BEFORE the device can be opened: no PCB
@@ -2680,6 +2707,7 @@ static int __init vms_init(void)
         vms_devtab_cleanup();
         vms_lock_cleanup();
         vms_eflag_cleanup();
+        vms_creprc_sync_cleanup();
         kmem_cache_destroy(vms_proc_cache);
         return ret;
     }
@@ -2827,10 +2855,12 @@ static void __exit vms_exit(void)
     /* Cleanup subsystems */
     vms_lock_cleanup();
     vms_eflag_cleanup();
+    vms_creprc_sync_cleanup();
     vms_devtab_cleanup();
     vms_lnm_cleanup();
     vms_mbx_cleanup();
     vms_acp_cleanup();
+    vms_systime_cleanup();           /* rd vms-642 */
     exec_bdev_cache_release_all();   /* rd vms-648: close cached ACP backing handles */
 
     kmem_cache_destroy(vms_proc_cache);

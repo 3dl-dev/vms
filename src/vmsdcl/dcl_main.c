@@ -6,6 +6,7 @@
  * prompt, command line editing, history, and symbol substitution.
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +30,7 @@
 #include "dcl/terminal.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_mbx.h"
+#include "dcl/dcl_in.h"
 #include "ovmx_cli.h"
 #include "ssdef.h"
 #include "vms/pcb.h"
@@ -53,6 +55,19 @@ struct dcl_context *dcl_get_context(void)
 /* Forward declarations */
 int dcl_execute_line(const char *line);
 int dcl_execute_script(const char *filename, int argc, char **argv);
+
+/* A login procedure runs only if RMS can open it (on VMS LOGINOUT skips a
+ * missing SYLOGIN/LOGIN.COM silently). Probed with RMS $OPEN, not a host
+ * stat() of a passthrough path: the file may be on any mounted volume. */
+static int login_proc_exists(const char *spec)
+{
+    uint32_t st = 0;
+    struct dcl_rms_reader *r = dcl_rms_read_open(&dcl_ctx, spec, &st);
+    if (!r)
+        return 0;
+    dcl_rms_read_close(r);
+    return 1;
+}
 int dcl_format_directory(const char *linux_path, char *vms_dir, size_t dir_size);
 void dcl_set_status(struct dcl_context *ctx, int status);
 
@@ -269,9 +284,21 @@ static void sigint_handler(int sig)
 
     pid_t child = (pid_t)dcl_running_child;
     if (child > 0 && dcl_ctx.ctrl_y_enabled) {
-        /* Stop the running child process — VMS Ctrl-Y behavior */
+        /* Stop the running child process — VMS Ctrl-Y behavior. When the
+         * terminal is the executive's, the executive has already stopped the
+         * image and told DCL's wait mailbox (rd vms-6d9, vms_proc_ctrly_image);
+         * this substrate stop covers a terminal that is not, and the marker
+         * below ends DCL's mailbox read for it. */
         kill(child, SIGTSTP);
-        /* The waitpid in the caller (with WUNTRACED) will pick up the stop */
+        extern volatile sig_atomic_t dcl_wait_mbx_chan;
+        uint32_t wc = (uint32_t)dcl_wait_mbx_chan;
+        if (wc) {
+            struct vms_exec_mbxmsg em;
+            memset(&em, 0, sizeof em);
+            em.msgtyp = VMS_EXEC_MBXMSG_CTRLY;
+            em.task_pid = (uint32_t)child;
+            (void)vms_kif_mbx_write_ex(wc, &em, sizeof em, 1);
+        }
         return;
     }
 
@@ -341,10 +368,10 @@ static int dcl_emit_ctrl_t_status(void)
      * above). JPI$_IMAGNAME would be sourced here once OVMX tracks it. */
     if (dcl_format_ctrl_t_status(&info, node, "", time(NULL),
                                  line, sizeof(line)) & 1) {
-        fputs("\r\n", stdout);
-        fputs(line, stdout);
-        fputs("\r\n", stdout);
-        fflush(stdout);
+        dcl_out_fputs("\r\n");
+        dcl_out_fputs(line);
+        dcl_out_fputs("\r\n");
+        dcl_out_flush();
         return 1;
     }
     return 0;
@@ -384,9 +411,9 @@ static void dcl_ctrlt_ast(uint32_t ch)
     /* at the DCL level no image runs, and VMS names the CLI there: "(DCL)"
      * (VAX V7.3 keystroke OOB.PROMPT T/T2) */
     if (dcl_format_ctrl_t_status(&info, node, "(DCL)", time(NULL), line, sizeof(line)) & 1) {
-        fputs(line, stdout);
-        fputc('\n', stdout);
-        fflush(stdout);
+        dcl_out_fputs(line);
+        dcl_out_putc('\n');
+        dcl_out_flush();
     }
 }
 
@@ -503,9 +530,9 @@ static int dcl_ctrl_t_rl_handler(int count, int key)
  * -sourced "Last interactive login" line that read the raw accounting file
  * text instead of a formatted timestamp. Two emitters of one VMS surface is
  * exactly the drift the fidelity work exists to kill -- on the real runtime
- * DCL is always started by LOGINOUT (--login), which prints the authentic
- * sequence, and this ran only on the never-taken "vmsdcl interactive, no
- * --login" path. LOGINOUT is the one emitter.
+ * DCL is always started by LOGINOUT (its login data in the executive, rd
+ * vms-838b), which prints the authentic sequence, and this ran only on the
+ * never-taken non-login interactive path. LOGINOUT is the one emitter.
  */
 
 /*
@@ -721,37 +748,42 @@ int main(int argc, char *argv[])
      * DCL runs unchanged (INV-6, no per-process fake). */
     dcl_p1_init();
 
-    /* Check for --login flag, and the login command file LOGINOUT hands over
-     * with --lgicmd <spec> (vms-e48: the SYSUAF LGICMD field, already resolved
-     * to its documented default by LOGINOUT when the field was empty). */
+    /*
+     * THE LOGIN DATA LOGINOUT LEFT IN THE EXECUTIVE (rd vms-838b). On VMS
+     * LOGINOUT builds the process and DCL learns from process state -- never
+     * from its argument list -- that it is starting a login, the account's
+     * UAF flags and its login command file. DCL.EXE parses no argv flags: a
+     * DCL whose process LOGINOUT did not log in (no VMS_LGI_F_LOGIN, or no
+     * executive) is a plain, non-login CLI.
+     */
     int login_mode = 0;
-    int captive_mode = 0;   /* vms-c8fa: --captive from LOGINOUT */
-    const char *login_lgicmd = NULL;
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--login") == 0) {
-            login_mode = 1;
-            dcl_ctx.logged_in = 1;
-        } else if (strcmp(argv[i], "--captive") == 0) {
-            captive_mode = 1;
-        } else if (strcmp(argv[i], "--lgicmd") == 0 && i + 1 < argc) {
-            login_lgicmd = argv[++i];
-        }
+    int captive_mode = 0;   /* vms-c8fa: UAI$M_CAPTIVE */
+    uint32_t lgi_flags = 0, lgi_uaf = 0;
+    char login_lgicmd[VMS_LGICMD_SIZE] = "";
+    if ((vms_kif_lgi(VMS_LGI_OP_GET, &lgi_flags, &lgi_uaf, login_lgicmd,
+                     sizeof(login_lgicmd)) & 1) && (lgi_flags & VMS_LGI_F_LOGIN)) {
+        login_mode = 1;
+        dcl_ctx.logged_in = 1;
+        captive_mode = (lgi_uaf & UAI$M_CAPTIVE) != 0;
     }
 
     /*
-     * CAPTIVE ACCOUNT (vms-c8fa). LOGINOUT passes --captive for an account
-     * whose SYSUAF record carries the CAPTIVE flag. A captive account is
-     * confined to its login command procedure and cannot escape to the DCL
-     * command level: "Because the DISCTLY flag in the UAF record is turned on,
-     * any use of Ctrl/Y fails" (OpenVMS Guide to System Security, "Captive
-     * Accounts"). Disable Ctrl/Y now, BEFORE the login command procedure runs
-     * below, so the procedure cannot be interrupted to reach a bare "$"
-     * prompt. The REPL itself is suppressed for captive logins further down
-     * (see the login_mode block), so the session runs only the procedure and
-     * then logs out. Non-captive logins are untouched (ctrl_y stays enabled).
+     * CAPTIVE ACCOUNT (vms-c8fa). A captive account is confined to its login
+     * command procedure and cannot escape to the DCL command level: "Because
+     * the DISCTLY flag in the UAF record is turned on, any use of Ctrl/Y
+     * fails" (OpenVMS Guide to System Security, "Captive Accounts"). Disable
+     * Ctrl/Y now, BEFORE the login command procedure runs below, so the
+     * procedure cannot be interrupted to reach a bare "$" prompt. The REPL
+     * itself is suppressed for captive logins further down (see the
+     * login_mode block), so the session runs only the procedure and then logs
+     * out. DISCTLY alone disables Ctrl/Y without the confinement.
      */
-    if (captive_mode)
+    if (captive_mode || (login_mode && (lgi_uaf & UAI$M_DISCTLY)))
         dcl_ctx.ctrl_y_enabled = 0;
+
+    /* SYS$OUTPUT/SYS$ERROR: DCL's records go where the process-permanent
+     * files name -- the terminal driver, a file through RMS (rd vms-1b6a). */
+    dcl_out_bind_ppf();
 
     /* Check for -c "command" mode */
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
@@ -782,8 +814,13 @@ int main(int argc, char *argv[])
      * unchanged. Placed AFTER the -c and script early-returns so only the
      * persistent-REPL invocation consults it. */
     int mbx_bound = dcl_mbx_bind_std_streams();
-    if (mbx_bound & DCL_MBX_BOUND_INPUT)
-        dcl_ctx.interactive = 0;   /* a mailbox is never an interactive TTY */
+    if (mbx_bound & DCL_MBX_BOUND_OUTPUT)
+        dcl_out_bind_ppf();        /* DCL's records to the mailbox by $QIO (rd vms-1b6a) */
+    /* SYS$INPUT a mailbox or a command file: DCL reads its records itself,
+     * $QIO IO$_READVBLK / RMS $GET (dcl_in.c, rd vms-4d27) */
+    int in_routed = dcl_in_bind_ppf() != DCL_IN_ROUTE_NONE;
+    if (in_routed)
+        dcl_ctx.interactive = 0;   /* a mailbox or a file is never an interactive TTY */
 
     /* Interactive mode */
     if (dcl_ctx.interactive) {
@@ -821,7 +858,6 @@ int main(int argc, char *argv[])
 
     /* Execute login scripts when in login mode */
     if (login_mode) {
-        struct stat st;
 
         /*
          * ESTABLISH THE PER-USER IDENTITY LOGICALS (vms-e48).
@@ -849,26 +885,22 @@ int main(int argc, char *argv[])
                                       dcl_ctx.default_dir);
 
         /* System-wide login script */
-        char sylogin_linux[1024];
-        vmsfs_to_linux_path(SYLOGIN_PATH, sylogin_linux, sizeof(sylogin_linux));
-        if (stat(sylogin_linux, &st) == 0 && S_ISREG(st.st_mode)) {
-            dcl_execute_script(sylogin_linux, 0, NULL);
+        if (login_proc_exists(SYLOGIN_PATH)) {
+            dcl_execute_script(SYLOGIN_PATH, 0, NULL);   /* RMS opens the VMS spec */
         }
 
         /*
-         * Per-user login command file: the SYSUAF LGICMD field LOGINOUT handed
-         * over via --lgicmd, or the documented SYS$LOGIN:LOGIN.COM default
-         * (vms-e48). Resolved through vmsfs_to_linux_path(), which translates
-         * the SYS$LOGIN logical just defined above -- NOT getenv("SYS$LOGIN")
+         * Per-user login command file: the SYSUAF LGICMD field LOGINOUT left in
+         * the executive (VMS_IOCTL_LGI), or the documented SYS$LOGIN:LOGIN.COM default
+         * (vms-e48). Found by RMS, which translates the SYS$LOGIN logical just
+         * defined above and reaches any mounted volume -- NOT getenv("SYS$LOGIN")
          * with a hardcoded "/LOGIN.COM" tail, and NOT the SYSUAF field ignored.
          */
         const char *lgicmd_spec =
-            (login_lgicmd && login_lgicmd[0]) ? login_lgicmd
+            login_lgicmd[0] ? login_lgicmd
                                               : SYSUAF_DEFAULT_LGICMD;
-        char user_login[1024];
-        if (vmsfs_to_linux_path(lgicmd_spec, user_login, sizeof(user_login)) == 1
-            && stat(user_login, &st) == 0 && S_ISREG(st.st_mode)) {
-            dcl_execute_script(user_login, 0, NULL);
+        if (login_proc_exists(lgicmd_spec)) {
+            dcl_execute_script(lgicmd_spec, 0, NULL);    /* RMS opens the VMS spec */
         }
 
         /*
@@ -964,33 +996,25 @@ int main(int argc, char *argv[])
                 /* DCL_TT_NODRIVER: no executive terminal behind TT: -- a
                  * developer's host build run outside the OVMX runtime. Read
                  * the descriptor plainly; nothing reprograms it. */
-                static char fgets_buf[DCL_MAX_LINE];
-                printf("%s", dcl_ctx.prompt);
-                fflush(stdout);
-                if (!fgets(fgets_buf, sizeof(fgets_buf), stdin)) {
-                    if (feof(stdin) && !ferror(stdin) && isatty(STDIN_FILENO) &&
-                        ++ctrlz_run <= 64) {
-                        clearerr(stdin);
-                        printf("\n");
+                static char fb_buf[DCL_MAX_LINE];
+                if (dcl_in_get(dcl_ctx.prompt, fb_buf, sizeof(fb_buf)) < 0) {
+                    if (dcl_in_rearm() && ++ctrlz_run <= 64) {
+                        dcl_out_printf("\n");
                         continue;
                     }
-                    printf("\n");
+                    dcl_out_printf("\n");
                     break;
                 }
                 ctrlz_run = 0;
-                size_t flen = strlen(fgets_buf);
-                if (flen > 0 && fgets_buf[flen - 1] == '\n')
-                    fgets_buf[flen - 1] = '\0';
-                line = strdup(fgets_buf);
+                line = strdup(fb_buf);
                 if (!line) break;
             }
         } else {
-            /* Non-interactive: read from stdin */
+            /* Non-interactive: the next record of SYS$INPUT -- a mailbox
+             * message ($QIO), a command file record (RMS $GET), or the
+             * substrate stream (dcl_in.c) */
             static char buf[DCL_MAX_LINE];
-            if (!fgets(buf, sizeof(buf), stdin)) break;
-            /* Remove trailing newline */
-            size_t len = strlen(buf);
-            if (len > 0 && buf[len - 1] == '\n') buf[len - 1] = '\0';
+            if (dcl_in_get(NULL, buf, sizeof(buf)) < 0) break;
             line = strdup(buf);
             if (!line) break;
         }
@@ -1013,23 +1037,13 @@ int main(int argc, char *argv[])
                     if (cn >= 0) {
                         cont = strdup(ccbuf);
                     } else if (cn == DCL_TT_NODRIVER) {
-                        printf("_$ ");
-                        fflush(stdout);
-                        if (fgets(ccbuf, sizeof(ccbuf), stdin)) {
-                            size_t clen = strlen(ccbuf);
-                            if (clen > 0 && ccbuf[clen - 1] == '\n')
-                                ccbuf[clen - 1] = '\0';
+                        if (dcl_in_get("_$ ", ccbuf, sizeof(ccbuf)) >= 0)
                             cont = strdup(ccbuf);
-                        }
                     }
                 } else {
                     static char cbuf[DCL_MAX_LINE];
-                    if (fgets(cbuf, sizeof(cbuf), stdin)) {
-                        size_t clen = strlen(cbuf);
-                        if (clen > 0 && cbuf[clen - 1] == '\n')
-                            cbuf[clen - 1] = '\0';
+                    if (dcl_in_get(NULL, cbuf, sizeof(cbuf)) >= 0)
                         cont = strdup(cbuf);
-                    }
                 }
 
                 if (cont) {
@@ -1083,16 +1097,14 @@ int main(int argc, char *argv[])
      * and joins the writer thread, so the parent's last read is not lost to
      * process exit. A no-op when SYS$INPUT/SYS$OUTPUT were not mailboxes. */
     dcl_mbx_shutdown();
+    dcl_in_shutdown();
 
     /* Cleanup */
     /* Deallocate terminal device */
     vms_term_deallocate(dcl_ctx.terminal.device_name);
     /* Close any open channels (stdio streams AND RMS reader/writer handles). */
     for (int i = 0; i < 16; i++) {
-        if (dcl_ctx.channels[i].fp) {
-            fclose(dcl_ctx.channels[i].fp);
-            dcl_ctx.channels[i].fp = NULL;
-        }
+        dcl_ctx.channels[i].ppf = 0;
         if (dcl_ctx.channels[i].reader) {
             dcl_rms_read_close(dcl_ctx.channels[i].reader);
             dcl_ctx.channels[i].reader = NULL;
@@ -1111,7 +1123,7 @@ int main(int argc, char *argv[])
      * input without an EXIT or LOGOUT ends with the status of the last command, as
      * the subprocess's completion status; a command that failed is not reported as a
      * success to the creator (system() returns it). */
-    if ((mbx_bound & DCL_MBX_BOUND_INPUT) && !dcl_ctx.exit_requested && !dcl_ctx.logout_requested)
+    if (in_routed && !dcl_ctx.exit_requested && !dcl_ctx.logout_requested)
         return (dcl_ctx.last_status & 1) ? 0 : 1;
 
     return dcl_ctx.exit_status;

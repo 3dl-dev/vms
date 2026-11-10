@@ -273,7 +273,7 @@ RUN cd /src/repo && \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
         -DOVMX_CRTL_FD_STATIC=ON \
-    && cmake --build build-static --target qemu_syssvc_tests qemu_corpus_rt vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests qemu_corpus_rt vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vmslink_image vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
     echo "--- PIPESTAGE.EXE (the stage image test_syssvc_spawn_pipeline drives, vms-e9a B2) ---" && \
@@ -484,16 +484,7 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_sysvol \
         /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
         /src/vmsfs/ods2/ods2_edit.c \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
-    /src/tests/qemu/mkimage_ods2_sysvol /ods2_sysvol.img 48 \
-        /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT \
-        /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT \
-        SYSEXE:TCC.EXE=/src/repo/build-static/bin/TCC.EXE \
-        SYSEXE:LIBRARIAN.EXE=/src/repo/build-static/bin/LIBRARIAN.EXE \
-        SYSEXE:LINK.EXE=/src/repo/build-static/bin/LINK.EXE \
-        SYSEXE:IMGACT.EXE=/src/repo/src/imgact/IMGACT.EXE \
-        'SYSLIB:DECC$SHR.EXE=/src/repo/build-static/bin/DECC$SHR.EXE' \
-        $(for f in /src/repo/build-static/native/*.EXE; do \
-            [ -f "$f" ] && echo "SYSEXE:$(basename "$f")=$f"; done)
+    sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img
 
 # GENERATED ODS-2 volume carrying a real ELF image [IMGACT]TESTIMG.EXE for the
 # IMGACT-over-ACP proof (vms-3e8e, epic vms-208). mkimage_ods2_imgact.c lays the
@@ -511,6 +502,22 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -I/src/tests/qemu \
         /src/vmsfs/ods2/ods2_edit.c \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
     /src/tests/qemu/mkimage_ods2_imgact /ods2_imgact.img 1
+
+# GENERATED cluster-factor-3 ODS-2 volume for the extend-in-clusters proof (rd
+# vms-563). mkimage_ods2_cluster3.c formats with the same writer, lays down
+# [000000]FILLER.DAT and EVAC.DAT, then converts the volume to cluster factor 3
+# (tests/ods2/ods2_cluster_fixture.h). Staged as /ods2_cluster3.img, which
+# run_tests.sh puts on the virtio-scsi disk (SDA0:); test_syssvc_acp_cluster3
+# $MOUNTs it and extends EVAC.DAT.
+COPY tests/qemu/mkimage_ods2_cluster3.c /src/tests/qemu/
+COPY tests/ods2/ods2_cluster_fixture.h /src/tests/ods2/
+RUN gcc -O2 -Wall -I/src/vmsfs/include -I/src/tests/ods2 \
+        -o /src/tests/qemu/mkimage_ods2_cluster3 \
+        /src/tests/qemu/mkimage_ods2_cluster3.c \
+        /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_edit.c \
+        /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
+    /src/tests/qemu/mkimage_ods2_cluster3 /ods2_cluster3.img
 # Locate the kernel image (may already exist as symlink)
 RUN KVER=$(cat /tmp/kver) && \
     if [ ! -e /boot/vmlinuz ]; then \
@@ -526,8 +533,14 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # Busybox provides sh, mount, insmod, reboot, grep, etc.
     cp /bin/busybox /initramfs/bin/busybox && \
     ln -s busybox /initramfs/bin/sh && \
-    # Kernel modules
-    cp /src/kernel/vms.ko /initramfs/lib/modules/ && \
+    # Kernel modules. vms.ko goes in WITHOUT its DWARF (objcopy --strip-debug;
+    # the symbol table stays, so an Oops still names functions). The guest
+    # never reads the debug sections, and they are ~18 MB of a 20 MB module:
+    # the initramfs unpacks into the guest's RAM (run_tests.sh -m 512M), and
+    # every MB it holds is a MB the suites cannot stage into at run time
+    # (see the INITRAMFS BUDGET check at the pack step below). Host-side
+    # debugging keeps the full /src/kernel/vms.ko in this image.
+    objcopy --strip-debug /src/kernel/vms.ko /initramfs/lib/modules/vms.ko && \
     # veth.ko (rd FC-P0.2, test_kmod_cluster_seam.c): the R3 substrate
     # contract test needs a REAL veth pair (CONFIG_VETH ships as a module on
     # this stock kernel, not built in), so the guest that loads vms.ko also
@@ -635,7 +648,10 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || \
       { echo "FATAL: DCL.EXE was not built into the static tree -- SHOW SYSTEM would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/bin/DCL.EXE && \
-    cp /initramfs/bin/DCL.EXE /initramfs/tests/DCL.EXE && \
+    # /tests/DCL.EXE is the SAME file as /bin/DCL.EXE: a hard link, which the
+    # newc archive and the guest's rootfs hold once, so the second name costs
+    # none of the initramfs budget (INITRAMFS BUDGET, below).
+    ln /initramfs/bin/DCL.EXE /initramfs/tests/DCL.EXE && \
     # PIPESTAGE.EXE (vms-e9a B2): the representative pipeline-stage image
     # test_syssvc_spawn_pipeline.c $CREPRC's as a stand-in for a real GCC stage.
     # Staged at /bin/PIPESTAGE.EXE (the path the suite hard-codes). It matches no
@@ -713,7 +729,7 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # descrip.mms defines LNK :== $/vms/.../LINK.EXE (absolute path). Absence is
     # FATAL: a missing LINK.EXE would turn the driven-link + activation assertions
     # into a no-op (the suite would report the image never appeared) job-green.
-    { cp /src/repo/build-static/bin/LINK.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || \
+    { cp /src/repo/build-static/bin/sysexe/LINK.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || \
       { echo "FATAL: LINK.EXE was not built into the static tree -- the MMK-driven link would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE && \
     # IMGACT.EXE at SYS$SYSTEM (vms-725) -- the image activator the MMK-driven
@@ -748,6 +764,20 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE \
         /initramfs/vms/SYS0/SYSCOMMON/SYSLIB full && \
     ls -la /initramfs/vms/SYS0/SYSCOMMON/SYSLIB/*'$SHR.EXE' && \
+    # THE SYSTEM'S DECC$SHR IS THE RMS-BACKED ONE (rd vms-569). This image's musl
+    # has the system-call funnel (src/crtl-musl-x86_64, above), so the graph just
+    # built relinked DECC$SHR with its C RTL layer over RMS and VMS channels
+    # (lib_build_graph.sh -> mk_decc_shr.sh's RMS-backed pass): an activated
+    # image's files, terminals, pipes, clock and signals are VMS's, as on Alpha.
+    # It keeps every universal's index, so images linked against the first
+    # DECC$SHR still bind. It becomes THE DECC$SHR: build-static/bin (which
+    # inject_and_run.sh re-masters from) and SYS$LIBRARY on the system volume,
+    # re-mastered here because the volume was mastered before the graph existed.
+    grep -q 'ovmx_crtl_fd_install' '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' || \
+      { echo "FATAL: SYS\$LIBRARY:DECC\$SHR.EXE is not the RMS-backed pass (no ovmx_crtl_fd_install universal) -- the activated C RTL would be the substrate's"; exit 1; } && \
+    cp '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' '/src/repo/build-static/bin/DECC$SHR.EXE' && \
+    rm -f /ods2_sysvol.img && \
+    sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img /initramfs/vms/SYS0/SYSCOMMON/SYSLIB && \
     # EVACWL.EXE (vms-06c, the ci.6 evacuation workload): the SAME VMS-native
     # TCC.EXE + LINK.EXE --use build the corpus images use, for the bespoke
     # (non-corpus) EVAC$WORKLOAD lock-and-append workload
@@ -795,6 +825,26 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     sh /src/repo/tests/lab/ci6/mk_rmhold_native.sh \
         /src/repo/build-static/bin/LINK.EXE \
         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RMHOLD.EXE \
+        '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' \
+        '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/LIBVMS$SHR.EXE' && \
+    # SOCKECHO.EXE (rd vms-99f): the VMS-native BSD-sockets program the DECC$SHR
+    # sockets proof (test_syssvc_decc_socket) runs under a syscall audit. Linked
+    # --use the very SYS$LIBRARY DECC$SHR staged above (.vms$imp binds by
+    # symbol-vector INDEX), activator baked at this harness's IMGACT path -- the
+    # same two reasons RMHOLD is built here.
+    IMGACT_INTERP_PATH=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE \
+    sh /src/repo/tests/qemu/sockecho/mk_sockecho_native.sh \
+        /src/repo/build-static/bin/LINK.EXE \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/SOCKECHO.EXE \
+        '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' && \
+    # CRTLSHR.EXE (rd vms-569): a C program linked --use DECC$SHR (+ LIBVMS$SHR
+    # for lib$establish), the subject test_syssvc_crtl_shr.c RUNs from DCL to
+    # prove the activated C RTL's terminals, pipes, names, clock and signals are
+    # VMS's. Same activator-path rule as RMHOLD just above.
+    CC=musl-gcc IMGACT_INTERP_PATH=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE \
+    sh /src/repo/tests/qemu/crtlshr/mk_crtlshr_native.sh \
+        /src/repo/build-static/bin/LINK.EXE \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/CRTLSHR.EXE \
         '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' \
         '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/LIBVMS$SHR.EXE' && \
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include && \
@@ -945,7 +995,22 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     chmod +x /initramfs/init && \
     # Pack initramfs
     cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz && \
-    echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
+    echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')" && \
+    # INITRAMFS BUDGET (rd vms-0a7 S1, PR #1994). The guest unpacks this archive
+    # into RAM-backed rootfs inside run_tests.sh's 512 MB, and the suites stage
+    # images into that same rootfs (DCL's lazy SYS$SYSTEM staging, IMGACT's
+    # /run/ovmx-boot). Measured with -m 512M: a 193.1 MB unpacked archive does
+    # not boot ("Initramfs unpacking failed: write error", kernel panic); a
+    # slightly smaller one (82 MB gzipped) booted but ran out of room mid-shard,
+    # which surfaced as test_syssvc_mmk_build's %DCL-E-IVIMAGE for
+    # SYS$SYSTEM:LINK.EXE (the fourth image the drive stages); a 182.8 MB one
+    # ran clean, and the same 193.1 MB tree passes with -m 1024M. Fail the build here,
+    # by name, rather than let a full guest show up as an unrelated suite's red.
+    INITRAMFS_BYTES=$(gzip -dc /initramfs.cpio.gz | wc -c) && \
+    INITRAMFS_BUDGET=$((176 * 1024 * 1024)) && \
+    echo "$INITRAMFS_BUDGET" > /initramfs.budget && \
+    echo "Initramfs unpacked: $INITRAMFS_BYTES bytes (budget $INITRAMFS_BUDGET)" && \
+    { [ "$INITRAMFS_BYTES" -le "$INITRAMFS_BUDGET" ] || { echo "FATAL: the unpacked initramfs is $INITRAMFS_BYTES bytes, over the $INITRAMFS_BUDGET-byte budget -- the 512 MB guest would run out of RAM-backed rootfs mid-run (or fail to unpack it at all). Shrink what the initramfs carries, or raise run_tests.sh's -m together with this budget."; exit 1; }; }
 
 # --- Per-facility negative controls (vms-e7d) ----------------------------
 #

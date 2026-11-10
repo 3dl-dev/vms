@@ -1,0 +1,26 @@
+# creprc-handshake-host-pipe -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREPRC's creator and created task synchronise through the executive's creation record (VMS_IOCTL_CREPRC_SYNC), never a host pipe (src/libvms/syssvc/sys_process.c, rd vms-416d)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_creprc_nopipe_audit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation puts a host pipe back into the creation handshake: \$CREPRC makes a pipe(2) pair (and closes it) right before it opens the creation record, the shape of the pre-vms-416d handshake's first pipe. Non-fatal: the creation still runs through the record and succeeds, so only the no-host-pipe assertion of the audit reddens (it sees the pipe syscall in the creator). The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+NO host pipe: no pipe/pipe2/socketpair across $CREPRC and the created processes' runs
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i '/NEGCTL-ANCHORED (creprc-handshake-host-pipe)/{n;s|^    uint32_t rec = 0;$|    uint32_t rec = 0; { int hp[2]; if (pipe(hp) == 0) { close(hp[0]); close(hp[1]); } } /* NEGCTL creprc-handshake-host-pipe */|}' "$_file"
+    :
+}

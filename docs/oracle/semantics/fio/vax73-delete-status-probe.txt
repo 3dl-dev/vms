@@ -1,0 +1,69 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod labfio node VAX1, captured 2026-11-02 by
+#   tools/oracle/semantic/capture.py --dcl (commands run as SYSTEM; output verbatim).
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+
+$ OPEN/WRITE C T.COM
+
+
+$ WRITE C "$ SET NOON"
+
+
+$ WRITE C "$ OPEN/WRITE F SPD.TMP"
+
+
+$ WRITE C "$ CLOSE F"
+
+
+$ WRITE C "$ DELETE SPD.TMP;*"
+
+
+$ WRITE C "$ WRITE SYS$OUTPUT ""D="",$STATUS"
+
+
+$ WRITE C "$ CLOSE NOTOPEN"
+
+
+$ WRITE C "$ X = 1"
+
+
+$ WRITE C "$ WRITE SYS$OUTPUT ""A="",$STATUS"
+
+
+$ WRITE C "$ CLOSE NOTOPEN"
+
+
+$ WRITE C "$ WRITE SYS$OUTPUT ""C="",$STATUS"
+
+
+$ WRITE C "$ CALL S1"
+
+
+$ WRITE C "$ WRITE SYS$OUTPUT ""S1="",$STATUS"
+
+
+$ WRITE C "$ EXIT"
+
+
+$ WRITE C "$ S1: SUBROUTINE"
+
+
+$ WRITE C "$ CLOSE NOTOPEN"
+
+
+$ WRITE C "$ ENDSUBROUTINE"
+
+
+$ CLOSE C
+
+
+$ @T.COM
+D=%X10000001
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+A=%X00030001
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+C=%X00038188
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+S1=%X00030001
+
+$ DELETE T.COM;*
+

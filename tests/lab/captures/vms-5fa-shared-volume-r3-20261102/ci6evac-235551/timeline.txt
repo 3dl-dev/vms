@@ -1,0 +1,10 @@
+23:55:51 T0 share ci6evac-235551 on pod lab5fa3; OVMX node OVMXE; volume EVAC5FA = VAX1 $2$DUA2:; [CI6E11022355]; capture /home/baron/projects/vms/.worktrees/cluster-5fa-r3/tests/lab/captures/vms-5fa-shared-volume-r3-20261102/ci6evac-235551
+23:56:57 STAGED EVACWL.EXE on VAX1
+23:58:04 S1 OVMXE names VAX1's $2$DUA2: as VAX1$DUA16386:
+23:59:03 S1 EVAC5FA mounted on VAX1 ($2$DUA2:) and OVMXE (VAX1$DUA16386:)
+23:59:10 S2 round 1: VAX1 EVACWL 10 (EX), then OVMXE EVACWL 10 queued behind it
+00:00:09 S2 round 2: VAX1 EVACWL 10 (EX), then OVMXE EVACWL 10 queued behind it
+00:01:18 S3 VAX1 EVACWL (EX, forever); OVMXE EVACWL STANDBY 15 queued
+00:02:12 S3 EVACUATE: STOP EVACVAX1 on VAX1
+00:02:17 TAKEOVER: EVACWL: OVMXE took EVAC$WORKLOAD EX at seq 76
+00:05:24 END

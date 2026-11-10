@@ -344,6 +344,17 @@
  *
  *   void exec_task_unpin(exec_task_pin_t *pin)   drop the exec_task_pin ref.
  *
+ *   uint32_t exec_current_pid(void)                         (rd vms-416d)
+ *        the CURRENT process's id, as its own getpid() reports it. Linux:
+ *        task_tgid_vnr(current). NetBSD: curlwp->l_proc->p_pid.
+ *
+ *   int  exec_pid_running(uint32_t pid)                     (rd vms-416d)
+ *        nonzero iff process `pid` exists and has NOT exited (a zombie is not
+ *        running) -- the liveness test $CREPRC's creation record waits on for
+ *        a task that has no PCB yet. MAY take a sleeping substrate lock: never
+ *        call it holding an exec_lock. Linux: pid_task(find_vpid) with
+ *        exit_state/PF_EXITING clear. NetBSD: proc_find(9) under proc_lock.
+ *
  *   int  exec_task_signal(exec_task_ref_t *ref, int sig)   (rd vms-8e9)
  *        deliver EXEC_SIG_TERM / _FORCE / _STOP / _CONT to the whole process
  *        behind `ref`, from inside the executive, after the executive's own
@@ -615,6 +626,10 @@
  *        receive up to len bytes; returns the count (0 == orderly peer close /
  *        EOF), or negative on error. MAY SLEEP. Linux: kernel_recvmsg. NetBSD:
  *        uio -> soreceive.
+ *   long exec_socket_recv_now(exec_socket_t s, void *buf, size_t len)
+ *        exec_socket_recv that never waits (IO$M_NOW): negative -EAGAIN when no
+ *        data is queued. Linux: kernel_recvmsg(MSG_DONTWAIT). NetBSD: soreceive
+ *        with MSG_DONTWAIT.
  *   int  exec_socket_shutdown(exec_socket_t s)
  *        shut both directions down. Linux: kernel_sock_shutdown(SHUT_RDWR).
  *        NetBSD: soshutdown(SHUT_RDWR).
@@ -659,6 +674,33 @@
  *        read with exec_socket_getname. 0 (+ *out) / nonzero. MAY SLEEP.
  *        Linux: kernel_accept into a fresh kref'd holder. NetBSD: soqremque +
  *        soaccept off so_q (contract-only twin; the queue wait is vms-024).
+ *
+ *   int  exec_socket_iflist(exec_socket_t s, struct exec_ifent *ent,
+ *                           uint32_t max, uint32_t *count)   (rd vms-99f)
+ *        list the network interfaces of the network stack the socket s lives
+ *        in (TCPIP SHOW INTERFACE's source), filling at most `max` entries and
+ *        *count with the number filled. Per interface: its name, flags (IFF_*),
+ *        MTU, FIRST IPv4 address + mask (network order, 0 when it has none) and
+ *        link-layer address (hwlen 0..6). Every field is read from the live
+ *        stack, never synthesized. 0 / negative errno. MAY SLEEP.
+ *        Linux: for_each_netdev(sock_net(sk)) under rtnl_lock, dev_get_flags,
+ *        in_dev_for_each_ifa_rtnl, dev_addr. NetBSD: IFNET_READER_FOREACH +
+ *        IFADDR_READER_FOREACH(AF_INET) in a pserialize read section,
+ *        CLLADDR(if_sadl) (contract-only twin, like the rest of SS12 there).
+ *
+ *   int  exec_socket_wait_ready(exec_socket_t *s, uint32_t n,
+ *                               const uint32_t *want, uint32_t *got,
+ *                               long timeout_ms)                 (rd vms-99f)
+ *        the readiness wait behind the C RTL's select()/poll() on BG channels.
+ *        For each of the n sockets set got[i] to its live EXEC_RDY_* state
+ *        (IN/OUT as asked in want[i]; ERR/HUP always). If none is ready, sleep
+ *        on the sockets' own wait queues until one is or timeout_ms passes
+ *        (0 = do not sleep, < 0 = no limit). Returns the count of sockets with a
+ *        nonzero got[i] (0 = timed out), or -EINTR when a signal is pending.
+ *        MAY SLEEP. Linux: each socket's ->ops->poll with a poll_table whose
+ *        queue proc adds a wait entry (the do_select pattern). NetBSD:
+ *        soreadable/sowritable under solock, re-sensed on a kpause tick
+ *        (contract-only twin, like the rest of SS12 there).
  *
  * 13. Host AF_PACKET raw datalink socket (vms-7eb, auth slice of vms-1e4;
  *    called ONLY from src/kernel-core/vms_l2.c -- the executive-resident L2
@@ -1126,6 +1168,28 @@ typedef struct exec_lanbuf {
  * RULE 1.
  */
 typedef void (*exec_lan_rx_cb_t)(void *ctx, const uint8_t *frame, uint32_t len);
+
+/*
+ * One interface as exec_socket_iflist (SS12, rd vms-99f) reports it. Substrate-
+ * neutral (no ifnet / net_device), so it lives here beside exec_lanbuf_t. The
+ * facility copies it into the VMS_IOCTL_BG_IFLIST wire form (vms_bg.h).
+ */
+/* exec_socket_wait_ready's readiness bits (SS12, rd vms-99f); vms_bg.c pins
+ * them equal to the VMS_BG_RDY_* wire bits. */
+#define EXEC_RDY_IN   0x1u
+#define EXEC_RDY_OUT  0x2u
+#define EXEC_RDY_ERR  0x4u
+#define EXEC_RDY_HUP  0x8u
+
+struct exec_ifent {
+	char     name[16];   /* substrate interface name, NUL-terminated */
+	uint32_t flags;      /* IFF_* as the substrate reports them */
+	uint32_t mtu;
+	uint32_t addr;       /* first IPv4 address, network order (0 = none) */
+	uint32_t mask;       /* its netmask, network order (0 = none) */
+	uint8_t  hwaddr[6];
+	uint16_t hwlen;      /* 0..6 */
+};
 
 /*
  * Backend selection. Each substrate's build defines its own macro

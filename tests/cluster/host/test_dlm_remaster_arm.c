@@ -326,7 +326,10 @@ static const struct vms_dlm_rm_ops g_ops_template = {
 	/* rd vms-1b68: the survivors' end and the window's settle. */
 	NULL, NULL,
 	/* rd vms-5d6: the quorum-hang predicate, unbound (never hung). */
-	NULL
+	NULL,
+	/* rd vms-fdeb: the directory re-registration, unbound here
+	 * (test_dlm_dirreg binds it). */
+	NULL, NULL
 };
 
 static struct vms_dlm_rm_ops g_ops;

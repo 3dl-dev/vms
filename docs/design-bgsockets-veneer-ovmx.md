@@ -151,3 +151,131 @@ The BSD sockets API is POSIX. The VMS-facing surface the veneer speaks
 VSI OpenVMS TCP/IP Services docs + the already-landed BGn: driver — never VSI/HPE
 source. The veneer is labeled an OVMX design choice; no VMS-authentic byte-layout
 claim is made for it.
+
+## 8. DECC$SHR's sockets are $QIO on BGn: channels (vms-99f)
+
+**Finding.** DECC$SHR whole-archives musl `libc.a`. Its `socket`, `decc$socket`,
+`connect`, `send`, `recv`, `select`, `poll`, `getaddrinfo` and the rest were
+musl's: raw Linux socket system calls, plus musl's resolver, which sends DNS over
+Linux UDP. A VMS-linked program therefore did host-side Linux networking dressed
+up as VMS.
+
+**Rule (Baron, 2026-11-02).** No Linux libc and no Linux descriptor on the I/O
+path: every socket call ends in VMS system services on the BG channel, as TCP/IP
+Services' DECC$SHR does. An earlier draft of this item materialized the channel
+as a vms.ko `[bgconn]` fd and left `read`/`write`/`poll`/`select` as musl calls
+on it. That draft was rejected and is not what shipped.
+
+**Design: a socket descriptor names a channel.**
+`src/vmstcpip/sockets/ovmx_decc_sockets.c` is linked into DECC$SHR, and
+`mk_decc_shr.sh` binds every socket and resolver universal to it, together with
+the descriptor calls a program makes on a socket. Every operation is a `$QIO`
+function on the channel, issued through `src/libvms/include/bg_qio_func.h`. That
+file is the BGn: function map, and `sys$qio` uses the same file.
+
+| Call | $QIO on the channel |
+|------|--------------|
+| `socket()` | `$ASSIGN TCPIP$DEVICE:` + `IO$_SETMODE` (create) |
+| `connect()` | `IO$_ACCESS` (P1 = address) |
+| `bind()` / `listen()` | `IO$_SETMODE` (P1 = address / P3 = backlog) |
+| `accept()` | `$ASSIGN` a channel + `IO$_ACCESS\|IO$M_ACCEPT` |
+| `send`/`write`/`writev`/`sendto`/`sendmsg` | `IO$_WRITEVBLK` |
+| `recv`/`read`/`readv`/`recvfrom`/`recvmsg` | `IO$_READVBLK` |
+| `shutdown()` | `IO$_DEACCESS` |
+| `close()` | `$DASSGN` when the channel's last descriptor goes |
+| `setsockopt` / `getsockopt` | `IO$_SETMODE` / `IO$_SENSEMODE` with the P4 option list: a `TCPIP$C_SOCKOPT` / `_TCPOPT` / `_IPOPT` item_list_2 (the vms-a9e7 shape), one entry per option |
+| `getsockname` / `getpeername` | `IO$_SENSEMODE`, `IO$K_BG_SENSE_LOCAL` / `_PEER` |
+| `select()` / `poll()` | `IO$_SENSEMODE`, `IO$K_BG_SENSE_READY`: the executive's readiness wait |
+| `O_NONBLOCK`, `MSG_DONTWAIT`, `FIONBIO` | a zero-timeout readiness sense first; not ready gives `EAGAIN` |
+| `dup` / `dup2` / `fcntl(F_DUPFD)` | another descriptor naming the same channel; `O_NONBLOCK` is shared |
+
+The parameter layouts (P3 subfunction codes, the P4 list type and item codes, the 8-byte
+address block) are OVMX's own and are labelled as such in `iodef.h` (Rule 8).
+
+**The readiness wait.** `VMS_IOCTL_BG_SELECT` (`vms_ioctl_bg_select` in
+`src/kernel-core/vms_bg.c`) takes up to 64 channels, each with the conditions it
+waits for, and a timeout. The executive holds a reference on each channel's
+socket and asks each socket for its state through `exec_socket_wait_ready`. On
+Linux this is the `do_select` pattern on the socket's own `->ops->poll`: the first
+pass hangs a wait entry on each socket's wait queue, and the task then sleeps
+until a state change wakes it or the timeout runs out. The NetBSD twin re-senses
+`soreadable`/`sowritable` on a `kpause` tick. A signal ends the wait with
+`SS$_ABORT`, which `select`/`poll` report as `EINTR`. A channel with no socket
+gives `SS$_IVCHAN` and `POLLNVAL`. `select` reports that as `EBADF`.
+
+**The descriptor number.** The program still needs a small integer that no file
+will also get, so `FD_SET` and `poll` sets work. DECC$SHR reserves the number
+with a close-on-exec duplicate of its executive-device descriptor. Nothing is
+ever read, written or polled through that descriptor. The audit described
+below would count any such call.
+
+**Ordinary descriptors are unchanged.** On a descriptor that is not a socket,
+`read`, `write`, `close`, `poll`, `select` and the rest call musl's own entry
+point, exactly as before. A `poll`/`select` with no socket in it is musl's.
+
+**Transport.** DECC$SHR is a non-TLS producer and cannot link `vms_kif.c`, whose
+`/dev/vms` descriptor is `__thread`. It also has no `--use` of LIBVMS$SHR, so it
+cannot call `sys$qiow`. It keeps its own process-wide descriptor instead. It
+includes the shared BGn: marshalling (`src/libvmssys/vms_kif_bg_ops.h`, also
+included by `vms_kif.c`) and the shared `$QIO` function map
+(`bg_qio_func.h`, also included by `sys_qio.c`). The system services therefore
+have one definition, used by two images.
+
+**Honest failure.** With no `/dev/vms`, `$ASSIGN` fails `SS$_NOSUCHDEV` and
+`socket()` returns -1 with `ENODEV`. Unsupported cases fail with their own errors:
+`AF_INET6` and `AF_UNIX` through `socket()` give `EAFNOSUPPORT`, UDP and raw
+sockets give `EPROTOTYPE`, `FIONREAD` gives `EOPNOTSUPP`, and a non-socket
+descriptor given to a socket call gives `ENOTSOCK`.
+
+**Audit of every DECC$SHR entry that could reach the host network.**
+
+| Entry | Decision |
+|-------|----------|
+| socket, connect, bind, listen, accept, accept4, send, recv, sendto, recvfrom, sendmsg, recvmsg, shutdown, getsockname, getpeername, setsockopt, getsockopt | `$QIO` on the channel (above) |
+| read, write, readv, writev, close, dup, dup2, fcntl, ioctl, poll, select | On a socket: `$QIO` / `$DASSGN` (above). On any other descriptor: musl, unchanged. |
+| getaddrinfo, freeaddrinfo, getnameinfo, gethostbyname, gethostbyaddr | Numeric IPv4 only. Names fail `EAI_FAIL`/`NO_RECOVERY` until the BGn: UDP resolver (vms-a9e7). musl's resolver is never called. |
+| getservbyname, getservbyport | Return NULL. musl's version reads the host's `/etc/services`, not the node's services database, which is not wired yet. |
+| if_nametoindex, if_indextoname, if_nameindex | Fail. musl's version opens a Linux socket and queries the host's interfaces. |
+| socketpair | Stays musl: an AF_UNIX pair inside the process. Local IPC, not network. |
+| inet_*, hton*/ntoh*, gai_strerror, herror, hstrerror | Stay musl: pure conversions. |
+| getprotoby*, getprotoent, getnetby*, gethostent, getservent, set/end*ent | Stay musl: a static table or stubs that touch nothing. |
+| gethostname | Stays musl: `uname(2)`, the node's own name. |
+
+**Proof.** `tests/qemu/test_syssvc_decc_socket.c` runs SOCKECHO.EXE
+(`tests/qemu/sockecho/`), a BSD-sockets program linked with `LINK.EXE --use
+DECC$SHR` only, against a real `/dev/vms` under a ptrace system-call audit.
+- Bytes round-trip byte-exact with the suite's own executive listener through
+  send/recv, write/read, poll and select. The image also runs its own
+  bind/listen/accept leg, with `O_NONBLOCK` (`EAGAIN`), a waited-out `select`
+  timeout, a `poll` wake-up and `dup`.
+- The descriptor is not a Linux socket.
+- The audit counts zero Linux socket-family system calls and zero
+  poll/select-family calls. It also counts zero read/write-family calls on a
+  socket descriptor or on the executive device. Only `/dev/vms` ioctls carry
+  the socket's I/O.
+- With an empty `/dev`, `socket()` fails `ENODEV`, and the same counts are still
+  zero.
+
+Negative controls: `decc-socket-bound-to-musl` (socket() back to musl),
+`decc-socket-read-via-musl` (read() on a socket back to musl's read(2)) and
+`bg-select-revents-dropped` (the executive's readiness wait loses its answer).
+
+**Gaps (open).**
+- The Alpha DECC$SHR, built by the alpha branch of `mk_decc_shr.sh` from musl-alpha,
+  still exports musl's decc$ sockets.
+- No UDP sockets.
+- No half-close: `shutdown(SHUT_WR)` shuts both directions.
+- No `FIONREAD`.
+- A socket channel belongs to the process that made it, as a VMS channel does.
+  A forked child's calls on an inherited socket fail `EBADF`.
+- stdio on a socket (`fdopen`) reaches the descriptor that reserves the number
+  and fails. musl's stdio calls the system directly, so DECC$SHR never sees
+  the call.
+- A `poll`/`select` that mixes sockets with other descriptors alternates a 10 ms
+  executive wait with a zero-timeout poll of the others. Terminal readiness
+  through the executive is the follow-on.
+- (Closed.) `TCPIP SHOW INTERFACE` used a host datagram socket for its interface
+  probe, so the VMS-native DCL reported `%TCPIP-E-SOCKERR`. It now `$ASSIGN`s
+  `TCPIP$DEVICE:` and issues `IO$_SENSEMODE` with `IO$K_BG_SENSE_IFLIST`
+  (`VMS_IOCTL_BG_IFLIST`). With no executive it reports `%TCPIP-E-NOEXEC`.
+  `TCPIP SHOW ROUTE` still reads the substrate's `/proc/net/route`.

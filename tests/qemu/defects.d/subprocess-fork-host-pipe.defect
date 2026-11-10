@@ -1,0 +1,26 @@
+# subprocess-fork-host-pipe -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "ovmx_subprocess_fork (the in-tree forkers' \$CREPRC: ovmx_init's OPCOM) synchronises creator and task through the executive's creation record (VMS_IOCTL_CREPRC_SYNC), never a host pipe (src/libvms/include/ovmx_subprocess.h, rd vms-ff3)";;
+        targets)      echo "libvms/include/ovmx_subprocess.h";;
+        suites_red)   echo "test_syssvc_creprc_nopipe_audit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation puts a host pipe back into ovmx_creprc_fork_as: it makes a pipe(2) pair (and closes it) right before it opens the creation record, the shape of the pre-vms-ff3 handshake. Non-fatal: the creation still runs through the record and succeeds, so only the no-host-pipe assertion of the audit reddens (it sees the pipe syscall in the traced creator's ovmx_subprocess_fork). The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+NO host pipe: no pipe/pipe2/socketpair across $CREPRC and the created processes' runs
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i '/NEGCTL-ANCHORED (subprocess-fork-host-pipe)/{n;s|^    st = vms_kif_creprc_sync(VMS_CREPRC_SYNC_OPEN, &rec, NULL, NULL, NULL);$|    { int hp[2]; if (pipe(hp) == 0) { close(hp[0]); close(hp[1]); } } /* NEGCTL subprocess-fork-host-pipe */ st = vms_kif_creprc_sync(VMS_CREPRC_SYNC_OPEN, \&rec, NULL, NULL, NULL);|}' "$_file"
+    :
+}

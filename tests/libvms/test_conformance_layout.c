@@ -169,19 +169,27 @@ _Static_assert(sizeof(((struct FAB *)0)->fab$l_fna) == 8,
  * LP64 derivation:
  *   bid@0 bln@1 isi@2(w) sts@4 stv@8 rop@12 fab@16(ptr) ubf@24
  *   usz@32(w) rbf@40(8-aligned;+6 pad) rsz@48(w) rac@50 krf@51
- *   kbf@56(8-aligned;+4 pad) ksz@64 bkt@68(l;+3 pad) rfa@72(RFA=3*w=6B)
- *   ctx@80(8-aligned;+2 pad)                  <-- LAST PUBLIC field
- *   _current_offset@88(off_t)                 <-- FIRST INTERNAL field
- *   _rms_stream@96 _eof@104 _last_rec_offset@112 _last_rec_size@120(w)
- *   _rec_lock_lkid@124(l)                        size = 128
+ *   rhb@56(8-aligned;+4 pad)  -- VMS order RBF < RHB < KBF (rabdef.h 40/44/48)
+ *   kbf@64 ksz@72 bkt@76(l;+3 pad) rfa@80(RFA=3*w=6B)
+ *   ctx@88(8-aligned;+2 pad)                  <-- LAST PUBLIC field
+ *   _current_offset@96(off_t)                 <-- FIRST INTERNAL field
+ *   _rms_stream@104 _eof@112 _last_rec_offset@120 _last_rec_size@128(w)
+ *   _rec_lock_lkid@132(l)                        size = 136
  * ================================================================ */
 #define EXP_RAB_FAB       16
-#define EXP_RAB_KBF       56
-#define EXP_RAB_CTX       80   /* last public field */
-#define EXP_RAB_CUROFF    88   /* first internal field */
-#define EXP_RAB_SIZE      128
+#define EXP_RAB_RBF       40
+#define EXP_RAB_RHB       56
+#define EXP_RAB_KBF       64
+#define EXP_RAB_CTX       88   /* last public field */
+#define EXP_RAB_CUROFF    96   /* first internal field */
+#define EXP_RAB_SIZE      136
 
 _Static_assert(offsetof(struct RAB, rab$l_fab) == EXP_RAB_FAB, "rab fab");
+_Static_assert(offsetof(struct RAB, rab$l_rbf) == EXP_RAB_RBF, "rab rbf");
+_Static_assert(offsetof(struct RAB, rab$l_rhb) == EXP_RAB_RHB, "rab rhb");
+_Static_assert(offsetof(struct RAB, rab$l_rbf) < offsetof(struct RAB, rab$l_rhb)
+               && offsetof(struct RAB, rab$l_rhb) < offsetof(struct RAB, rab$l_kbf),
+    "rab rhb in VMS field order (RBF < RHB < KBF, as rabdef.h's 40/44/48)");
 _Static_assert(offsetof(struct RAB, rab$l_kbf) == EXP_RAB_KBF, "rab kbf");
 _Static_assert(offsetof(struct RAB, rab$l_ctx) == EXP_RAB_CTX, "rab ctx (last public)");
 _Static_assert(offsetof(struct RAB, _current_offset) == EXP_RAB_CUROFF, "rab _current_offset (first internal)");

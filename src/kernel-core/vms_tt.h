@@ -132,7 +132,22 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 /* A write through the class driver (process context). LF -> CR LF when
  * `cooked` (a Unix-style writer through the port's own write path).
  * 0, or -EINTR. */
+/* or'd into vms_tt_write's `cooked`: more of the same write follows */
+#define VMS_TT_W_MORE 0x10
 int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked);
+
+/* One write REQUEST (a $QIO write, a write(2)) cut into several vms_tt_write
+ * pieces is bracketed by these, so nothing is written inside it (rd vms-896d).
+ * Nest freely; the last end releases held executive operator lines. */
+void vms_tt_write_begin(struct vms_tt *tt);
+void vms_tt_write_end(struct vms_tt *tt);
+
+/* An executive operator line for OPA0: (the substrates' exec_console_printf):
+ * 1 when the console's class driver took it -- held behind a write request
+ * going out, or written now on a line of its own -- 0 when the caller must
+ * write it itself (no class driver on OPA0: yet). Never sleeps; not from a
+ * hardware interrupt. vms_tt_oper.h, rd vms-896d. */
+int vms_tt_oper_line(const char *line);
 
 /* PASSALL (IO$_SETMODE P2 = IO$K_TT_PASSALL): every byte is data, nothing is
  * echoed or edited, a read completes on whatever has arrived. */

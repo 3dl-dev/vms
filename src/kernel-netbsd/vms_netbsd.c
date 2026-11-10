@@ -354,6 +354,7 @@ vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,
 	if (proc == NULL)
 		return SS__INSFMEM;
 	proc->owner_vms_pid = creator->vms_pid;
+	proc->owner_linux_pid = (uint32_t)creator->linux_pid;
 	if (cont) {
 		(void)vms_proc_continue_identity(proc, creator->pid, true);
 	} else if (!detached) {
@@ -697,6 +698,7 @@ vms_proc_exithook(struct proc *p, void *arg __unused)
 	exec_lock(&vms_proc_hash_lock);
 	vms_proc_termination_post_locked(&t);
 	exec_unlock(&vms_proc_hash_lock);
+	vms_proc_termination_mailbox(&t);	/* may sleep (rd vms-6d9) */
 }
 
 /*
@@ -1165,6 +1167,17 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		return vms_facility_errno(r);
 
 	/*
+	 * System time, $GETTIM/$GETUTC/$SETIME (rd vms-642): the shared facility
+	 * src/kernel-core/vms_systime.c, the same dispatch shape as the event
+	 * flags above (the caller's proc carries the privileges $SETIME needs).
+	 */
+	case VMS_IOCTL_SYSTIME:
+		proc = vms_proc_find(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ESRCH;
+		return vms_facility_errno(vms_ioctl_systime(proc, (unsigned long)data));
+
+	/*
 	 * AST facility (src/kernel-core/vms_ast.c) and access-mode facility
 	 * (src/kernel-core/vms_access.c) -- P4-A. Same dispatch shape as event
 	 * flags: find-or-create the caller's proc, hand the framework's kernel
@@ -1506,13 +1519,21 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_DFPROT:
 	case VMS_IOCTL_DDIR:
 	case VMS_IOCTL_PPROP:
+	case VMS_IOCTL_LGI:
 	case VMS_IOCTL_RIGHTS:
 	case VMS_IOCTL_PRI:
 	case VMS_IOCTL_BRKAUTH:
 	case VMS_IOCTL_PROCCTL:
 	case VMS_IOCTL_CREPRC_PCB:
+	case VMS_IOCTL_PQL_LOAD:
 	case VMS_IOCTL_SPAWN_NOTIFY:
+	case VMS_IOCTL_CREPRC_SYNC:
 		uarg = data;
+		/* $CREPRC's creation record (rd vms-416d): ARRIVE/HOLD come from a
+		 * task with no PCB yet; the facility takes NULL and makes none. */
+		if (cmd == VMS_IOCTL_CREPRC_SYNC)
+			return vms_facility_errno(vms_ioctl_creprc_sync(
+			    vms_proc_find(l->l_proc->p_pid), (unsigned long)uarg));
 		/* ESTABLISH_SYSTEM is the boot task's, which has no row yet: the
 		 * facility makes it (vms_proc_create_boot_task). Every other caller
 		 * the executive did not create is refused. */
@@ -1550,6 +1571,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_ddir(proc, (unsigned long)uarg);             break;
 		case VMS_IOCTL_PPROP:
 			r = vms_ioctl_pprop(proc, (unsigned long)uarg);            break;
+		case VMS_IOCTL_LGI:
+			r = vms_ioctl_lgi(proc, (unsigned long)uarg);              break;
 		case VMS_IOCTL_RIGHTS:
 			r = vms_ioctl_rights(proc, (unsigned long)uarg);           break;
 		case VMS_IOCTL_PRI:
@@ -1560,6 +1583,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_procctl(proc, (unsigned long)uarg);          break;
 		case VMS_IOCTL_CREPRC_PCB:   /* rd vms-c43 */
 			r = vms_ioctl_creprc_pcb(proc, (unsigned long)uarg);       break;
+		case VMS_IOCTL_PQL_LOAD:     /* rd vms-89dd8 */
+			r = vms_ioctl_pql_load(proc, (unsigned long)uarg);         break;
 		/* /NOWAIT subprocess-exit completion arm (vms-e9a B1) */
 		case VMS_IOCTL_SPAWN_NOTIFY:
 			r = vms_ioctl_spawn_notify(proc, (unsigned long)uarg);     break;
@@ -1790,6 +1815,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		exec_lock_init(&vms_proc_hash_lock);
 		exec_hash_init(vms_proc_hash);
 		vms_eflag_init();
+		vms_creprc_sync_init();	/* rd vms-416d */
 		/* Bring up the mailbox table's list guard too (the table starts empty
 		 * -- mailboxes are created on demand by $CREMBX). */
 		vms_mbx_init();
@@ -1810,6 +1836,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		if (error != 0) {
 			printf("vms: vms_lnm_init failed: %d\n", error);
 			vms_eflag_cleanup();
+			vms_creprc_sync_cleanup();
 			vms_lock_cleanup();
 			vms_proctab_teardown();
 			vms_mbx_cleanup();
@@ -1842,6 +1869,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 			printf("vms: vms_devtab_init failed: %d\n", error);
 			vms_lnm_cleanup();
 			vms_eflag_cleanup();
+			vms_creprc_sync_cleanup();
 			vms_lock_cleanup();
 			vms_proctab_teardown();
 			vms_mbx_cleanup();
@@ -1856,6 +1884,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 			vms_devtab_cleanup();
 			vms_lnm_cleanup();
 			vms_eflag_cleanup();
+			vms_creprc_sync_cleanup();
 			vms_lock_cleanup();
 			vms_proctab_teardown();
 			vms_mbx_cleanup();
@@ -1870,6 +1899,10 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * is after INIT returns, and vms_acp_init cannot fail (vmsfs_acp.c), so it
 		 * needs no unwind. Mirrors the Linux vms.ko init. */
 		vms_acp_init();
+		/* The system time cell (rd vms-642, kernel-core/vms_systime.c): same
+		 * reasoning as the ACP above -- no ioctl before INIT returns, cannot
+		 * fail, so no unwind. */
+		vms_systime_init();
 		/* FC-P0.4: prove the cluster seam (SS14..SS18) at module load,
 		 * the same "self-test on the console" posture
 		 * vms_lnm_arena_selftest() takes for the arena seam above -- no
@@ -1921,6 +1954,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * the facility frees its shared objects, then proctab_teardown frees the
 		 * PCBs without re-releasing them. */
 		vms_eflag_cleanup();
+		vms_creprc_sync_cleanup();
 		vms_lock_cleanup();
 		vms_proctab_teardown();
 		vms_mbx_cleanup();
@@ -1929,6 +1963,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * vms_proc_free_claimed above), then close the cached backing device
 		 * vnode the ACP $MOUNT opened. Mirrors the Linux vms.ko FINI. */
 		vms_acp_cleanup();
+		vms_systime_cleanup();           /* rd vms-642 */
 		/* Free the device table's rows AFTER the procs are gone (rd vms-618):
 		 * vms_proctab_teardown above ran each proc's vms_proc_release_channels,
 		 * which unlinks its channels FROM these rows, so nothing points at a

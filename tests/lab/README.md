@@ -76,7 +76,7 @@ $K sh -c "tcpdump -i br0 -w $L/formation.pcap -U -s 0 &"     # capture inside th
 ```
 
 **Login is prompt-synchronised** — wait for `Username:`, send `SYSTEM`, wait for
-`Password:`, send `system`. Batched sends race the boot chatter and fail as
+`Password:`, send `$LAB_PW` (SYSTEM on every vaxlab/alphalab node; see below). Batched sends race the boot chatter and fail as
 `%LOGIN-F-INVPWD`, which is *never* actually a bad password. Then
 `SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST`.
 
@@ -343,7 +343,7 @@ deliberately; do not assume this copy is current.
 | `bootlab.sh` | Boot the lab from live disks with no golden restore. |
 | `mk_sysgen.py` | Mint a SYSGEN store for a new `SCSNODE`/`SCSSYSTEMID`. Patches a known-good template rather than regenerating, so every other field matches a store proven to join. Rejects names >6 chars (VMS truncates) and deletes any stale `.cluster` sidecar. |
 | `stage_rmhold.sh` | Stage `RMHOLD` (`tests/lab/ci6/RMHOLD.MAR`, the remaster/rebuild arm driver) on a pod's real VAXes once they are logged in as SYSTEM: FTP via `vput.py`, then MACRO, LINK, COPY to `SYS$COMMON:[SYSEXE]` and `RMH :==` on each console, verified by `DIRECTORY`. Run it before any fire whose plan uses `RMH`. |
-| `ci6_evac.sh` | The ci.6 evacuation release gate (rd vms-1e58). `fire <pod>` drives the run16 sequence through `lab-console.sh` (EVACWL on VAX1, OVMX standby, STOP, volume handoff, OVMX continues at seq+1, the VAX2 `EVPROBE` EX/NOQUEUE probe, VAX1 `SHUTDOWN` REMOVE_NODE, seam read back on VAX2) into `captures/vms-ci6-evac-<date>/`; `grade <dir>` is pure and prints PASS/FAIL for the five criteria (`ctest -R lab_ci6_evac_grade`). Boot the OVMX member with `OVMX_FIRE_VOTES=2` so the survivors stay quorate. |
+| `ci6_evac.sh` | The ci.6 evacuation release gate (rd vms-1e58). `fire <pod>` drives the run16 sequence through `lab-console.sh` (EVACWL on VAX1, OVMX standby, STOP, volume handoff, OVMX continues at seq+1, the VAX2 `EVPROBE` EX/NOQUEUE probe, VAX1 `SHUTDOWN` REMOVE_NODE, seam read back on VAX2) into `captures/vms-ci6-evac-<date>/`; `grade <dir>` is pure and prints PASS/FAIL for the five criteria (`ctest -R lab_ci6_evac_grade`). Boot the OVMX member with `OVMX_FIRE_VOTES=2` so the survivors stay quorate. Just before the workload it sets every node's clock from the pod's (`SET TIME=<time>` through `lab-console.sh stamp`), reads each back with `F$TIME()` into `clock.txt`, and aborts as a SETUP FAULT if any is off by more than 0.30 s; the grader re-checks it and leaves C3 UNGRADED on a misaligned bed (rd vms-6731). |
 | `seqchk.py` | Capture-integrity check: sequence gaps and truncated frames. |
 | `probe.sh` | Drive any VAX console and capture between markers. |
 | `portwatch.sh` | `csbwatch.sh` with SDA `SHOW CONNECTIONS/NODE=` — the peer's CDT table and its `Rej/Disconn Reason`. |
@@ -447,3 +447,26 @@ build. rd **vms-ec8** tracks the decision and the re-point.
 Two gates here are unaffected and still pass, because they test the harness's
 DECISIONS as text rather than running it: `labjoin_booted_plumbing` and
 `labjoin_booted_negctl`.
+
+## Lab passwords (rd vms-aa2)
+
+Lab node passwords are operator facts, never committed. Benches and lab tools
+read them from the environment, filled from the `ovmx-lab-passwords` secret in
+namespace `ovmx-lab`:
+
+| key | account |
+|---|---|
+| `LAB_PW` | SYSTEM, FIELD, SYSTEST on every vaxlab and alphalab node and on their goldens (`/lab/cluster/data/d0.dsk.3node-golden.bak`, `/lab/alpha/disks/alpha1-sys.golden.img`) |
+| `LAB_NEWPW` | the value `tools/oracle/semantic/capture.py --login` sets when a SYSTEM password has expired |
+| `VAX_PW` / `VAXC_PASS` | SYSTEM on a DECnet bench lab's VAX (the vms-6a4/vms-3106 benches) and on VAXC |
+| `SYSTEM_PW` / `NEW_SYSTEM_PW` | the `tools/lab-vax/build_nodeC_*` builders' SYSTEM/SYSTEST/FIELD password |
+| `DN_PW` | the DNTEST account a DECnet bench creates |
+| `OVMX_PW` | SYSTEM on the OVMX node a bench boots |
+
+```bash
+export VAX_PW=$(kubectl -n ovmx-lab get secret ovmx-lab-passwords -o jsonpath='{.data.VAX_PW}' | base64 -d)
+```
+
+`tools/ci/check_lab_password_literals.py` (Core Gates) fails on any committed
+literal it knows; the values that leaked onto main before 2026-11-05 were rotated
+on the lab nodes and goldens above.

@@ -7,18 +7,20 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-801
 summary: >
-  VMS ships ~10 time/timer services; OVMX declares 7. SYS$GETTIM/NUMTIM/BINTIM/
-  ASCTIM/GETUTC are real conversions. SYS$SETIMR/CANTIM are process-local POSIX
-  timers, not queued through an executive timer facility. SYS$SCHDWK and
-  SYS$GETTIM_PREC are absent.
-last_reviewed: 2026-10-18
+  The system time is the executive's (rd vms-642): SYS$GETTIM/GETUTC/GETTIM_PREC
+  read one executive-held cell (the substrate realtime clock plus an offset) that
+  SYS$SETIME / DCL SET TIME changes for every process (OPER and LOG_IO
+  required). SYS$NUMTIM/BINTIM/ASCTIM are conversions. SYS$SETIMR/CANTIM are
+  process-local POSIX timers, not queued through an executive timer facility.
+last_reviewed: 2026-11-03
 items:
-  - {id: sys$gettim, kind: routine, status: implemented, authenticity: real, vms: "Get current system time (64-bit quadword)", evidence: src/libvms/syssvc/sys_time.c}
+  - {id: sys$gettim, kind: routine, status: implemented, authenticity: real, vms: "Get current system time (64-bit quadword)", evidence: tests/qemu/test_syssvc_systime.c, notes: "The executive's system-time cell (src/kernel-core/vms_systime.c): a time set by $SETIME in one process is read by $GETTIM in another. SS$_NOSUCHDEV with no executive."}
+  - {id: sys$setime, kind: routine, status: implemented, authenticity: real, vms: "Set or recalibrate the system time", evidence: tests/qemu/test_syssvc_systime.c, notes: "Changes the executive's system time, never the substrate clock; no timadr recalibrates from the time-of-year (substrate) clock. OPER and LOG_IO required (SS$_NOPRIV); a delta time is SS$_IVTIME. DCL SET TIME[=time] is $SETIME. /CLUSTER is not implemented."}
   - {id: sys$numtim, kind: routine, status: implemented, authenticity: real, vms: "Convert quadword time to a numeric time vector", evidence: src/libvms/syssvc/sys_time.c}
   - {id: sys$bintim, kind: routine, status: implemented, authenticity: real, vms: "Convert an ASCII delta/absolute time string to binary", evidence: src/libvms/syssvc/sys_time.c}
   - {id: sys$asctim, kind: routine, status: implemented, authenticity: real, vms: "Convert binary time to an ASCII string", evidence: src/libvms/syssvc/sys_time.c}
-  - {id: sys$getutc, kind: routine, status: implemented, authenticity: real, vms: "Get the current UTC time (128-bit UTC binary)", evidence: src/libvms/syssvc/sys_time.c}
+  - {id: sys$getutc, kind: routine, status: implemented, authenticity: real, vms: "Get the current UTC time (128-bit UTC binary)", evidence: tests/qemu/test_syssvc_systime.c, notes: "The executive's system time as $GETTIM, laid out as $UTCDEF."}
   - {id: sys$setimr, kind: routine, status: implemented, authenticity: advisory, vms: "Set a timer request (AST/event-flag at expiration)", evidence: src/libvms/syssvc/sys_time.c, notes: "process-local POSIX timer, not queued through the executive"}
   - {id: sys$cantim, kind: routine, status: implemented, authenticity: advisory, vms: "Cancel a timer request", evidence: src/libvms/syssvc/sys_time.c, notes: "process-local POSIX timer, not queued through the executive"}
   - {id: sys$schdwk, kind: routine, status: partial, authenticity: advisory, vms: "Schedule wakeup", evidence: src/libvms/syssvc/sys_time.c, notes: "Armed through sys$setimr as a process-local POSIX timer that $WAKEs the caller: a scheduled wakeup dies with the image that requested it (no executive timer queue holds it); a repeat interval or a target named by process name is refused. Corpus example tests/corpus/tier1-examples/sys_schdwk.c."}
-  - {id: sys$gettim_prec, kind: routine, status: implemented, authenticity: real, vms: "Get high-precision system time", evidence: src/libvms/syssvc/sys_time.c, notes: "The host clock read; it already has sub-tick resolution, so it never reports reduced precision. Corpus example tests/corpus/tier1-examples/sys_gettim_prec.c."}
+  - {id: sys$gettim_prec, kind: routine, status: implemented, authenticity: real, vms: "Get high-precision system time", evidence: src/libvms/syssvc/sys_time.c, notes: "$GETTIM: the executive keeps the system time to the 100 ns tick, so it never reports reduced precision. Corpus example tests/corpus/tier1-examples/sys_gettim_prec.c."}

@@ -1,0 +1,37 @@
+AlphaServer ES40 Console V7.3-1, built on Feb 27 2007 at 12:57:47
+P00>>>boot -fl 0,1 dqa0
+(boot dqa0.0.0.15.0 -flags 0,1)
+block 0 of dqa0.0.0.15.0 is a valid boot block
+reading 1230 blocks from dqa0.0.0.15.0
+bootstrap code read in
+base = 200000, image_start = 0, image_bytes = 99c00(629760)
+initializing HWRPB at 2000
+initializing page table at ff56000
+initializing machine state
+setting affinity to the primary CPU
+jumping to bootstrap code
+
+SYSBOOT> SHOW PQL_DPGFLQUOTA
+Parameter Name            Current    Default     Min.       Max.   Unit  Dynamic
+--------------            -------    -------   -------    -------  ----  -------
+PQL_DPGFLQUOTA             131072     131072      4096         -1 Pagelets   D
+ internal value              8192       8192       256         -1 Pages      D
+
+SYSBOOT> 
+
+SYSBOOT> SHOW PQL_MPGFLQUOTA
+Parameter Name            Current    Default     Min.       Max.   Unit  Dynamic
+--------------            -------    -------   -------    -------  ----  -------
+PQL_MPGFLQUOTA               4096       4096      4096         -1 Pagelets   D
+ internal value               256        256       256         -1 Pages      D
+
+SYSBOOT> 
+
+SYSBOOT> CONTINUE
+
+
+    OpenVMS (TM) Alpha Operating System, Version V8.4    
+    © Copyright 1976-2010 Hewlett-Packard Development Company, L.P.
+
+
+%STDRV-I-STARTUP, OpenVMS startup begun at  3-NOV-2026 01:37:03.24

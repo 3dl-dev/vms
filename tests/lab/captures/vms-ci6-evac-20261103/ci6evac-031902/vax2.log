@@ -1,0 +1,339 @@
+$ ! CI6EVAC-BEGIN ci6evac-031902
+$ WRITE SYS$OUTPUT "CI6Q Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")
+CI6Q Q=2 V=3 N=3
+$ SET DEFAULT SYS$LOGIN
+$ MACRO EVPROBE
+$ LINK EVPROBE
+$ EVPROBE :== $SYS$LOGIN:EVPROBE.EXE
+$ DIRECTORY/SIZE SYS$LOGIN:EVPROBE.EXE
+
+Directory SYS$SYSROOT:[SYSMGR]
+
+EVPROBE.EXE;1              6
+
+Total of 1 file, 6 blocks.
+$ EVPROBE
+EVPROBE:  3-NOV-2026 03:25:32.15 $ENQW EX NOQUEUE EVAC$WORKLOAD R0=00000001 %SYSTEM-S-NORMAL, normal successful completion
+$ MOUNT/SYSTEM $2$DUA2: EVAC1E58
+%MOUNT-I-MOUNTED, EVAC1E58 mounted on _$2$DUA2: (VAX1)
+$ TYPE $2$DUA2:[CI6E11030319]EVAC.DAT
+VAX1             538968604         1 3-NOV-2026 03:22:52.80     
+VAX1             538968604         2 3-NOV-2026 03:22:53.80     
+VAX1             538968604         3 3-NOV-2026 03:22:54.80     
+VAX1             538968604         4 3-NOV-2026 03:22:55.80     
+VAX1             538968604         5 3-NOV-2026 03:22:56.80     
+VAX1             538968604         6 3-NOV-2026 03:22:57.80     
+VAX1             538968604         7 3-NOV-2026 03:22:58.80     
+VAX1             538968604         8 3-NOV-2026 03:22:59.80     
+VAX1             538968604         9 3-NOV-2026 03:23:00.80     
+VAX1             538968604        10 3-NOV-2026 03:23:01.80     
+VAX1             538968604        11 3-NOV-2026 03:23:02.80     
+VAX1             538968604        12 3-NOV-2026 03:23:03.80     
+VAX1             538968604        13 3-NOV-2026 03:23:04.80     
+VAX1             538968604        14 3-NOV-2026 03:23:05.80     
+VAX1             538968604        15 3-NOV-2026 03:23:06.80     
+VAX1             538968604        16 3-NOV-2026 03:23:07.80     
+VAX1             538968604        17 3-NOV-2026 03:23:08.80     
+VAX1             538968604        18 3-NOV-2026 03:23:09.80     
+VAX1             538968604        19 3-NOV-2026 03:23:10.80     
+VAX1             538968604        20 3-NOV-2026 03:23:11.80     
+VAX1             538968604        21 3-NOV-2026 03:23:12.80     
+VAX1             538968604        22 3-NOV-2026 03:23:13.80     
+VAX1             538968604        23 3-NOV-2026 03:23:14.80     
+VAX1             538968604        24 3-NOV-2026 03:23:15.80     
+VAX1             538968604        25 3-NOV-2026 03:23:16.80     
+VAX1             538968604        26 3-NOV-2026 03:23:17.80     
+VAX1             538968604        27 3-NOV-2026 03:23:18.80     
+VAX1             538968604        28 3-NOV-2026 03:23:19.80     
+VAX1             538968604        29 3-NOV-2026 03:23:20.80     
+VAX1             538968604        30 3-NOV-2026 03:23:21.80     
+VAX1             538968604        31 3-NOV-2026 03:23:22.80     
+VAX1             538968604        32 3-NOV-2026 03:23:23.80     
+VAX1             538968604        33 3-NOV-2026 03:23:24.80     
+VAX1             538968604        34 3-NOV-2026 03:23:25.80     
+VAX1             538968604        35 3-NOV-2026 03:23:26.80     
+VAX1             538968604        36 3-NOV-2026 03:23:27.80     
+VAX1             538968604        37 3-NOV-2026 03:23:28.80     
+VAX1             538968604        38 3-NOV-2026 03:23:29.80     
+VAX1             538968604        39 3-NOV-2026 03:23:30.80     
+VAX1             538968604        40 3-NOV-2026 03:23:31.80     
+VAX1             538968604        41 3-NOV-2026 03:23:32.80     
+VAX1             538968604        42 3-NOV-2026 03:23:33.80     
+VAX1             538968604        43 3-NOV-2026 03:23:34.80     
+VAX1             538968604        44 3-NOV-2026 03:23:35.80     
+VAX1             538968604        45 3-NOV-2026 03:23:36.80     
+VAX1             538968604        46 3-NOV-2026 03:23:37.80     
+VAX1             538968604        47 3-NOV-2026 03:23:38.80     
+VAX1             538968604        48 3-NOV-2026 03:23:39.80     
+VAX1             538968604        49 3-NOV-2026 03:23:40.80     
+VAX1             538968604        50 3-NOV-2026 03:23:41.80     
+VAX1             538968604        51 3-NOV-2026 03:23:42.80     
+VAX1             538968604        52 3-NOV-2026 03:23:43.80     
+VAX1             538968604        53 3-NOV-2026 03:23:44.80     
+VAX1             538968604        54 3-NOV-2026 03:23:45.80     
+VAX1             538968604        55 3-NOV-2026 03:23:46.80     
+VAX1             538968604        56 3-NOV-2026 03:23:47.80     
+VAX1             538968604        57 3-NOV-2026 03:23:48.80     
+VAX1             538968604        58 3-NOV-2026 03:23:49.80     
+VAX1             538968604        59 3-NOV-2026 03:23:50.80     
+VAX1             538968604        60 3-NOV-2026 03:23:51.80     
+VAX1             538968604        61 3-NOV-2026 03:23:52.80     
+VAX1             538968604        62 3-NOV-2026 03:23:53.80     
+VAX1             538968604        63 3-NOV-2026 03:23:54.80     
+VAX1             538968604        64 3-NOV-2026 03:23:55.80     
+VAX1             538968604        65 3-NOV-2026 03:23:56.80     
+VAX1             538968604        66 3-NOV-2026 03:23:57.80     
+VAX1             538968604        67 3-NOV-2026 03:23:58.80     
+VAX1             538968604        68 3-NOV-2026 03:23:59.80     
+VAX1             538968604        69 3-NOV-2026 03:24:00.80     
+VAX1             538968604        70 3-NOV-2026 03:24:01.80     
+VAX1             538968604        71 3-NOV-2026 03:24:02.80     
+VAX1             538968604        72 3-NOV-2026 03:24:03.80     
+VAX1             538968604        73 3-NOV-2026 03:24:04.80     
+VAX1             538968604        74 3-NOV-2026 03:24:05.80     
+VAX1             538968604        75 3-NOV-2026 03:24:06.80     
+VAX1             538968604        76 3-NOV-2026 03:24:07.80     
+VAX1             538968604        77 3-NOV-2026 03:24:08.80     
+VAX1             538968604        78 3-NOV-2026 03:24:09.80     
+VAX1             538968604        79 3-NOV-2026 03:24:10.80     
+VAX1             538968604        80 3-NOV-2026 03:24:11.80     
+VAX1             538968604        81 3-NOV-2026 03:24:12.80     
+VAX1             538968604        82 3-NOV-2026 03:24:13.80     
+VAX1             538968604        83 3-NOV-2026 03:24:14.80     
+VAX1             538968604        84 3-NOV-2026 03:24:15.80     
+VAX1             538968604        85 3-NOV-2026 03:24:16.80     
+VAX1             538968604        86 3-NOV-2026 03:24:17.80     
+VAX1             538968604        87 3-NOV-2026 03:24:18.80     
+VAX1             538968604        88 3-NOV-2026 03:24:19.80     
+VAX1             538968604        89 3-NOV-2026 03:24:20.80     
+VAX1             538968604        90 3-NOV-2026 03:24:21.80     
+VAX1             538968604        91 3-NOV-2026 03:24:22.80     
+VAX1             538968604        92 3-NOV-2026 03:24:23.80     
+VAX1             538968604        93 3-NOV-2026 03:24:24.80     
+VAX1             538968604        94 3-NOV-2026 03:24:25.80     
+VAX1             538968604        95 3-NOV-2026 03:24:26.80     
+VAX1             538968604        96 3-NOV-2026 03:24:27.80     
+VAX1             538968604        97 3-NOV-2026 03:24:28.80     
+VAX1             538968604        98 3-NOV-2026 03:24:29.80     
+VAX1             538968604        99 3-NOV-2026 03:24:30.80     
+VAX1             538968604       100 3-NOV-2026 03:24:31.80     
+VAX1             538968604       101 3-NOV-2026 03:24:32.80     
+VAX1             538968604       102 3-NOV-2026 03:24:33.80     
+VAX1             538968604       103 3-NOV-2026 03:24:34.80     
+VAX1             538968604       104 3-NOV-2026 03:24:35.80     
+VAX1             538968604       105 3-NOV-2026 03:24:36.80     
+VAX1             538968604       106 3-NOV-2026 03:24:37.80     
+VAX1             538968604       107 3-NOV-2026 03:24:38.80     
+VAX1             538968604       108 3-NOV-2026 03:24:39.80     
+VAX1             538968604       109 3-NOV-2026 03:24:40.80     
+VAX1             538968604       110 3-NOV-2026 03:24:41.80     
+VAX1             538968604       111 3-NOV-2026 03:24:42.80     
+VAX1             538968604       112 3-NOV-2026 03:24:43.80     
+VAX1             538968604       113 3-NOV-2026 03:24:44.80     
+VAX1             538968604       114 3-NOV-2026 03:24:45.80     
+VAX1             538968604       115 3-NOV-2026 03:24:46.80     
+VAX1             538968604       116 3-NOV-2026 03:24:47.80     
+VAX1             538968604       117 3-NOV-2026 03:24:48.80     
+VAX1             538968604       118 3-NOV-2026 03:24:49.80     
+VAX1             538968604       119 3-NOV-2026 03:24:50.80     
+VAX1             538968604       120 3-NOV-2026 03:24:51.80     
+VAX1             538968604       121 3-NOV-2026 03:24:52.80     
+VAX1             538968604       122 3-NOV-2026 03:24:53.80     
+VAX1             538968604       123 3-NOV-2026 03:24:54.80     
+VAX1             538968604       124 3-NOV-2026 03:24:55.80     
+VAX1             538968604       125 3-NOV-2026 03:24:56.80     
+VAX1             538968604       126 3-NOV-2026 03:24:57.80     
+VAX1             538968604       127 3-NOV-2026 03:24:58.81     
+VAX1             538968604       128 3-NOV-2026 03:24:59.81     
+VAX1             538968604       129 3-NOV-2026 03:25:00.81     
+VAX1             538968604       130 3-NOV-2026 03:25:01.81     
+VAX1             538968604       131 3-NOV-2026 03:25:02.81     
+VAX1             538968604       132 3-NOV-2026 03:25:03.81     
+VAX1             538968604       133 3-NOV-2026 03:25:04.81     
+VAX1             538968604       134 3-NOV-2026 03:25:05.81     
+VAX1             538968604       135 3-NOV-2026 03:25:06.81     
+VAX1             538968604       136 3-NOV-2026 03:25:07.81     
+OVMXE            268435462       137 3-NOV-2026 03:25:05.36     
+OVMXE            268435462       138 3-NOV-2026 03:25:06.38     
+OVMXE            268435462       139 3-NOV-2026 03:25:07.42     
+OVMXE            268435462       140 3-NOV-2026 03:25:08.45     
+OVMXE            268435462       141 3-NOV-2026 03:25:09.48     
+OVMXE            268435462       142 3-NOV-2026 03:25:10.51     
+OVMXE            268435462       143 3-NOV-2026 03:25:11.56     
+OVMXE            268435462       144 3-NOV-2026 03:25:12.58     
+OVMXE            268435462       145 3-NOV-2026 03:25:13.61     
+OVMXE            268435462       146 3-NOV-2026 03:25:14.67     
+OVMXE            268435462       147 3-NOV-2026 03:25:15.71     
+OVMXE            268435462       148 3-NOV-2026 03:25:16.78     
+OVMXE            268435462       149 3-NOV-2026 03:25:17.81     
+OVMXE            268435462       150 3-NOV-2026 03:25:18.83     
+OVMXE            268435462       151 3-NOV-2026 03:25:19.87     
+OVMXE            268435462       152 3-NOV-2026 03:25:20.90     
+OVMXE            268435462       153 3-NOV-2026 03:25:21.93     
+OVMXE            268435462       154 3-NOV-2026 03:25:22.95     
+OVMXE            268435462       155 3-NOV-2026 03:25:23.98     
+OVMXE            268435462       156 3-NOV-2026 03:25:25.00     
+OVMXE            268435462       157 3-NOV-2026 03:25:26.02     
+OVMXE            268435462       158 3-NOV-2026 03:25:27.04     
+OVMXE            268435462       159 3-NOV-2026 03:25:28.08     
+OVMXE            268435462       160 3-NOV-2026 03:25:29.10     
+OVMXE            268435462       161 3-NOV-2026 03:25:30.13     
+OVMXE            268435462       162 3-NOV-2026 03:25:31.14     
+OVMXE            268435462       163 3-NOV-2026 03:25:32.15     
+OVMXE            268435462       164 3-NOV-2026 03:25:33.17     
+OVMXE            268435462       165 3-NOV-2026 03:25:34.17     
+OVMXE            268435462       166 3-NOV-2026 03:25:35.18     
+OVMXE            268435462       167 3-NOV-2026 03:25:36.20     
+OVMXE            268435462       168 3-NOV-2026 03:25:37.20     
+OVMXE            268435462       169 3-NOV-2026 03:25:38.23     
+OVMXE            268435462       170 3-NOV-2026 03:25:39.25     
+OVMXE            268435462       171 3-NOV-2026 03:25:40.28     
+OVMXE            268435462       172 3-NOV-2026 03:25:41.31     
+OVMXE            268435462       173 3-NOV-2026 03:25:42.33     
+OVMXE            268435462       174 3-NOV-2026 03:25:43.33     
+OVMXE            268435462       175 3-NOV-2026 03:25:44.34     
+OVMXE            268435462       176 3-NOV-2026 03:25:45.35     
+OVMXE            268435462       177 3-NOV-2026 03:25:46.37     
+OVMXE            268435462       178 3-NOV-2026 03:25:47.38     
+OVMXE            268435462       179 3-NOV-2026 03:25:48.41     
+OVMXE            268435462       180 3-NOV-2026 03:25:49.43     
+OVMXE            268435462       181 3-NOV-2026 03:25:50.45     
+OVMXE            268435462       182 3-NOV-2026 03:25:51.48     
+OVMXE            268435462       183 3-NOV-2026 03:25:52.51     
+OVMXE            268435462       184 3-NOV-2026 03:25:53.53     
+OVMXE            268435462       185 3-NOV-2026 03:25:54.54     
+OVMXE            268435462       186 3-NOV-2026 03:25:55.55     
+OVMXE            268435462       187 3-NOV-2026 03:25:56.57     
+OVMXE            268435462       188 3-NOV-2026 03:25:57.59     
+OVMXE            268435462       189 3-NOV-2026 03:25:58.61     
+OVMXE            268435462       190 3-NOV-2026 03:25:59.62     
+OVMXE            268435462       191 3-NOV-2026 03:26:00.65     
+OVMXE            268435462       192 3-NOV-2026 03:26:01.67     
+OVMXE            268435462       193 3-NOV-2026 03:26:02.69     
+OVMXE            268435462       194 3-NOV-2026 03:26:03.71     
+OVMXE            268435462       195 3-NOV-2026 03:26:04.73     
+OVMXE            268435462       196 3-NOV-2026 03:26:05.74     
+$ DISMOUNT $2$DUA2:
+$ 
+
+SHUTDOWN message on VAX2 from user SYSTEM at _VAX1$OPA0:   03:29:53
+VAX1 will shut down in 0 minutes; back up later.  Please log off node VAX1.
+CI6-EVACUATION
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:29:53.60  %%%%%%%%%%%    (from node VAX1   at  3-NOV-2026 03:29:55.04)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:29:53.61  %%%%%%%%%%%    (from node VAX1   at  3-NOV-2026 03:29:55.07)
+Message from user INTERnet on VAX1
+INTERnet ACP Error during process startup, Nolisten Service Disabled - FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:29:53.61  %%%%%%%%%%%    (from node VAX1   at  3-NOV-2026 03:29:55.07)
+Message from user INTERnet on VAX1
+INTERnet ACP Deactivate FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:29:53.85  %%%%%%%%%%%    (from node VAX1   at  3-NOV-2026 03:29:55.38)
+Message from user DECNET on VAX1
+DECnet shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:05.38  %%%%%%%%%%%    (from node VAX1   at  3-NOV-2026 03:30:06.79)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server shutting down
+Event time:                3-NOV-2026 03:30:06.79
+PID:                      2020021A        
+Username:                 SYSTEM          
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:05.89  %%%%%%%%%%%    (from node VAX1   at  3-NOV-2026 03:30:07.21)
+Message from user SYSTEM on VAX1
+_VAX1$OPA0:, VAX1 shutdown was requested by the operator.
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:05.91  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been disabled, username SYSTEM
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:06.07  %%%%%%%%%%%    (from node VAX1   at  3-NOV-2026 03:30:07.39)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIASHUTDOWN, breakin detection and evasion processing is shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:06.07  %%%%%%%%%%%    (from node VAX1   at  3-NOV-2026 03:30:07.39)
+Message from user SYSTEM on VAX1
+%SECSRV-I-PROXYSHUTDOWN, proxy processing is shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:06.49  %%%%%%%%%%%    (from node VAX1   at  3-NOV-2026 03:30:07.82)
+Message from user SYSTEM on VAX1
+%SECSRV-I-SERVERSHUTDOWN, security server shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:14.79  %%%%%%%%%%%    (from node VAX1   at  3-NOV-2026 03:30:16.18)
+03:30:16.18 Node VAX1 (csid 00010001) proposed modification of quorum or quorum disk membership
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:14.79  %%%%%%%%%%%    (from node VAX1   at  3-NOV-2026 03:30:16.18)
+03:30:16.18 Node VAX1 (csid 00010001) completed VAXcluster state transition
+
+$ 
+%CNXMAN,  lost connection to system VAX1
+%CNXMAN,  timed-out lost connection to system VAX1
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:19.79  %%%%%%%%%%%
+03:30:19.79 Node VAX2 (csid 00010002) lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:19.79  %%%%%%%%%%%
+03:30:19.79 Node VAX2 (csid 00010002) timed-out lost connection to node VAX1
+
+$ 
+%CNXMAN,  proposing reconfiguration of the VAXcluster
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:24.56  %%%%%%%%%%%
+03:30:24.56 Node VAX2 (csid 00010002) proposed reconfiguration of the VAXcluster
+
+$ 
+%CNXMAN,  removed from VAXcluster system VAX1
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:24.56  %%%%%%%%%%%
+03:30:24.56 Node VAX1 (csid 00010001) has been removed from the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:24.56  %%%%%%%%%%%
+03:30:24.56 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")
+Q=2 V=2 N=2
+$ SHOW CLUSTER
+View of Cluster from system ID 1026  node: VAX2                                                                 3-NOV-2026 03:30:33
++-------------------+---------+
+|      SYSTEMS      | MEMBERS |
++--------+----------+---------+
+|  NODE  | SOFTWARE |  STATUS |
++--------+----------+---------+
+| VAX2   | VMS V7.3 | MEMBER  |
+| VAX1   | VMS V7.3 | BRK_NON |
+| OVMXE  | VMX V0.7 | MEMBER  |
++--------+----------+---------+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+$ 

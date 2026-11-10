@@ -92,6 +92,7 @@ struct ovmx_rmsabi_rab {
     unsigned    usz;
     const void *rbf_in;          /* $PUT/$UPDATE: the record */
     unsigned    rsz_in;
+    void       *rhb;             /* RAB$L_RHB: a VFC record's fixed control */
     /* out */
     void       *rbf;             /* $GET: the record (in ubf, or the engine's) */
     unsigned    rsz;

@@ -15,7 +15,7 @@ Live **OpenVMS VAX V7.3** (SIMH, lab-2 `vaxlab-2`, an isolated 2-node pod).
 Per `src/vmsscs/include/scs_connect.h:102-104` the lab roots are
 `[SYS0]=VAX1`, `[SYS1]=VAX2`, `[SYS11]=VAX3` (diskless), all in one shared
 `d0.dsk` that vax1 + vax2 dual-port. So vax1 shows the `[SYS0]` case and vax2 the
-`[SYS1]` case directly. Driven per `tests/lab/README.md` (login `SYSTEM`/`system`).
+`[SYS1]` case directly. Driven per `tests/lab/README.md` (login `SYSTEM`/`$LAB_PW`).
 
 ## Result — BOTH the node root and the common carry the per-node index n
 
@@ -79,5 +79,5 @@ node's boot-root token. `SYS$SYSDEVICE` stays as-is.
 ## Reproduce
 
 `kubectl -n ovmx-lab scale sts/vaxlab --replicas=3`; drive `vaxlab-2` `vax1`
-(=[SYS0]) and `vax2` (=[SYS1]) per `tests/lab/README.md` (login `SYSTEM`/`system`),
+(=[SYS0]) and `vax2` (=[SYS1]) per `tests/lab/README.md` (login `SYSTEM`/`$LAB_PW`),
 run the three `SHOW LOGICAL/FULL` commands above. Scale back to 2 when done.

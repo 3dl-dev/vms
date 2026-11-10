@@ -71,7 +71,8 @@ struct vms_tt_write_args {
  * " ", single space) */
 #define VMS_TT_WR_RECORD      0x1u
 #define VMS_TT_WR_NOFORMAT    0x2u   /* IO$M_NOFORMAT: the cursor position untouched (rd vms-457) */
-#define VMS_TT_WR_REFRESH     0x4u   /* IO$M_REFRESH: the read in progress shown again after */
+#define VMS_TT_WR_PROMPT      0x4u   /* P4 "$": a new line before, no CR after (rd vms-1b6a) */
+#define VMS_TT_WR_REFRESH     0x8u   /* IO$M_REFRESH: the read in progress shown again after */
 
 #define VMS_TT_MODE_PASSALL   0x1u
 struct vms_tt_mode_args {

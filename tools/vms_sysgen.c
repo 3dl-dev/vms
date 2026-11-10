@@ -76,8 +76,16 @@ static const struct sysgen_param default_params[] = {
      "Default direct I/O limit", SYSGEN_TYPE_NUMERIC, "", ""},
     {"PQL_DBYTLM",      65536,   65536,   1024,    16777216, SYSGEN_F_DYNAMIC,
      "Default buffered I/O byte limit", SYSGEN_TYPE_NUMERIC, "", ""},
-    {"PQL_DPGFLQUOTA",  50000,   50000,   1024,    4194304,  SYSGEN_F_DYNAMIC,
+    /* PQL_DPGFLQUOTA / PQL_MPGFLQUOTA: GROUNDED by SYSBOOT> SHOW on a real
+     * OpenVMS Alpha (see SYSGEN_DEFAULT_PQL_* in sysgen_params.h); the
+     * executive reads them at boot (ovmx_init.c -> VMS_IOCTL_PQL_LOAD). Max -1
+     * (no maximum) is SYSGEN_NO_MAX, the uint32 table's largest value. */
+    {"PQL_DPGFLQUOTA",  SYSGEN_DEFAULT_PQL_DPGFLQUOTA, SYSGEN_DEFAULT_PQL_DPGFLQUOTA,
+     SYSGEN_PQL_PGFLQUOTA_MIN, SYSGEN_NO_MAX, SYSGEN_F_DYNAMIC,
      "Default page file quota", SYSGEN_TYPE_NUMERIC, "", ""},
+    {"PQL_MPGFLQUOTA",  SYSGEN_DEFAULT_PQL_MPGFLQUOTA, SYSGEN_DEFAULT_PQL_MPGFLQUOTA,
+     SYSGEN_PQL_PGFLQUOTA_MIN, SYSGEN_NO_MAX, SYSGEN_F_DYNAMIC,
+     "Minimum page file quota", SYSGEN_TYPE_NUMERIC, "", ""},
     {"VIRTUALPAGECNT",  1048576, 1048576, 1024,    67108864, 0,
      "Virtual page count", SYSGEN_TYPE_NUMERIC, "", ""},
     {"GBLPAGES",        8192,    8192,    256,     4194304,  SYSGEN_F_DYNAMIC,

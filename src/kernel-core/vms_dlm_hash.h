@@ -236,6 +236,47 @@ enum vms_dlm_hash_status vms_dlm_name_hash_proven(uint16_t group, uint8_t mode,
 						  uint32_t name_len,
 						  uint32_t *out);
 
+/*
+ * THE HASH A SUB-RESOURCE CARRIES (rd vms-d63, the r5 lab finding).
+ *
+ * A sub-lock's op-0x01 request goes to the tree's MASTER, not to a directory
+ * node, but it still carries a 32-bit value at body[128:132], and the master
+ * finds the RSB by it: OVMX sent ZERO there for F11B$s<fid> under
+ * F11B$v<label>, and the real VAX1 master answered every one of 161 requests
+ * with a newly-made resource -- (0,0) value block, vbseq 0 -- while its own
+ * F11B$s<12> RSB under the same parent (879D7380, SDA) never saw OVMX's lock
+ * in 600 samples (tests/lab/captures/vms-5fa-shared-volume-r5-20261103).
+ * OVMX's ROOT requests, which carry the right hash, join VAX1's existing RSB
+ * (its F11B$vEVAC5FA lock 190006A5 sits on RSB 879E7A00 beside VAX1's own).
+ *
+ * THE FUNCTION, determined black-box under Rule 8 exactly as the root hash was
+ * (from values real VAX nodes put on the wire in the clear, nothing else):
+ *
+ *     value = ((fold(sub identity) ^ (parent_hash >> 16)) * MULT) mod 2^32
+ *
+ * -- the root function's fold over the SUB's own identity block, with the high
+ * half of the PARENT's value XORed into the accumulator before the multiply.
+ * MEASURED over every committed capture (tools/cluster/
+ * dlm_sub_hash_census.py): 6607 of 6607 real op-0x01 sub requests whose
+ * parent's request is in the same capture, 459 distinct (parent, sub)
+ * identities in 10 captures -- F11B$s under F11B$v, RMS$ record locks
+ * (executive mode) under RMS$ file locks, QMAN$ under QMAN$ -- and 411 of 411
+ * op-0x12 SUB records. The sub name lengths, modes and the residual
+ * (parent >> 16) term are the same on all of them.
+ *
+ * THE COVERAGE. Every observed parent is a ROOT (the corpus has no sub-lock
+ * whose parent is itself a sub), so `parent_hash` must be the value of a ROOT
+ * identity; the caller asserts that and this function cannot check it. The
+ * sub identity itself goes through the same three proven-coverage masks as a
+ * root name. `*out` is written only on VMS_DLM_HASH_OK.
+ */
+enum vms_dlm_hash_status vms_dlm_sub_name_hash_proven(uint32_t parent_hash,
+						      uint16_t group,
+						      uint8_t mode,
+						      const uint8_t *name,
+						      uint32_t name_len,
+						      uint32_t *out);
+
 #ifdef __cplusplus
 }
 #endif

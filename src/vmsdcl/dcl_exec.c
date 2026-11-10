@@ -532,7 +532,15 @@ static expr_val_t parse_primary(expr_parser_t *ep)
             }
             return make_str(val);
         }
-        /* Not a symbol - treat as string literal */
+        /* An undefined symbol in an expression is %DCL-W-UNDSYM and the
+         * command does not complete (VAX V7.3, docs/oracle/semantics/fio/
+         * FIO.READ.EOF.NOLABEL: the assignment of "/[" + SP_L + "]" left SP_T
+         * alone). */
+        if (!eval_fail_status) {
+            dcl_error("DCL", 0, "UNDSYM",
+                      "undefined symbol - check validity and spelling\n \\%s\\", word);
+            eval_fail_status = CLI$_UNDSYM;
+        }
         return make_str(word);
     }
 
@@ -1450,6 +1458,8 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
         if (trimmed[0] != '\0') {
             expr_val_t r;
             eval_expr(ctx, trimmed, &r);
+            if (eval_fail_status == (uint32_t)CLI$_UNDSYM)
+                return (int)eval_fail_status;      /* shown; the symbol is left as it was */
             if (eval_fail_status == DCL_CLI_EXPSYN) {
                 if (has_arith_op(trimmed) || has_dot_op(trimmed)) {
                     /* the symbol is left as it was, as on VMS */
@@ -1492,6 +1502,8 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
             /* Expression evaluation (arithmetic or string ops) */
             expr_val_t result;
             eval_expr(ctx, trimmed, &result);
+            if (eval_fail_status == (uint32_t)CLI$_UNDSYM)
+                return (int)eval_fail_status;
             if (eval_fail_status == DCL_CLI_EXPSYN) {
                 /* the symbol is left as it was, as on VMS */
                 dcl_error("DCL", 0, "EXPSYN",
@@ -1725,6 +1737,38 @@ static void parm_echo(const char *elem, char *out, size_t cap)
  * element's index is cmd->list_elem (TYPE heads every file after the first
  * with its name, as OpenVMS does). The status is the most severe one seen.
  */
+/* The first '+' of `s` that joins list elements -- not an ODS-5 "^+", which
+ * belongs to the name (TYPE C^+^+CONFIG.H) -- or NULL. */
+static const char *plist_plus(const char *s)
+{
+    const char *e = s;
+    while ((e = strchr(e, '+')) != NULL && e > s && e[-1] == '^')
+        e++;
+    return e;
+}
+
+/* `cur` with the file type of `prev` when it names none (TYPE TA.TXT,TB types
+ * TB.TXT -- VAX V7.3, tests/lab/captures/vms-691d-type-spawn-20261102). */
+static void plist_sticky_type(const char *prev, char *cur, size_t cap)
+{
+    const char *pn = prev + spec_dir_prefix(prev), *cn = cur + spec_dir_prefix(cur);
+    const char *pt = NULL;
+    for (const char *p = pn; *p && *p != ';'; p++)
+        if (*p == '.' && (p == pn || p[-1] != '^')) pt = p;
+    for (const char *p = cn; *p && *p != ';'; p++)
+        if (*p == '.' && (p == cn || p[-1] != '^')) return;      /* has its own */
+    if (!pt || !*cn) return;
+    size_t tl = 0;
+    while (pt[tl] && pt[tl] != ';') tl++;
+    char *semi = strchr(cn, ';');
+    char ver[64] = "";
+    if (semi) { snprintf(ver, sizeof ver, "%s", semi); *semi = '\0'; }
+    size_t cl = strlen(cur);
+    if (cl + tl + strlen(ver) + 1 > cap) return;
+    memcpy(cur + cl, pt, tl);
+    snprintf(cur + cl + tl, cap - cl - tl, "%s", ver);
+}
+
 static int exec_plist(const struct dcl_verb *verb, struct dcl_command *cmd)
 {
     int total = dcl_param_total(cmd);
@@ -1739,11 +1783,27 @@ static int exec_plist(const struct dcl_verb *verb, struct dcl_command *cmd)
 
     int final = SS$_NORMAL, n = 0;
     char prev[sizeof cmd->params[0]] = "";
+    /* TYPE's list also joins files with '+' (DCL Dictionary, TYPE; VAX V7.3
+     * types TA.TXT+TB.TXT as TA.TXT,TB.TXT -- rd vms-691d), and carries the
+     * file type forward. */
+    int is_type = strcmp(verb->name, "TYPE") == 0;
     for (int i = 0; i < total; i++) {
-        if (dcl_param_slot(cmd, i) != 0) continue;
+      if (dcl_param_slot(cmd, i) != 0) continue;
+      const char *el = dcl_param_at(cmd, i);
+      while (*el) {
+        char part[sizeof cmd->params[0]];
+        const char *e = is_type ? plist_plus(el) : NULL;
+        size_t pn = e ? (size_t)(e - el) : strlen(el);
+        if (pn >= sizeof part) pn = sizeof part - 1;
+        memcpy(part, el, pn);
+        part[pn] = '\0';
+        el = e ? e + 1 : el + strlen(el);
+        if (!part[0]) continue;
         memcpy(one, cmd, sizeof *one);
-        dcl_plist_sticky(n ? prev : NULL, dcl_param_at(cmd, i), one->params[0],
+        dcl_plist_sticky(n ? prev : NULL, part, one->params[0],
                          sizeof one->params[0]);
+        if (is_type && n)
+            plist_sticky_type(prev, one->params[0], sizeof one->params[0]);
         memcpy(prev, one->params[0], sizeof prev);
         for (int t = 0; t < ntail; t++)
             snprintf(one->params[1 + t], sizeof one->params[0], "%s", tail[t]);
@@ -1757,6 +1817,7 @@ static int exec_plist(const struct dcl_verb *verb, struct dcl_command *cmd)
         if (!(st & 1) && ((final & 1) || sev_rank(st) >= sev_rank(final)))
             final = st;
         n++;
+      }
     }
     free(one);
     return final;
@@ -2226,7 +2287,9 @@ int dcl_execute_command(struct dcl_command *cmd)
 
         /* rd vms-ba2: a list in P1 of a file verb -- every element is acted on */
         int plist = plx >= 0 && !plist_verbs[plx].self &&
-                    dcl_param_total(cmd) > dcl_slot_total(cmd);
+                    (dcl_param_total(cmd) > dcl_slot_total(cmd) ||
+                     (strcmp(verb->name, "TYPE") == 0 && dcl_param_total(cmd) >= 1 &&
+                      plist_plus(dcl_param_at(cmd, 0)) != NULL));
         /* COPY of a list to ONE named file concatenates: cmd_copy takes it whole */
         if (plist && strcmp(verb->name, "COPY") == 0 && dcl_slot_total(cmd) >= 2) {
             for (int i = 0; i < dcl_param_total(cmd); i++)

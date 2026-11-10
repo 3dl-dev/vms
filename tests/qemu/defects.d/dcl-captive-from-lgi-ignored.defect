@@ -1,0 +1,27 @@
+# dcl-captive-from-lgi-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL confines a CAPTIVE account to its login command procedure, reading UAI\$M_CAPTIVE from the login data LOGINOUT left in the executive (VMS_IOCTL_LGI), not from argv (rd vms-838b, vms-c8fa)";;
+        targets)      echo "vmsdcl/dcl_main.c";;
+        suites_red)   echo "test_syssvc_dcl_login_state";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "main() reads the login data but drops UAI\$M_CAPTIVE: a captive account runs its login command procedure and then falls through to the DCL command level -- the escape CAPTIVE exists to prevent.";;
+        require_fail) cat <<'EOF2'
+captive: DCL logged out after it -- no command was read at DCL level
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one place main() takes CAPTIVE from the login data.
+        sed -i 's|captive_mode = (lgi_uaf \& UAI\$M_CAPTIVE) != 0;|captive_mode = 0; /* NEGCTL dcl-captive-from-lgi-ignored */|' "$_file"
+    :
+}

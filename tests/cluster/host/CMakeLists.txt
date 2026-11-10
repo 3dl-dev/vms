@@ -225,6 +225,28 @@ target_compile_definitions(fuzz_dlm_dir_directed PRIVATE OVMX_CLUSTER_HOST)
 set_tests_properties(cluster_host_fuzz_dlm_dir_directed PROPERTIES
     LABELS "unit;cluster;codec;fuzz;dlm" TIMEOUT 180)
 
+# rd vms-fdeb: the RECEIVE side of a master's directory re-registration -- what
+# a peer's 82/0d (or any body that reaches vms_dlm_rm_dr_answer) does to the
+# shipping remaster table, which is compiled into the fuzz with the sanitizers
+# (its own object library, for the same reason as cluster_host_dlm_dir_fuzz).
+add_library(cluster_host_dlm_rm_fuzz OBJECT
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_dlm_rm_fsm.c)
+target_include_directories(cluster_host_dlm_rm_fuzz PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel-core)
+target_compile_definitions(cluster_host_dlm_rm_fuzz PRIVATE OVMX_CLUSTER_HOST)
+if(OVMX_CLUSTER_FUZZ_SANITIZE_OK)
+    target_compile_options(cluster_host_dlm_rm_fuzz PRIVATE
+        -fsanitize=address,undefined)
+endif()
+cluster_host_fuzz(fuzz_dlm_dirreg_answer)
+target_sources(fuzz_dlm_dirreg_answer PRIVATE
+    $<TARGET_OBJECTS:cluster_host_dlm_rm_fuzz>)
+target_include_directories(fuzz_dlm_dirreg_answer PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel-core)
+target_compile_definitions(fuzz_dlm_dirreg_answer PRIVATE OVMX_CLUSTER_HOST)
+set_tests_properties(cluster_host_fuzz_dlm_dirreg_answer PROPERTIES
+    LABELS "unit;cluster;codec;fuzz;dlm" TIMEOUT 180)
+
 # ---- FC-P3.6: the CLUB/CSB model, the ten-state ladder, the reconnect FSM ----
 # Built from src/kernel-core with -DOVMX_CLUSTER_HOST -- the SAME sources both
 # kmods compile, with no kernel headers and no seam. That is the whole point of
@@ -352,6 +374,14 @@ cluster_host_cnxman_test(test_dlm_pending test_dlm_pending.c)
 # precedent), so this is the two-proof shape: the TRUST ANCHOR the split-brain
 # gate reads, driven against the real vms_cnxman_csb.c derivation, and the
 # WIRING + ITS ORDER read out of the three shipping files that carry it.
+# rd vms-966e: the real VAX's op-0x01 at barrier step 0x0a -- sent under the
+# vector the running join replaced, for a lock this node told it "you master
+# it" -- is answered from the entry (the shipping CLUB, Phase 2 vector,
+# directory table and codec, on the committed demo frames).
+cluster_host_cnxman_test(test_dlm_transition_enq test_dlm_transition_enq.c)
+set_tests_properties(cluster_host_test_dlm_transition_enq PROPERTIES
+    LABELS "unit;cluster;cluster_host;cnxman;lock;dlm")
+
 cluster_host_cnxman_test(test_dlm_scs_arm test_dlm_scs_arm.c)
 target_compile_definitions(test_dlm_scs_arm PRIVATE
     OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
@@ -514,6 +544,24 @@ target_compile_definitions(test_cluster_opa0 PRIVATE
 )
 add_test(NAME cluster_host_test_cluster_opa0 COMMAND test_cluster_opa0)
 set_tests_properties(cluster_host_test_cluster_opa0 PROPERTIES
+    LABELS "unit;cluster;cluster_host"
+    TIMEOUT 30
+)
+
+# ---- rd vms-896d: an executive operator line never splits a write request ----
+# (src/kernel-core/vms_tt_oper.h, pure). OPCOM's real operator-status message
+# with "%CNXMAN,  now a VAXcluster member" arriving at every byte of it; plus
+# source checks that vms_tt.c and the NetBSD console path drive it that way.
+add_executable(test_tt_oper test_tt_oper.c)
+target_include_directories(test_tt_oper PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel-core
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_tt_oper PRIVATE
+    OVMX_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+add_test(NAME cluster_host_test_tt_oper COMMAND test_tt_oper)
+set_tests_properties(cluster_host_test_tt_oper PROPERTIES
     LABELS "unit;cluster;cluster_host"
     TIMEOUT 30
 )
@@ -898,6 +946,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_dlm_rm_fsm.c        # rd vms-ed5
     hdr_alone_vms_cluster_emit_guard.c # E82
     hdr_alone_vms_cluster_opa0.c      # rd vms-c56
+    hdr_alone_vms_tt_oper.c           # rd vms-896d
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)
@@ -1189,6 +1238,29 @@ set_tests_properties(cluster_host_test_dlm_handover PROPERTIES
     TIMEOUT 60
 )
 
+# ---- rd vms-fdeb: a MASTER's directory re-registration (op-0x0d) ----
+# After release 4 of a transition, one record per root this node masters whose
+# directory is another member; the barrier held until each is answered. Driven
+# on the real engine against a REAL V7.3 record and its real 82/0d answer.
+add_executable(test_dlm_dirreg test_dlm_dirreg.c)
+target_include_directories(test_dlm_dirreg PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_dirreg PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_dlm_dirreg PRIVATE
+    cluster_host_lock cluster_host_cnxman cluster_host_dlm Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_dirreg PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_dirreg COMMAND test_dlm_dirreg)
+set_tests_properties(cluster_host_test_dlm_dirreg PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 60
+)
+
 # ---- rd vms-874f: the FAILOVER REBUILD, on the real engine + table + codec ----
 # A tree's master LEFT: this node, a surviving holder, re-describes its locks
 # (op-0x08 records, root first, subs carrying the new master's handle), or is
@@ -1384,6 +1456,10 @@ add_test(NAME cluster_frame_conformance_gate
         # required here so the never-crash rule's own condition holds -- no new
         # frame type reaches a real VAX before the gate can see every byte.
         dlm_enq_ans_queued
+        # rd vms-1e58 C4: the master's NOTQUEUED answer. Another frame type
+        # OVMX had never emitted (its old deny was composed from zeros and
+        # unreachable), required here for the same never-crash reason.
+        dlm_enq_ans_notqueued
         # rd vms-a4d7: the DEFERRED GRANT (cat-0x02 op-0x02). Also a frame type
         # OVMX has never emitted, and the one that replaced an invented echo --
         # required here so no byte of it reaches a real lock manager ungrounded.
@@ -1399,6 +1475,13 @@ add_test(NAME cluster_frame_conformance_gate
         # tree's new master, its 0xfa answers -- emitted by test_dlm_rebuild
         # replaying RA1b's RMT1 tree on the real engine.
         dlm_rm_08 dlm_rm_08_ans
+        # rd vms-d63: the release that WRITES its value block -- the cell 1
+        # and the F11B$s block at body[36:52] -- emitted by test_cnxman_coord.
+        dlm_deq_vb
+        # rd vms-fdeb: the master's op-0x0d directory re-registration, a frame
+        # type OVMX had never sent -- required here so no byte of it reaches a
+        # real directory node ungrounded (test_cnxman_coord composes it).
+        dlm_dir_reg
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"
@@ -1670,6 +1753,40 @@ set_tests_properties(cluster_host_f11b_lock_census PROPERTIES
     TIMEOUT 180
 )
 
+# ---- rd vms-d63: what the XQP's per-file serialization lock (F11B$s) carries
+# in its VALUE BLOCK and how a real release WRITES it, measured over every
+# capture: two counters (the HEADER counter and the DATA counter, read off the
+# one capture whose MSCP writes and XQP locks share a wire), bytes 8..15 zero;
+# a real $DEQ carries the lock's block at body[36:52], and the master stores it
+# when the release is marked 1 at body[30] (>= 98%) and not when marked 0
+# (<= 5%). Grounds src/kernel-core/vms_f11b_ser.h and the op-0x03 builder's
+# value-block form (vms_cluster_codec_dlm.h struct vms_dlm_deq).
+add_test(NAME cluster_host_f11b_ser_valblk_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/f11b_ser_valblk_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_f11b_ser_valblk_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;files11"
+    TIMEOUT 180
+)
+
+# ---- rd vms-d63 (vms-5fa r5): the value a SUB-lock request carries at
+# body[128:132] -- ((fold(sub identity) ^ (parent value >> 16)) * MULT), the
+# value the tree's master finds the sub-RSB by. Pins it on every real sub
+# request whose parent request is in the corpus, on the op-0x12/0x08 SUB
+# records, and on the r5 frames themselves. Grounds
+# vms_dlm_sub_name_hash_proven() (src/kernel-core/vms_dlm_hash.h).
+add_test(NAME cluster_host_dlm_sub_hash_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_sub_hash_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_sub_hash_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;files11"
+    TIMEOUT 180
+)
+
 # ---- rd vms-85f: what a REAL master answers to an op-0x01 IT QUEUED. OVMX
 # answered nothing at all, so a real VAX's $ENQW on a resource OVMX masters and
 # holds at a conflicting mode sat in RWSCS and STOP could not complete it
@@ -1686,6 +1803,22 @@ add_test(NAME cluster_host_dlm_queued_answer_census
         --selftest "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(cluster_host_dlm_queued_answer_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 600
+)
+
+# ---- rd vms-1e58 C4: what a real master answers a NOQUEUE request it cannot
+# grant, and which request bit says NOQUEUE. Every real deny (0xfc) answers a
+# request with body[28:30] bit 0x0004 set and every real queue (0xfb) one with
+# it clear, op 0x01 and 0x07 alike; every deny carries b8 09 fc (SS$_NOTQUEUED)
+# at body[32:35]. Pins the figures in the codec header and the
+# dlm_enq_ans_notqueued rows.
+add_test(NAME cluster_host_dlm_notqueued_answer_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_notqueued_answer_census.py"
+        --selftest "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_notqueued_answer_census PROPERTIES
     LABELS "unit;cluster;cluster_host;dlm;crash-safety"
     TIMEOUT 600
 )

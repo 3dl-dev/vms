@@ -48,6 +48,15 @@ extern "C" {
 #define CLI_A_DEFAULT   0x0010u /* present by default   (qualifier DEFAULT)    */
 #define CLI_A_KEYWORD   0x0020u /* value drawn from a keyword set (TYPE=type)  */
 #define CLI_A_FILE      0x0040u /* VALUE(TYPE=$FILE) -- treated as free text   */
+/* CDU PLACEMENT= (qualifier attribute). GLOBAL (neither bit) is the default:
+ * the qualifier applies to the whole command wherever it is typed. LOCAL: it
+ * may only follow a parameter value and applies to that value alone.
+ * POSITIONAL: after the verb it applies to the command; after a parameter
+ * value it applies to that value. After CLI$GET_VALUE has returned a parameter
+ * value, CLI$PRESENT reports a qualifier given on THAT value as CLI$_LOCPRES or
+ * CLI$_LOCNEG (CDU manual, PLACEMENT; Utility Routines manual, CLI$PRESENT). */
+#define CLI_A_PLACE_LOCAL      0x0080u
+#define CLI_A_PLACE_POSITIONAL 0x0100u
 
 /* One keyword in a DEFINE TYPE keyword set. */
 struct cli_keyword {

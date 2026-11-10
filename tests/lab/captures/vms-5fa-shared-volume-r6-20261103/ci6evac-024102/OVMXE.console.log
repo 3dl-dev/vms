@@ -1,0 +1,68 @@
+$ ! CI6EVAC-BEGIN ci6evac-024102
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ DIRECTORY SYS$SYSTEM:EVACWL.EXE
+
+Directory SYS$SYSROOT:[SYSEXE]
+
+EVACWL.EXE;1
+
+Total of 1 file.
+$ SHOW DEVICE
+Device                  Device        Error  Volume            Free  Trans  Mnt
+ Name                    Status       Count    Label         Blocks  Count  Cnt
+VDA0:                   Mounted           0  OVMXSYS         213479      0    1
+VAX1$DUA16384:          Online            0                                    
+VAX1$DUA16385:          Online            0                                    
+VAX1$DUA16386:          Online            0                                    
+VAX1$DUA16387:          Online            0                                    
+Device                  Device           Error
+ Name                   Status           Count
+OPA0:                   Online               0
+NLA0:                   Online               0
+ETH0:                   Online               0
+NET:                    Online               0
+PEA0:                   Online               0
+$ MOUNT/SYSTEM VAX1$DUA16386: EVAC5FA
+%MOUNT-I-MOUNTED, EVAC5FA mounted on _VAX1$DUA16386:
+$ DEFINE/SYSTEM EVAC$DATA VAX1$DUA16386:[CI6E11030241]
+$ SHOW DEVICE/FULL VAX1$DUA16386:
+
+Disk VAX1$DUA16386:, is online, mounted.
+
+    Error count                     0    Operations completed            0
+    Volume label           EVAC5FA         Cluster size                    3
+    Free blocks                801834    Maximum blocks             891072
+    Transaction count               0
+$ CREATE SYS$LOGIN:OVWL.COM
+$ EVACWL :== $SYS$SYSTEM:EVACWL.EXE
+$ EVACWL 10
+*EXIT*
+$ SPAWN/NOWAIT @SYS$LOGIN:OVWL.COM
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+$ 
+EVACWL: OVMXE took EVAC$WORKLOAD EX at seq 11
+$ SPAWN/NOWAIT @SYS$LOGIN:OVWL.COM
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+$ 
+EVACWL: OVMXE took EVAC$WORKLOAD EX at seq 31
+$ DIRECTORY/SIZE=ALL VAX1$DUA16386:[CI6E11030241]EVAC.DAT
+
+Directory VAX1$DUA16386:[CI6E11030241]
+
+EVAC.DAT;1                                      5/6
+
+Total of 1 file, 5/6 blocks.
+$ ! CI6EVAC-S3 ci6evac-024102
+$ CREATE SYS$LOGIN:OVSTBY.COM
+$ EVACWL :== $SYS$SYSTEM:EVACWL.EXE
+$ EVACWL STANDBY NL=5 15
+*EXIT*
+$ SPAWN/NOWAIT @SYS$LOGIN:OVSTBY.COM
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+$ 
+EVACWL: standby holds EVAC$WORKLOAD NL for 5 s
+$ 
+EVACWL: OVMXE took EVAC$WORKLOAD EX at seq 96
+$ DISMOUNT VAX1$DUA16386:
+%DISMOUNT-I-DISMOUNTED, _VAX1$DUA16386: dismounted
+$ 

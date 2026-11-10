@@ -1,0 +1,28 @@
+# dcl-sysout-file-route-dropped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL's own SYS\$OUTPUT, when SYS\$OUTPUT names a disk file, is RMS \$PUT records in that file (src/vmsdcl/dcl_io.c route_file, rd vms-1b6a)";;
+        targets)      echo "vmsdcl/dcl_io.c";;
+        suites_red)   echo "test_syssvc_dcl_sink_route";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "route_file() is where each record DCL's sink makes of its output is \$PUT to the file SYS\$OUTPUT names (dcl_rms_write_record). The mutation returns success without the \$PUT: DCL still runs every command, the file is still created through RMS, but no record of SHOW SYMBOL's output or the WRITE reaches it -- a plausible success that shares no state with the file. The suite's RMS read-back of the file reddens; its mailbox drive, which does not take this route, stays green. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOR'
+file: DCL's SHOW SYMBOL output and its WRITE are records of the SYS$OUTPUT file, read back through RMS
+EOR
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one $PUT in route_file().
+        sed -i 's|    return dcl_rms_write_record(((struct ppf_file \*)arg)->w, rec, n);|    (void)arg; (void)rec; (void)n; return 0; /* NEGCTL dcl-sysout-file-route-dropped */|' "$_file"
+
+    :
+}

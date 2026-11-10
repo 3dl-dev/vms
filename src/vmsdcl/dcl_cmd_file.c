@@ -4,6 +4,8 @@
  * DIRECTORY, TYPE, COPY, DELETE, RENAME, CREATE, SEARCH, PURGE, APPEND
  */
 
+#include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +23,7 @@
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
 #include "dcl/dcl_rms.h"          /* vms-481: file commands reach files via RMS/ACP */
+#include "dcl/dcl_remote.h"       /* rd vms-0a7: DIRECTORY/TYPE node:: over RMS */
 #include "dcl/vms_messages.h"
 #include "ssdef.h"
 #include "stsdef.h"
@@ -175,85 +178,11 @@ static int dir_format_vmsbintime(const uint8_t vt[8], char *buf, size_t bufsize)
     return 1;
 }
 
-/* Per-category access bits within a VMS protection nibble (set = DENIED) and
- * the nibble shifts. Kept as literals (matching src/libvms/include/
- * ovmx_fileprot.h) so no libvms header is pulled onto the DCL native-link
- * include path. */
-#define DIR_PROT_R 0x01
-#define DIR_PROT_W 0x02
-#define DIR_PROT_E 0x04
-#define DIR_PROT_D 0x08
-
-/*
- * dir_format_prot_full - Render a VMS protection word in the LONG form real
- * DIRECTORY/FULL prints: "System:RWED, Owner:RWED, Group:RE, World:".
- *
- * Same protection word (from st_mode via vmsfs_mode_to_protection) the
- * columnar /PROTECTION display decodes — only the presentation differs. A
- * clear bit means the access is ALLOWED (VMS convention).
- */
-/* DIRECTORY/FULL "Record format:" text for a FAT record format (vms-a44),
- * as OpenVMS VAX V7.3 prints it (vax73-dirfull-recfmt.txt):
- *   FIX  "Fixed length 20 byte records"
- *   VAR  "Variable length, maximum 0 bytes, longest 32 bytes"
- *   VFC  "VFC, 2 byte header, maximum 0 bytes, longest 32 bytes"
- *   STM / STMLF / STMCR  "Stream" / "Stream_LF" / "Stream_CR", maximum, longest
- *   UDF  "Undefined, maximum 0 bytes, longest 0 bytes" */
-static void dir_format_recfmt(uint8_t rfm, uint16_t mrs, uint16_t lrl, uint8_t fsz,
-                              char *out, size_t cap)
-{
-    const char *nm;
-    switch (rfm) {
-    case FAB$C_FIX:
-        snprintf(out, cap, "Fixed length %u byte records", (unsigned)mrs);
-        return;
-    case FAB$C_VFC:
-        snprintf(out, cap, "VFC, %u byte header, maximum %u bytes, longest %u bytes",
-                 (unsigned)fsz, (unsigned)mrs, (unsigned)lrl);
-        return;
-    case FAB$C_VAR:   nm = "Variable length"; break;
-    case FAB$C_STM:   nm = "Stream";          break;
-    case FAB$C_STMLF: nm = "Stream_LF";       break;
-    case FAB$C_STMCR: nm = "Stream_CR";       break;
-    default:          nm = "Undefined";       break;
-    }
-    snprintf(out, cap, "%s, maximum %u bytes, longest %u bytes", nm,
-             (unsigned)mrs, (unsigned)lrl);
-}
-
-/* "Record attributes:" text (vms-a44, same capture): the carriage-control
- * attribute (Fortran / Carriage return / Print file carriage control), then
- * ", Non-spanned" for BLK; "None" when neither is set. */
-static void dir_format_recattr(uint8_t rat, char *out, size_t cap)
-{
-    const char *cc = (rat & FAB$M_FTN) ? "Fortran carriage control"
-                   : (rat & FAB$M_CR)  ? "Carriage return carriage control"
-                   : (rat & FAB$M_PRN) ? "Print file carriage control" : NULL;
-    if (cc && (rat & FAB$M_BLK))      snprintf(out, cap, "%s, Non-spanned", cc);
-    else if (cc)                      snprintf(out, cap, "%s", cc);
-    else if (rat & FAB$M_BLK)         snprintf(out, cap, "Non-spanned");
-    else                              snprintf(out, cap, "None");
-}
-
-static void dir_format_prot_full(uint16_t prot, char *buf, size_t bufsize)
-{
-    static const char *cats[]  = { "System", "Owner", "Group", "World" };
-    static const int   shift[] = { 0, 4, 8, 12 };
-    size_t off = 0;
-    for (int i = 0; i < 4; i++) {
-        uint8_t bits = (uint8_t)((prot >> shift[i]) & 0x0F);
-        char acc[5]; int a = 0;
-        if (!(bits & DIR_PROT_R)) acc[a++] = 'R';
-        if (!(bits & DIR_PROT_W)) acc[a++] = 'W';
-        if (!(bits & DIR_PROT_E)) acc[a++] = 'E';
-        if (!(bits & DIR_PROT_D)) acc[a++] = 'D';
-        acc[a] = '\0';
-        int n = snprintf(buf + off, bufsize - off, "%s%s:%s",
-                         (i > 0) ? ", " : "", cats[i], acc);
-        if (n < 0 || (size_t)n >= bufsize - off) break;
-        off += (size_t)n;
-    }
-}
+/* The DIRECTORY/FULL record-format, record-attribute and protection texts are
+ * shared with the node:: path (dcl_remote_file.c): one formatter, one wording. */
+#define dir_format_recfmt    dcl_fmt_recfmt
+#define dir_format_recattr   dcl_fmt_recattr
+#define dir_format_prot_full dcl_fmt_prot_full
 
 /*
  * dcl_filename_component - Extract the raw NAME.TYPE;VERSION text a user
@@ -316,17 +245,17 @@ static void dcl_print_dir_total(int file_count, long used_blocks,
     const char *files_s = (file_count != 1) ? "s" : "";
     const char *blk_s   = (used_blocks != 1) ? "s" : "";
     if (show_full || (show_size && size_mode == DIR_SIZE_ALL)) {
-        printf("\nTotal of %d file%s, %ld/%ld block%s.\n",
+        dcl_out_printf("\nTotal of %d file%s, %ld/%ld block%s.\n",
                file_count, files_s, used_blocks, alloc_blocks, blk_s);
     } else if (show_size && size_mode == DIR_SIZE_ALLOC) {
-        printf("\nTotal of %d file%s, %ld block%s.\n",
+        dcl_out_printf("\nTotal of %d file%s, %ld block%s.\n",
                file_count, files_s, alloc_blocks,
                (alloc_blocks != 1) ? "s" : "");
     } else if (show_size) {
-        printf("\nTotal of %d file%s, %ld block%s.\n",
+        dcl_out_printf("\nTotal of %d file%s, %ld block%s.\n",
                file_count, files_s, used_blocks, blk_s);
     } else {
-        printf("\nTotal of %d file%s.\n", file_count, files_s);
+        dcl_out_printf("\nTotal of %d file%s.\n", file_count, files_s);
     }
 }
 
@@ -659,7 +588,7 @@ void dcl_print_acl(const uint8_t *acl, uint32_t len)
                                        (char *)(acl + pos) };
         struct dsc$descriptor_s td = { sizeof(txt), DSC$K_DTYPE_T, DSC$K_CLASS_S, txt };
         if (sys$format_acl(&ad, &tl, &td, NULL, NULL, NULL, NULL, NULL) & 1)
-            printf("          %.*s\n", (int)tl, txt);
+            dcl_out_printf("          %.*s\n", (int)tl, txt);
         pos += acl[pos];
     }
 }
@@ -760,9 +689,9 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                                              : vmsfs_mode_to_protection(st->st_mode);
                 dir_format_owner((uint16_t)st->st_gid, (uint16_t)st->st_uid, own, sizeof(own));
                 dir_format_prot_short(vprot, prot_buf, sizeof(prot_buf));
-                printf("%-21s%-33s%s\n", vms_name, own, prot_buf);
+                dcl_out_printf("%-21s%-33s%s\n", vms_name, own, prot_buf);
             } else {
-                printf("%-19s\n", vms_name);
+                dcl_out_printf("%-19s\n", vms_name);
             }
             if (e->from_acp && e->full_spec[0]) {
                 uint8_t acl[4096];        /* the whole ACL, extension headers included (vms-a88c) */
@@ -789,15 +718,15 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
              * GENUINE ODS-2 File ID (num,seq,rvn) from the directory search, the
              * fidelity gap the /vms passthrough could not fill (vms-481). */
             if (e->from_acp)
-                printf("%-30s File ID:  (%u,%u,%u)\n",
+                dcl_out_printf("%-30s File ID:  (%u,%u,%u)\n",
                        vms_name, e->fid_num, e->fid_seq, e->fid_rvn);
             else
-                printf("%s\n", vms_name);
+                dcl_out_printf("%s\n", vms_name);
 
             /* Size (used/allocated) + Owner UIC [group,member]. */
             char sizebuf[32];
             snprintf(sizebuf, sizeof(sizebuf), "%ld/%ld", blocks, alloc);
-            printf("Size:            %-16sOwner:    [%03o,%03o]\n",
+            dcl_out_printf("Size:            %-16sOwner:    [%03o,%03o]\n",
                    sizebuf,
                    (unsigned)(st->st_gid & 0377),
                    (unsigned)(st->st_uid & 0377));
@@ -809,32 +738,32 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
             if (e->from_acp) {
                 if (e->has_cre && dir_format_vmsbintime(e->credate, datebuf,
                                                         sizeof(datebuf)))
-                    printf("Created:  %s\n", datebuf);
+                    dcl_out_printf("Created:  %s\n", datebuf);
                 else
-                    printf("Created:  <not recorded>\n");
+                    dcl_out_printf("Created:  <not recorded>\n");
                 /* VMS follows the revision date with the revision count:
                  * "Revised:    8-OCT-2026 07:28:08.49 (2)" (tests/lab/captures/
                  * decnet-live-brackets-20261008/vax73-dirfull-recfmt.txt). */
                 if (e->has_rev && dir_format_vmsbintime(e->revdate, datebuf,
                                                         sizeof(datebuf)))
-                    printf("Revised:  %s (%u)\n", datebuf, (unsigned)e->revision);
+                    dcl_out_printf("Revised:  %s (%u)\n", datebuf, (unsigned)e->revision);
                 else
-                    printf("Revised:  <not recorded>\n");
+                    dcl_out_printf("Revised:  <not recorded>\n");
             } else {
                 if (e->has_btime) {
                     dir_format_vmsdate(e->btime, datebuf, sizeof(datebuf));
-                    printf("Created:  %s\n", datebuf);
+                    dcl_out_printf("Created:  %s\n", datebuf);
                 } else {
-                    printf("Created:  <not recorded>\n");
+                    dcl_out_printf("Created:  <not recorded>\n");
                 }
                 dir_format_vmsdate(st->st_mtim, datebuf, sizeof(datebuf));
-                printf("Revised:  %s\n", datebuf);
+                dcl_out_printf("Revised:  %s\n", datebuf);
             }
 
             /* Expiration/backup dates are genuinely unset here -- VMS prints
              * exactly these strings for a file that has none. */
-            printf("Expired:  <None specified>\n");
-            printf("Backup:   <No backup recorded>\n");
+            dcl_out_printf("Expired:  <None specified>\n");
+            dcl_out_printf("Backup:   <No backup recorded>\n");
 
             /* Record format / attributes from the header's FAT (vms-b447,
              * vms-a44), in the words a real OpenVMS VAX V7.3 prints for every
@@ -844,8 +773,8 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                 char fmt[96], attr[96];
                 dir_format_recfmt(e->rfm, e->mrs, e->lrl, e->fsz, fmt, sizeof fmt);
                 dir_format_recattr(e->rat, attr, sizeof attr);
-                printf("Record format:      %s\n", fmt);
-                printf("Record attributes:  %s\n", attr);
+                dcl_out_printf("Record format:      %s\n", fmt);
+                dcl_out_printf("Record attributes:  %s\n", attr);
             }
 
             /* File protection (long form): the genuine ODS-2 protection word
@@ -854,24 +783,24 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                                          : vmsfs_mode_to_protection(st->st_mode);
             char protbuf[80];
             dir_format_prot_full(vprot, protbuf, sizeof(protbuf));
-            printf("File protection:    %s\n", protbuf);
+            dcl_out_printf("File protection:    %s\n", protbuf);
 
-            printf("\n");
+            dcl_out_printf("\n");
         } else if (o->show_size || o->show_date || o->show_owner ||
                    o->show_protection) {
-            printf("%-39s", vms_name);
+            dcl_out_printf("%-39s", vms_name);
             if (o->show_size) {
                 /* /SIZE=USED (default) blocks used; /SIZE=ALLOCATION allocated;
                  * /SIZE=ALL "used/allocated". */
                 if (o->size_mode == DIR_SIZE_ALLOC) {
-                    printf(" %6ld", (long)st->st_blocks);
+                    dcl_out_printf(" %6ld", (long)st->st_blocks);
                 } else if (o->size_mode == DIR_SIZE_ALL) {
                     char sb[32];
                     snprintf(sb, sizeof(sb), "%ld/%ld", blocks,
                              (long)st->st_blocks);
-                    printf(" %11s", sb);
+                    dcl_out_printf(" %11s", sb);
                 } else {
-                    printf(" %6ld", blocks);
+                    dcl_out_printf(" %6ld", blocks);
                 }
             }
             if (o->show_date) {
@@ -883,10 +812,10 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                 } else {
                     dir_format_vmsdate(st->st_mtim, datebuf, sizeof(datebuf));
                 }
-                printf("  %s", datebuf);
+                dcl_out_printf("  %s", datebuf);
             }
             if (o->show_owner) {
-                printf(" [%03o,%03o]",
+                dcl_out_printf(" [%03o,%03o]",
                        (unsigned)(st->st_gid & 0377),
                        (unsigned)(st->st_uid & 0377));
             }
@@ -895,11 +824,11 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
                                              : vmsfs_mode_to_protection(st->st_mode);
                 char prot_buf[64];
                 vmsfs_format_protection(vprot, prot_buf, sizeof(prot_buf));
-                printf(" %s", prot_buf);
+                dcl_out_printf(" %s", prot_buf);
             }
-            printf("\n");
+            dcl_out_printf("\n");
         } else if (o->show_brief) {
-            printf("%s\n", vms_name);
+            dcl_out_printf("%s\n", vms_name);
         } else {
             if (col_width < 1) col_width = 20;
             /* A name as wide as (or wider than) a column occupies as many whole
@@ -914,16 +843,16 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
             /* A multi-column name that will not fit in the columns left on this
              * row starts a fresh row, as VMS does, rather than overflowing. */
             if (col > 0 && col + cells > o->columns) {
-                printf("\n");
+                dcl_out_printf("\n");
                 col = 0;
             }
             if (col > 0)
-                printf("%*s", col_pad, "");
-            printf("%s", vms_name);
+                dcl_out_printf("%*s", col_pad, "");
+            dcl_out_printf("%s", vms_name);
             col_pad = cells * col_width - (int)nlen;
             col += cells;
             if (col >= o->columns) {
-                printf("\n");
+                dcl_out_printf("\n");
                 col = 0;
             }
         }
@@ -934,7 +863,7 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
         !o->show_brief && !o->show_owner && !o->show_protection &&
         !o->show_acl && !o->show_security &&
         !o->suppress_files) {
-        printf("\n");
+        dcl_out_printf("\n");
     }
 
     *out_files = file_count;
@@ -1181,8 +1110,7 @@ static int dir_deellipsize(const char *spec, char *out, size_t out_sz)
 
 static int cmd_directory_list(struct dcl_command *cmd);
 static int copy_spec_has_node(const char *s);
-static int dnet_fal_verb_activate(struct dcl_context *ctx, struct dcl_command *cmd,
-                                  const char *mode, const char *fac);
+static int dcl_remote_verb(struct dcl_command *cmd, uint32_t (*verb)(const char *));
 
 /*
  * rd vms-ba2: DIRECTORY takes a P1 list. Consecutive elements in ONE directory
@@ -1260,7 +1188,7 @@ int cmd_directory(struct dcl_command *cmd)
             i = j;
         }
         if (groups > 1)
-            printf("\nGrand total of %d directories, %d file%s.\n",
+            dcl_out_printf("\nGrand total of %d directories, %d file%s.\n",
                    groups, files, files != 1 ? "s" : "");
         free(el); free(one); free(more);
         return final;
@@ -1286,9 +1214,10 @@ static int cmd_directory_list(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    /* DIRECTORY node::spec lists a remote directory through its FAL. */
+    /* DIRECTORY node::spec: RMS lists the remote directory ($PARSE/$SEARCH
+     * reach the node's FAL, rd vms-0a7). */
     if (cmd->param_count >= 1 && copy_spec_has_node(cmd->params[0]))
-        return dnet_fal_verb_activate(ctx, cmd, "--directory", "DIRECT");
+        return dcl_remote_verb(cmd, dcl_remote_directory);
 
     /* vms-481: DIRECTORY lists through the Files-11 ODS-2 ACP (sys$parse +
      * sys$search wildcard directory context + rms_file_attr), emitting the
@@ -1530,17 +1459,17 @@ static int cmd_directory_list(struct dcl_command *cmd)
                                   vms_dir, sizeof(vms_dir));
         int list_status = SS$_NORMAL;
         if (dir_more_n == 0) {
-            if (show_heading) printf("\nDirectory %s\n\n", vms_dir);
+            if (show_heading) dcl_out_printf("\nDirectory %s\n\n", vms_dir);
         } else {
             /* rd vms-ba2: the rest of this directory's run of list elements.
              * The heading comes first (as soon as there is a file to list);
              * an element that finds nothing is reported where it is met, and
              * the columns follow (lab #14). */
             int headed = 0;
-            if (entry_count > 0 && show_heading) { printf("\nDirectory %s\n\n", vms_dir); headed = 1; }
+            if (entry_count > 0 && show_heading) { dcl_out_printf("\nDirectory %s\n\n", vms_dir); headed = 1; }
             if (entry_count == 0) {
                 dcl_error("DIRECT", STS$K_ERROR, "OPENIN", "error opening %s as input", vms_pattern);
-                fprintf(stderr, "-RMS-E-FNF, file not found\n");
+                dcl_error_cont("RMS", 2, "FNF", "file not found");
                 list_status = 0x0001C04A;
             }
             for (int m = 0; m < dir_more_n; m++) {
@@ -1561,7 +1490,7 @@ static int cmd_directory_list(struct dcl_command *cmd)
                 if (mst != SS$_NORMAL || more_count == 0) {
                     free(more);
                     dcl_error("DIRECT", STS$K_ERROR, "OPENIN", "error opening %s as input", mpat);
-                    fprintf(stderr, "-RMS-E-FNF, file not found\n");
+                    dcl_error_cont("RMS", 2, "FNF", "file not found");
                     list_status = 0x0001C04A;   /* DIRECT-E-OPENIN, lab #14 */
                     continue;
                 }
@@ -1574,7 +1503,7 @@ static int cmd_directory_list(struct dcl_command *cmd)
                 free(more);
                 if (!headed && show_heading) {
                     dcl_directory_header_spec(ctx->default_dir, mbase, vms_dir, sizeof(vms_dir));
-                    printf("\nDirectory %s\n\n", vms_dir);
+                    dcl_out_printf("\nDirectory %s\n\n", vms_dir);
                     headed = 1;
                 }
             }
@@ -1594,18 +1523,18 @@ static int cmd_directory_list(struct dcl_command *cmd)
         /* Footer. Block counts appear only when file sizes are displayed
          * (/SIZE or /FULL) — see dcl_print_dir_total()'s citation. */
         if (show_grand_total) {
-            printf("\nGrand total of 1 directory, %d file%s",
+            dcl_out_printf("\nGrand total of 1 directory, %d file%s",
                    file_count, file_count != 1 ? "s" : "");
             if (show_full || (show_size && size_mode == DIR_SIZE_ALL))
-                printf(", %ld/%ld block%s", total_blocks, total_alloc,
+                dcl_out_printf(", %ld/%ld block%s", total_blocks, total_alloc,
                        total_blocks != 1 ? "s" : "");
             else if (show_size && size_mode == DIR_SIZE_ALLOC)
-                printf(", %ld block%s", total_alloc,
+                dcl_out_printf(", %ld block%s", total_alloc,
                        total_alloc != 1 ? "s" : "");
             else if (show_size)
-                printf(", %ld block%s", total_blocks,
+                dcl_out_printf(", %ld block%s", total_blocks,
                        total_blocks != 1 ? "s" : "");
-            printf(".\n");
+            dcl_out_printf(".\n");
         } else {
             dcl_print_dir_total(file_count, total_blocks, total_alloc,
                                 show_size, show_full, size_mode);
@@ -1615,7 +1544,7 @@ static int cmd_directory_list(struct dcl_command *cmd)
         if (show_trailing) {
             dcl_print_dir_total(file_count, total_blocks, total_alloc,
                                 show_size, show_full, size_mode);
-            printf("%s\n", vms_dir);
+            dcl_out_printf("%s\n", vms_dir);
         }
 
         return list_status;
@@ -1675,7 +1604,7 @@ static int cmd_directory_list(struct dcl_command *cmd)
             dir_print_entries(entries, entry_count, &sopts,
                               &file_count, &used, &alloc);
         } else {
-            if (show_heading) printf("\nDirectory %s\n\n", vms_dir);
+            if (show_heading) dcl_out_printf("\nDirectory %s\n\n", vms_dir);
             dir_print_entries(entries, entry_count, &opts,
                               &file_count, &used, &alloc);
             dcl_print_dir_total(file_count, used, alloc, show_size, show_full,
@@ -1700,17 +1629,17 @@ static int cmd_directory_list(struct dcl_command *cmd)
         return (int)(0x10000000u | RMS$_DNF);
     }
 
-    printf("\nGrand total of %d director%s, %ld file%s",
+    dcl_out_printf("\nGrand total of %d director%s, %ld file%s",
            grand_dirs, grand_dirs == 1 ? "y" : "ies",
            grand_files, grand_files != 1 ? "s" : "");
     if (show_full || (show_size && size_mode == DIR_SIZE_ALL))
-        printf(", %ld/%ld block%s", grand_used, grand_alloc,
+        dcl_out_printf(", %ld/%ld block%s", grand_used, grand_alloc,
                grand_used != 1 ? "s" : "");
     else if (show_size && size_mode == DIR_SIZE_ALLOC)
-        printf(", %ld block%s", grand_alloc, grand_alloc != 1 ? "s" : "");
+        dcl_out_printf(", %ld block%s", grand_alloc, grand_alloc != 1 ? "s" : "");
     else if (show_size)
-        printf(", %ld block%s", grand_used, grand_used != 1 ? "s" : "");
-    printf(".\n");
+        dcl_out_printf(", %ld block%s", grand_used, grand_used != 1 ? "s" : "");
+    dcl_out_printf(".\n");
 
     return SS$_NORMAL;
 }
@@ -1729,9 +1658,9 @@ static int type_page_lines(struct dcl_context *ctx)
 static int type_page_pause(void)
 {
     char buf[64];
-    printf("Press RETURN to continue\n");
-    fflush(stdout);
-    return fgets(buf, sizeof(buf), stdin) != NULL;
+    dcl_out_printf("Press RETURN to continue\n");
+    dcl_out_flush();
+    return dcl_in_get(NULL, buf, sizeof(buf)) >= 0;
 }
 
 /*
@@ -1763,7 +1692,10 @@ static void type_list_heading(struct dcl_context *ctx, const struct dcl_command 
                                      const char *, char *, size_t);
         dcl_message_spec(ctx, cmd->params[0], NULL, full, sizeof full);
     }
-    printf("\n%s\n\n", full);
+    /* each blank line is a record holding one space: the raw VAX console
+     * bytes are "\r\n \r\nSYS$SYSROOT:[SYSMGR]TB.TXT;1\r\n \r\n" (rd vms-691d,
+     * tests/lab/captures/vms-691d-type-spawn-20261102) */
+    dcl_out_printf(" \n%s\n \n", full);
 }
 
 int cmd_type(struct dcl_command *cmd)
@@ -1775,9 +1707,10 @@ int cmd_type(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    /* TYPE node::spec reads the remote file(s) through the remote FAL. */
+    /* TYPE node::spec: RMS reads the remote file(s) ($SEARCH, $OPEN, $GET
+     * reach the node's FAL, rd vms-0a7). */
     if (copy_spec_has_node(cmd->params[0]))
-        return dnet_fal_verb_activate(ctx, cmd, "--type", "TYPE");
+        return dcl_remote_verb(cmd, dcl_remote_type);
 
     /* vms-481: TYPE reads the file through RMS ($OPEN + sequential $GET), which
      * on the product runtime reaches the Files-11 ODS-2 ACP over /dev/vms -- not
@@ -1829,7 +1762,7 @@ int cmd_type(struct dcl_command *cmd)
                             break;
                         line_count = 0;
                     }
-                    fputs(line, stdout);
+                    dcl_out_fputs(line);
                     line_count++;
                 }
                 fclose(fp);
@@ -1847,8 +1780,13 @@ int cmd_type(struct dcl_command *cmd)
             dcl_message_spec(ctx, cmd->params[0], NULL, full, sizeof full);
             if (rst == 0 || rst == RMS$_FNF || rst == RMS$_DNF) {
                 dcl_error("TYPE", 0, "SEARCHFAIL", "error searching for %s", full);
-                fprintf(stderr, "-RMS-E-FNF, file not found\n");
-                return SS$_NOSUCHFILE;
+                dcl_err_printf("-RMS-E-FNF, file not found\n");
+                /* $STATUS as VAX V7.3 leaves it (rd vms-691d, lab capture
+                 * tests/lab/captures/vms-691d-type-spawn-20261102): TYPE's
+                 * SEARCHFAIL (facility TYPE 0x95, shared message 0x1238,
+                 * warning) with STS$M_INHIB_MSG -- %X10951238 -- for a lone
+                 * file and for a list alike. */
+                return 0x10951238;
             }
             /* The file is there but could not be opened (another accessor
              * holds it, no privilege, ...): say so with RMS's own status --
@@ -1869,9 +1807,9 @@ int cmd_type(struct dcl_command *cmd)
                     txt[tl] = '\0';
                     if (txt[0] == '%')
                         txt[0] = '-';
-                    fprintf(stderr, "%s\n", txt);
+                    dcl_err_printf("%s\n", txt);
                 } else {
-                    fprintf(stderr, "-SYSTEM-F-STATUS, status %%X%08X\n", (unsigned)rst);
+                    dcl_err_printf("-SYSTEM-F-STATUS, status %%X%08X\n", (unsigned)rst);
                 }
             }
         }
@@ -1894,8 +1832,8 @@ int cmd_type(struct dcl_command *cmd)
                 break;
             line_count = 0;
         }
-        fwrite(line, 1, (size_t)len, stdout);
-        fputc('\n', stdout);           /* RMS records carry no terminator */
+        dcl_out_write(line, (size_t)len);
+        dcl_out_putc('\n');           /* RMS records carry no terminator */
         line_count++;
     }
 
@@ -2279,205 +2217,29 @@ static int copy_spec_has_node(const char *s)
 }
 
 /*
- * copy_dnet_split_access - strip the FAL access-control PASSWORD out of a COPY
- * spec so it never reaches the client's argv (world-readable in
- * /proc/<pid>/cmdline). NODE"user password [account]"::rest becomes
- * out_spec = NODE"user"::rest (the proxy username stays -- it is not secret) and
- * out_pw = the password, which the caller hands to the client over an inherited
- * pipe fd. A spec with no "..." access string is copied verbatim with out_pw="".
- * The account field (rarely used) is dropped here; a NODE"user"::file proxy
- * access (no password) passes through with an empty password.
+ * dcl_remote_verb (rd vms-0a7) - `$ DIRECTORY node::spec` / `$ TYPE
+ * node::spec`. RMS does the remote access (the password stays in this
+ * process, in the access-control string RMS puts in the NCB); `verb` lays the
+ * result out as VMS does. Only the plain form is served: a qualifier is
+ * refused honestly rather than silently dropped. A failure has been reported
+ * already, so $STATUS carries it with STS$M_INHIB_MSG.
  */
-static void copy_dnet_split_access(const char *spec, char *out_spec, size_t out_cap,
-                                   char *out_pw, size_t pw_cap)
+static int dcl_remote_verb(struct dcl_command *cmd, uint32_t (*verb)(const char *))
 {
-    out_pw[0] = '\0';
-    const char *q1 = strchr(spec, '"');
-    const char *q2 = q1 ? strchr(q1 + 1, '"') : NULL;
-    if (!q1 || !q2) {                 /* no access string -- verbatim */
-        snprintf(out_spec, out_cap, "%s", spec);
-        return;
-    }
-    char acc[256];
-    size_t alen = (size_t)(q2 - (q1 + 1));
-    if (alen >= sizeof acc) alen = sizeof acc - 1;
-    memcpy(acc, q1 + 1, alen);
-    acc[alen] = '\0';
-
-    /* token 1 = user, token 2 = password (space-separated). */
-    char user[128] = "";
-    char *sp = acc;
-    while (*sp == ' ') sp++;
-    char *u = sp;
-    while (*sp && *sp != ' ') sp++;
-    size_t ulen = (size_t)(sp - u);
-    if (ulen >= sizeof user) ulen = sizeof user - 1;
-    memcpy(user, u, ulen);
-    user[ulen] = '\0';
-    while (*sp == ' ') sp++;
-    char *pw = sp, *pe = sp;
-    while (*pe && *pe != ' ') pe++;
-    size_t plen = (size_t)(pe - pw);
-    if (plen >= pw_cap) plen = pw_cap - 1;
-    memcpy(out_pw, pw, plen);
-    out_pw[plen] = '\0';
-
-    /* Rebuild NODE"user"::rest: node prefix (before q1) + "user" + rest (from q2+1). */
-    snprintf(out_spec, out_cap, "%.*s\"%s\"%s",
-             (int)(q1 - spec), spec, user, q2 + 1);
-}
-
-/*
- * copy_dnet_activate (rd vms-ea8) - the OUTBOUND $ COPY node::file bridge. A
- * NODE:: spec on either side is a DECnet FAL/DAP transfer: DCL activates
- * SYS$SYSTEM:DECNETD.EXE --copy <src> <dst> on the caller's process (the SAME
- * image activator RUN / SET HOST use), which opens a real object-17 logical link
- * over the datalink and drives the FAL COPY client (dnet_fal_client_put/get).
- * The FAL password is NEVER placed on argv: it is stripped from the spec and
- * handed to the client over an inherited pipe fd (--password-fd). When
- * DECNETD.EXE is not staged the command reports honestly (INV-6, no fake copy).
- */
-static int copy_dnet_activate(struct dcl_context *ctx, const char *src, const char *dst)
-{
-    const char *img_spec = "SYS$SYSTEM:DECNETD.EXE";
-    char linux_path[1024], resolved[1024];
-    dcl_resolve_path(ctx, img_spec, linux_path, sizeof(linux_path));
-    if (!dcl_resolve_activatable(ctx, img_spec, linux_path,
-                                 resolved, sizeof(resolved))) {
-        printf("%%COPY-I-NETNOTAVAIL, DECnet file COPY (FAL/DAP object 17) is not"
-               " available on this system (SYS$SYSTEM:DECNETD.EXE is not staged)\n");
-        return SS$_ABORT;
-    }
-    strncpy(linux_path, resolved, sizeof(linux_path) - 1);
-    linux_path[sizeof(linux_path) - 1] = '\0';
-
-    char src_clean[1024], dst_clean[1024], src_pw[128], dst_pw[128];
-    copy_dnet_split_access(src, src_clean, sizeof(src_clean), src_pw, sizeof(src_pw));
-    copy_dnet_split_access(dst, dst_clean, sizeof(dst_clean), dst_pw, sizeof(dst_pw));
-
-    /*
-     * THE LOCAL SIDE IS THE USER'S FILE, IN THE USER'S DEFAULT DIRECTORY.
-     * DECNETD.EXE hands its local spec straight to RMS, which completes a
-     * missing device/directory from SYS$DISK's root -- not from this DCL's
-     * SET DEFAULT. Found live (booted OVMX, default SYS$SYSROOT:[SYSMGR]):
-     * `COPY 1.1"SYSTEM pw"::TOOVMX.TXT FROMVAX.TXT` reported success and the
-     * file landed in VDA0:[000000]. DCL completes the local spec the way its
-     * own file commands do (dcl_rms_effective_spec) before handing it over;
-     * the NODE:: side is the remote FAL's to resolve.
-     */
-    {
-        char *local = strstr(src_clean, "::") ? dst_clean : src_clean;
-        size_t localsz = (local == dst_clean) ? sizeof(dst_clean) : sizeof(src_clean);
-        char eff[1024];
-        if (!strstr(local, "::") &&
-            dcl_rms_effective_spec(ctx, local, eff, sizeof(eff)) == 0 && eff[0] &&
-            strlen(eff) < localsz)
-            memcpy(local, eff, strlen(eff) + 1);
-    }
-    const char *pw = src_pw[0] ? src_pw : (dst_pw[0] ? dst_pw : "");
-
-    int pfd[2] = { -1, -1 };
-    char fdbuf[16] = "";
-    if (pw[0]) {
-        if (pipe(pfd) != 0) {
-            printf("%%COPY-F-NETPIPE, could not set up the DECnet password channel\n");
-            return SS$_ABORT;
-        }
-        size_t pl = strlen(pw);
-        if (write(pfd[1], pw, pl) != (ssize_t)pl) {
-            close(pfd[0]); close(pfd[1]);
-            printf("%%COPY-F-NETPIPE, could not pass the DECnet password\n");
-            return SS$_ABORT;
-        }
-        close(pfd[1]);                 /* EOF follows the password */
-        snprintf(fdbuf, sizeof(fdbuf), "%d", pfd[0]);
-    }
-
-    char *argv[8];
-    int argc = 0;
-    argv[argc++] = linux_path;
-    argv[argc++] = "--copy";
-    argv[argc++] = src_clean;
-    argv[argc++] = dst_clean;
-    if (fdbuf[0]) {
-        argv[argc++] = "--password-fd";
-        argv[argc++] = fdbuf;
-    }
-    argv[argc] = NULL;
-
-    int rc = dcl_activate_image(ctx, img_spec, linux_path, argv);
-
-    if (pfd[0] >= 0) close(pfd[0]);
-    memset(src_pw, 0, sizeof src_pw);   /* wipe the password copies */
-    memset(dst_pw, 0, sizeof dst_pw);
-    return rc;
-}
-
-/*
- * dnet_fal_verb_activate (rd vms-6a4) - `$ DIRECTORY node::spec` and
- * `$ TYPE node::spec`. As for COPY, DCL activates SYS$SYSTEM:DECNETD.EXE on
- * this process (--directory / --type), which lists or reads the remote file
- * through the remote FAL (object 17) over NETACP's _NET: links and prints what
- * VMS prints. The password is stripped from the spec and handed over an
- * inherited pipe fd, never argv. `fac` is the command's message facility.
- */
-static int dnet_fal_verb_activate(struct dcl_context *ctx, struct dcl_command *cmd,
-                                  const char *mode, const char *fac)
-{
-    /* Only the plain form goes over the network; a qualifier is refused
-     * honestly rather than silently dropped. */
-    if (cmd->qualifier_count > 0) {
-        printf("%%SYSTEM-F-UNSUPPORTED, unsupported operation or function\n");
+    /* DIRECTORY/FULL is served (RMS asks the FAL for each file's attributes
+     * with the listing); every other qualifier is refused honestly. */
+    if (verb == dcl_remote_directory && cmd->qualifier_count == 1 &&
+        strlen(cmd->qualifiers[0].name) >= 2 &&
+        strncasecmp("FULL", cmd->qualifiers[0].name, strlen(cmd->qualifiers[0].name)) == 0 &&
+        !cmd->qualifiers[0].negated &&
+        !cmd->qualifiers[0].value[0])
+        verb = dcl_remote_directory_full;
+    else if (cmd->qualifier_count > 0) {
+        dcl_out_printf("%%SYSTEM-F-UNSUPPORTED, unsupported operation or function\n");
         return SS$_UNSUPPORTED;
     }
-    const char *img_spec = "SYS$SYSTEM:DECNETD.EXE";
-    char linux_path[1024], resolved[1024];
-    dcl_resolve_path(ctx, img_spec, linux_path, sizeof(linux_path));
-    if (!dcl_resolve_activatable(ctx, img_spec, linux_path,
-                                 resolved, sizeof(resolved))) {
-        printf("%%%s-I-NETNOTAVAIL, DECnet file access (FAL/DAP object 17) is not"
-               " available on this system (SYS$SYSTEM:DECNETD.EXE is not staged)\n", fac);
-        return SS$_ABORT;
-    }
-    strncpy(linux_path, resolved, sizeof(linux_path) - 1);
-    linux_path[sizeof(linux_path) - 1] = '\0';
-
-    char clean[1024], pw[128];
-    copy_dnet_split_access(cmd->params[0], clean, sizeof(clean), pw, sizeof(pw));
-
-    int pfd[2] = { -1, -1 };
-    char fdbuf[16] = "";
-    if (pw[0]) {
-        if (pipe(pfd) != 0) {
-            memset(pw, 0, sizeof pw);
-            printf("%%%s-F-NETPIPE, could not set up the DECnet password channel\n", fac);
-            return SS$_ABORT;
-        }
-        size_t pl = strlen(pw);
-        if (write(pfd[1], pw, pl) != (ssize_t)pl) {
-            close(pfd[0]); close(pfd[1]);
-            memset(pw, 0, sizeof pw);
-            printf("%%%s-F-NETPIPE, could not pass the DECnet password\n", fac);
-            return SS$_ABORT;
-        }
-        close(pfd[1]);
-        snprintf(fdbuf, sizeof(fdbuf), "%d", pfd[0]);
-    }
-    memset(pw, 0, sizeof pw);
-
-    char *argv[8];
-    int argc = 0;
-    argv[argc++] = linux_path;
-    argv[argc++] = (char *)mode;
-    argv[argc++] = clean;
-    if (fdbuf[0]) {
-        argv[argc++] = "--password-fd";
-        argv[argc++] = fdbuf;
-    }
-    argv[argc] = NULL;
-    int rc = dcl_activate_image(ctx, img_spec, linux_path, argv);
-    if (pfd[0] >= 0) close(pfd[0]);
-    return rc;
+    uint32_t st = verb(cmd->params[0]);
+    return (st & 1) ? SS$_NORMAL : (int)(st | 0x10000000u);
 }
 
 /*
@@ -2536,24 +2298,24 @@ static int copy_concat(struct dcl_context *ctx, struct dcl_command *cmd)
                 dcl_resolve_path(ctx, out, out_path, sizeof out_path);
                 continue;
             }
-            char src_path[1024];
-            dcl_resolve_path(ctx, in, src_path, sizeof src_path);
-            FILE *src = fopen(src_path, "rb"), *dst = NULL;
+            /* Each further input is appended to the output through RMS:
+             * $GET its records, $PUT them at the end of the output (libc-drop
+             * vms-523). */
+            uint32_t rst = RMS$_NORMAL, wst = RMS$_NORMAL;
+            struct dcl_rms_reader *src = dcl_rms_read_open(ctx, in, &rst);
             if (!src) {
                 dcl_error("RMS", 2, "FNF", "file not found - %s", in);
                 final = SS$_NOSUCHFILE;
                 continue;
             }
-            dst = fopen(out_path, "ab");
-            size_t k;
-            int recs = 0;
-            while (dst && fgets(rec, sizeof rec, src)) {
-                k = strlen(rec);
-                if (fwrite(rec, 1, k, dst) != k) { final = SS$_ABORT; break; }
+            struct dcl_rms_writer *dst = dcl_rms_write_append(ctx, out, &wst);
+            int recs = 0, eof = 0, nr;
+            while (dst && (nr = dcl_rms_read_record(src, rec, sizeof rec, &eof)) >= 0) {
+                if (dcl_rms_write_record(dst, rec, (size_t)nr) != 0) { final = SS$_ABORT; break; }
                 recs++;
             }
-            fclose(src);
-            if (!dst || fclose(dst) != 0) {
+            dcl_rms_read_close(src);
+            if (!dst || !(dcl_rms_write_close(dst) & 1)) {
                 dcl_error("RMS", 2, "WER", "write error - %s", out);
                 final = SS$_ABORT;
             } else if (do_log) {
@@ -2630,19 +2392,17 @@ int cmd_copy(struct dcl_command *cmd)
     if (dcl_param_total(cmd) > dcl_slot_total(cmd) && dcl_slot_total(cmd) == 2)
         return copy_concat(ctx, cmd);
 
-    /* ---- DECnet file COPY (NODE"user pw"::file), rd vms-8c2 / vms-ea8 -----
-     * A node prefix on either side is a DECnet FAL/DAP transfer, NOT a local
-     * ODS-2 COPY. DCL activates the outbound FAL COPY client (SYS$SYSTEM:
-     * DECNETD.EXE --copy) on this process -- the same image activator SET HOST
-     * and RUN use -- which opens a real object-17 logical link over the datalink
-     * and drives dnet_fal_client_put/get (the transfer core proven byte-exact by
-     * DECNETD.EXE --copy-accept-test in the booted battery, and host-proven by
-     * --copy-transport-selftest). The FAL password is stripped from the spec and
-     * handed over an inherited pipe fd, never argv. With DECNETD.EXE unstaged the
-     * bridge reports honestly (INV-6, no fake copy). The live-wire proof against
-     * a real remote FAL is lab-gated (rd vms-a70/vms-101), as for SET HOST. */
-    if (copy_spec_has_node(cmd->params[0]) || copy_spec_has_node(cmd->params[1]))
-        return copy_dnet_activate(ctx, cmd->params[0], cmd->params[1]);
+    /* A node:: spec on either side (rd vms-0a7): RMS reaches the node's FAL
+     * ($SEARCH, $OPEN/$GET, $CREATE/$PUT) and dcl_remote_copy copies record by
+     * record; messages show the password as the word "password". */
+    if (copy_spec_has_node(cmd->params[0]) || copy_spec_has_node(cmd->params[1])) {
+        char sx[1024], dx[1024];
+        if (dcl_rms_effective_spec(ctx, cmd->params[0], sx, sizeof sx) != 0 ||
+            dcl_rms_effective_spec(ctx, cmd->params[1], dx, sizeof dx) != 0)
+            return RMS$_SYN;
+        uint32_t st = dcl_remote_copy(sx, dx, dcl_has_qualifier(cmd, "LOG"));
+        return (st & 1) ? SS$_NORMAL : (int)(st | 0x10000000u);
+    }
 
     int do_log      = dcl_has_qualifier(cmd, "LOG");
     int do_confirm  = dcl_has_qualifier(cmd, "CONFIRM");
@@ -2746,10 +2506,10 @@ int cmd_copy(struct dcl_command *cmd)
                 char vsrc[256], vdst[256];
                 dcl_format_filespec(src_full, vsrc, sizeof(vsrc));
                 dcl_format_filespec(dst_full, vdst, sizeof(vdst));
-                printf("COPY %s to %s ? [N]: ", vsrc, vdst);
-                fflush(stdout);
+                dcl_out_printf("COPY %s to %s ? [N]: ", vsrc, vdst);
+                dcl_out_flush();
                 char resp[64];
-                if (!fgets(resp, sizeof(resp), stdin)) break;
+                if (dcl_in_get(NULL, resp, sizeof(resp)) < 0) break;
                 if (toupper((unsigned char)resp[0]) != 'Y') continue;
             }
 
@@ -2889,10 +2649,10 @@ int cmd_copy(struct dcl_command *cmd)
         }
 
         if (do_confirm) {
-            printf("COPY %s to %s ? [N]: ", src_spec, dst_spec);
-            fflush(stdout);
+            dcl_out_printf("COPY %s to %s ? [N]: ", src_spec, dst_spec);
+            dcl_out_flush();
             char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (dcl_in_get(NULL, resp, sizeof(resp)) < 0) break;
             if (toupper((unsigned char)resp[0]) != 'Y') continue;
         }
 
@@ -3035,10 +2795,10 @@ static int delete_files_acp(struct dcl_context *ctx, const char *param,
         if (!version_selected(fms, i, n, has_version, vspec)) continue;
 
         if (do_confirm) {
-            printf("DELETE %s ? [N]: ", arr[i].spec);
-            fflush(stdout);
+            dcl_out_printf("DELETE %s ? [N]: ", arr[i].spec);
+            dcl_out_flush();
             char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (dcl_in_get(NULL, resp, sizeof(resp)) < 0) break;
             if (toupper((unsigned char)resp[0]) != 'Y') continue;
         }
 
@@ -3063,7 +2823,9 @@ static int delete_files_acp(struct dcl_context *ctx, const char *param,
         dcl_error("RMS", 2, "FNF", "file not found - %s", param);
         return SS$_NOSUCHFILE;
     }
-    return SS$_NORMAL;
+    /* a DELETE leaves %X10000001 (SS$_NORMAL|STS$M_INHIB_MSG) in $STATUS (VAX V7.3,
+     * docs/oracle/semantics/fio/vax73-delete-status-probe.txt) */
+    return 0x10000001;
 }
 
 /* DELETE of one file specification (an element of DELETE's list). */
@@ -3135,10 +2897,10 @@ static int delete_one_spec(struct dcl_context *ctx, const char *spec,
         if (do_confirm) {
             char vms_spec[256];
             dcl_format_filespec(full, vms_spec, sizeof(vms_spec));
-            printf("DELETE %s ? [N]: ", vms_spec);
-            fflush(stdout);
+            dcl_out_printf("DELETE %s ? [N]: ", vms_spec);
+            dcl_out_flush();
             char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (dcl_in_get(NULL, resp, sizeof(resp)) < 0) break;
             if (toupper((unsigned char)resp[0]) != 'Y') continue;
         }
 
@@ -3198,10 +2960,10 @@ int cmd_delete(struct dcl_command *cmd)
              * directly rather than through dcl_error() (which always writes a
              * primary '%' line). */
             dcl_error("DELETE", 0, "SEARCHFAIL", "error searching for %u", entry_id);
-            fprintf(stderr, "-JBC-E-NOSUCHENT, no such entry\n");
+            dcl_err_printf("-JBC-E-NOSUCHENT, no such entry\n");
             return qsts;
         }
-        printf("%%DELETE-S-DELETED, entry %u deleted\n", entry_id);
+        dcl_out_printf("%%DELETE-S-DELETED, entry %u deleted\n", entry_id);
         return SS$_NORMAL;
     }
 
@@ -3239,7 +3001,7 @@ int cmd_delete(struct dcl_command *cmd)
     /* DELETE a,b,...: each element of the list in turn (the parser hands
      * them over as separate parameters); a failure on one does not stop the
      * rest, and $STATUS is the last failure (rd vms-ad5a). */
-    int rc = SS$_NORMAL;
+    int rc = 0x10000001;   /* SS$_NORMAL|STS$M_INHIB_MSG: what a DELETE leaves in $STATUS (VAX V7.3, docs/oracle/semantics/fio/) */
     for (int pi = 0; pi < dcl_param_total(cmd); pi++) {
         const char *spec = dcl_param_at(cmd, pi);
         if (!spec || !spec[0]) continue;
@@ -3547,7 +3309,7 @@ static int create_dir_not_created(const char *spec, uint32_t why)
         char sec[256];
         if (vms_status_string(why, sec, sizeof sec) > 0 && sec[0] == '%') {
             sec[0] = '-';
-            fprintf(stderr, "%s\n", sec);
+            dcl_err_printf("%s\n", sec);
         }
     }
     return (int)CREATE$_DIRNOTCRE;
@@ -3682,21 +3444,21 @@ int cmd_create(struct dcl_command *cmd)
     int srt = dcl_sysinput_setup(ctx, &si);
     if (srt)
         return srt;
-    if (ctx->interactive || ctx->proc_depth >= 0) {
+    if (ctx->interactive || ctx->proc_depth >= 0 || si.saved_fd0 >= 0) {
         char line[4096];
         /* A ^Z that ended an earlier CREATE left stdin's end-of-file flag
          * set; a terminal's end of file is per read, so clear it, or every
          * later CREATE at the terminal reads nothing and writes an empty file
          * (rd vms-f37: KSBC.COM, keystroke BC.READ) */
-        clearerr(stdin);
+        dcl_in_clear_eof();
         while (1) {
-            if (!fgets(line, sizeof(line), stdin)) break;
+            if (dcl_in_get(NULL, line, sizeof(line)) < 0) break;
             size_t ll = strlen(line);
             while (ll > 0 && (line[ll - 1] == '\n' || line[ll - 1] == '\r'))
                 ll--;
             if (dcl_rms_write_record(w, line, ll) != 0) break;
         }
-        clearerr(stdin);
+        dcl_in_clear_eof();
     }
     dcl_sysinput_restore(&si);
 
@@ -3765,16 +3527,16 @@ int cmd_search(struct dcl_command *cmd)
 
         if (match) {
             if (!found) {
-                printf("\n******************************\n%s\n", vms_name);
+                dcl_out_printf("\n******************************\n%s\n", vms_name);
                 found = 1;
             }
             /* Remove trailing newline for cleaner output */
             size_t llen = strlen(line);
             if (llen > 0 && line[llen - 1] == '\n') line[llen - 1] = '\0';
             if (show_numbers) {
-                printf("%d: %s\n", line_num, line);
+                dcl_out_printf("%d: %s\n", line_num, line);
             } else {
-                printf("%s\n", line);
+                dcl_out_printf("%s\n", line);
             }
             match_count++;
         }
@@ -3783,7 +3545,7 @@ int cmd_search(struct dcl_command *cmd)
     fclose(fp);
 
     if (show_stats) {
-        printf("\n%d lines matched in 1 file\n", match_count);
+        dcl_out_printf("\n%d lines matched in 1 file\n", match_count);
     }
 
     if (!found) {
@@ -3892,10 +3654,10 @@ static int purge_files_acp(struct dcl_context *ctx, const char *param, int keep_
                 newer++;
         if (newer < keep_count) continue;
         if (do_confirm) {
-            printf("PURGE %s ? [N]: ", arr[i].spec);
-            fflush(stdout);
+            dcl_out_printf("PURGE %s ? [N]: ", arr[i].spec);
+            dcl_out_flush();
             char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (dcl_in_get(NULL, resp, sizeof(resp)) < 0) break;
             if (toupper((unsigned char)resp[0]) != 'Y') continue;
         }
         uint32_t est = dcl_rms_erase(ctx, arr[i].spec);
@@ -3911,9 +3673,9 @@ static int purge_files_acp(struct dcl_context *ctx, const char *param, int keep_
     }
     free(arr);
     if (total_deleted == 0) {
-        printf("%%PURGE-I-NOPURGE, no file versions to purge\n");
+        dcl_out_printf("%%PURGE-I-NOPURGE, no file versions to purge\n");
     } else {
-        printf("%%PURGE-I-PURGED, %d old version%s deleted\n",
+        dcl_out_printf("%%PURGE-I-PURGED, %d old version%s deleted\n",
                total_deleted, total_deleted != 1 ? "s" : "");
     }
     return SS$_NORMAL;
@@ -4088,11 +3850,11 @@ int cmd_purge(struct dcl_command *cmd)
             for (ui = 0; ui < sizeof(upper_ext) - 1 && fext[ui]; ui++)
                 upper_ext[ui] = (char)toupper((unsigned char)fext[ui]);
             upper_ext[ui] = '\0';
-            printf("PURGE %s%s%s ? [N]: ", upper_name,
+            dcl_out_printf("PURGE %s%s%s ? [N]: ", upper_name,
                    upper_ext[0] ? "." : "", upper_ext);
-            fflush(stdout);
+            dcl_out_flush();
             char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin) ||
+            if (dcl_in_get(NULL, resp, sizeof(resp)) < 0 ||
                 toupper((unsigned char)resp[0]) != 'Y')
                 continue;
         }
@@ -4124,9 +3886,9 @@ int cmd_purge(struct dcl_command *cmd)
     if (pattern) free((void *)pattern);
 
     if (total_deleted == 0) {
-        printf("%%PURGE-I-NOPURGE, no file versions to purge\n");
+        dcl_out_printf("%%PURGE-I-NOPURGE, no file versions to purge\n");
     } else {
-        printf("%%PURGE-I-PURGED, %d old version%s deleted\n",
+        dcl_out_printf("%%PURGE-I-PURGED, %d old version%s deleted\n",
                total_deleted, total_deleted != 1 ? "s" : "");
     }
     return SS$_NORMAL;

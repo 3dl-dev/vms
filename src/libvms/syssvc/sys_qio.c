@@ -748,158 +748,28 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
  * (the QIOW completes when the host kernel completes the socket op), the same
  * reasoning qio_mailbox_op gives for a blocking mailbox read.
  */
-struct bg_sockaddr_in {
-    uint16_t family;    /* AF_INET */
-    uint16_t port;      /* network byte order */
-    uint32_t addr;      /* network byte order (IPv4) */
-};
-
-/*
- * IO$_SETMODE P4: the socket-option list (iodef.h TCPIP$C_SOCKOPT, vms-a9e7).
- * P4 is the address of an item_list_2 descriptor of type TCPIP$C_SOCKOPT whose
- * address/length name an array of item_list_2 option entries. Each recognised
- * option is applied to the channel's executive socket; an unknown option code,
- * a malformed list or a bad value is SS$_BADPARAM (honest -- never swallowed).
- */
-static uint32_t qio_bg_sockopts(uint32_t exec_chan, uintptr_t p4)
-{
-    const struct tcpip_item_list_2 *desc = (const struct tcpip_item_list_2 *)p4;
-    const struct tcpip_item_list_2 *opt;
-    uint32_t n, i;
-
-    if (desc->type != TCPIP$C_SOCKOPT || desc->address == NULL ||
-        desc->length == 0 || desc->length % sizeof(struct tcpip_item_list_2) != 0)
-        return SS$_BADPARAM;
-    opt = (const struct tcpip_item_list_2 *)desc->address;
-    n = desc->length / (uint32_t)sizeof(struct tcpip_item_list_2);
-    for (i = 0; i < n; i++) {
-        if (opt[i].type == TCPIP$C_RCVTIMEO) {
-            const struct tcpip_timeval32 *tv =
-                (const struct tcpip_timeval32 *)opt[i].address;
-            uint64_t ms;
-            uint32_t st;
-            if (tv == NULL || opt[i].length < sizeof(*tv) ||
-                tv->tv_sec < 0 || tv->tv_usec < 0 || tv->tv_usec >= 1000000)
-                return SS$_BADPARAM;
-            ms = (uint64_t)tv->tv_sec * 1000u + (uint64_t)tv->tv_usec / 1000u;
-            if (ms == 0 && tv->tv_usec > 0)
-                ms = 1;                     /* sub-ms timeout: still a timeout */
-            if (ms > 0x7fffffffu)
-                ms = 0x7fffffffu;
-            st = vms_kif_bg_setsockopt(exec_chan, VMS_BG_SOL_EXEC,
-                                       VMS_BG_SO_RCVTIMEO_MS, (int)ms);
-            if (!(st & 1))
-                return st;
-        } else {
-            return SS$_BADPARAM;            /* an option OVMX does not implement */
-        }
-    }
-    return SS$_NORMAL;
-}
+#include "bg_qio_func.h"   /* the BGn: function map, shared with DECC$SHR (vms-99f) */
 
 static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                           void *p1, uint32_t p2, uint32_t p3, uintptr_t p4,
-                          uint32_t efn,
-                          void (*astadr)(uint32_t), uint32_t astprm) {
+                          uint32_t efn, void (*astadr)(uint32_t), uint32_t astprm) {
     qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
     uint32_t exec_chan = vms$$chan_exec_chan(chan);
-    uint32_t base_func = func & IO$M_FCODE;
+    uint32_t acc_chan = 0;
     uint32_t st;
     uint32_t actlen = 0;
 
-    switch (base_func) {
-        case IO$_SETMODE:
-        case IO$_SETCHAR:
-            /* Overloaded (vms-698): P1 != NULL -> bind (P1 = sockaddr; the
-             * effective local address, incl. an ephemeral port, is written back);
-             * else P3 != 0 -> listen (P3 = backlog); else -> create the socket.
-             * The create path is further selected by P2 (the socket-kind
-             * selector, IO$K_SOCK_*, iodef.h, vms-80b): IO$K_SOCK_ICMP creates a
-             * raw ICMP socket for PING, anything else (0 = IO$K_SOCK_STREAM, what
-             * every existing caller passes) the default AF_INET/SOCK_STREAM TCP
-             * client socket; IO$K_SOCK_UDP a UDP datagram socket (vms-a9e7).
-             * P4 (vms-a9e7) = a socket-option list (TCPIP$C_SOCKOPT, iodef.h) to
-             * apply to the channel's EXISTING socket -- e.g. the receive timeout;
-             * a SETMODE carrying only P4 sets options and creates nothing. */
-            if (p4 && !p1 && p3 == 0 && p2 == 0) {
-                st = qio_bg_sockopts(exec_chan, p4);
-            } else if (p1) {
-                struct bg_sockaddr_in *sa = (struct bg_sockaddr_in *)p1;
-                uint16_t eport = 0;
-                uint32_t eaddr = 0;
-                st = vms_kif_bg_bind(exec_chan, sa->family, sa->port, sa->addr,
-                                     &eport, &eaddr);
-                if (st & 1) { sa->port = eport; sa->addr = eaddr; }
-            } else if (p3 != 0) {
-                st = vms_kif_bg_listen(exec_chan, (int)p3);
-            } else if (p2 == IO$K_SOCK_ICMP) {
-                st = vms_kif_bg_setmode_icmp(exec_chan);
-            } else if (p2 == IO$K_SOCK_UDP) {
-                st = vms_kif_bg_setmode_udp(exec_chan);
-            } else {
-                st = vms_kif_bg_setmode(exec_chan);
-            }
-            if ((st & 1) && p4)
-                st = qio_bg_sockopts(exec_chan, p4);  /* create/bind + options */
-            break;
-
-        case IO$_ACCESS:
-            if (func & IO$M_ACCEPT) {
-                /* accept (vms-698): P3 = a second BG channel ($ASSIGNed empty) to
-                 * receive the connection; P1 (optional) = peer sockaddr out. */
-                uint32_t acc_chan;
-                uint16_t fam = 0, port = 0;
-                uint32_t a4 = 0;
-                if (p3 == 0 || !vms$$chan_is_bg((uint16_t)p3)) {
-                    st = SS$_BADPARAM;
-                    break;
-                }
-                acc_chan = vms$$chan_exec_chan((uint16_t)p3);
-                st = vms_kif_bg_accept(exec_chan, acc_chan, &fam, &port, &a4);
-                if ((st & 1) && p1 && p2 >= sizeof(struct bg_sockaddr_in)) {
-                    struct bg_sockaddr_in *sa = (struct bg_sockaddr_in *)p1;
-                    sa->family = fam; sa->port = port; sa->addr = a4;
-                }
-            } else {
-                /* Connect. P1 = sockaddr (family/port/addr), P2 = its length. */
-                if (!p1 || p2 < sizeof(struct bg_sockaddr_in)) {
-                    st = SS$_BADPARAM;
-                    break;
-                }
-                {
-                    const struct bg_sockaddr_in *sa =
-                        (const struct bg_sockaddr_in *)p1;
-                    st = vms_kif_bg_connect(exec_chan, sa->family, sa->port,
-                                            sa->addr);
-                }
-            }
-            break;
-
-        case IO$_WRITEVBLK:
-        case IO$_WRITELBLK:
-        case IO$_WRITEPBLK:
-            if (!p1) { st = SS$_BADPARAM; break; }
-            st = vms_kif_bg_send(exec_chan, p1, p2, &actlen);
-            break;
-
-        case IO$_READVBLK:
-        case IO$_READLBLK:
-        case IO$_READPBLK:
-            if (!p1) { st = SS$_BADPARAM; break; }
-            st = vms_kif_bg_recv(exec_chan, p1, p2, &actlen);
-            break;
-
-        case IO$_DEACCESS:
-            st = vms_kif_bg_deaccess(exec_chan);
-            break;
-
-        case IO$_NOP:
-            st = SS$_NORMAL;
-            break;
-
-        default:
-            st = SS$_ILLIOFUNC;
-            break;
+    /* accept (vms-698): P3 = a second BG channel ($ASSIGNed empty) to receive
+     * the connection -- a PROCESS channel, mapped to the executive's here. */
+    if ((func & IO$M_FCODE) == IO$_ACCESS && (func & IO$M_ACCEPT)) {
+        if (p3 == 0 || !vms$$chan_is_bg((uint16_t)p3))
+            st = SS$_BADPARAM;
+        else {
+            acc_chan = vms$$chan_exec_chan((uint16_t)p3);
+            st = bg_qio_func(exec_chan, func, p1, p2, p3, p4, acc_chan, &actlen);
+        }
+    } else {
+        st = bg_qio_func(exec_chan, func, p1, p2, p3, p4, 0, &actlen);
     }
 
     if (iosb) {
@@ -1792,17 +1662,26 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
          * control: " " (single space) makes the text one record -- a new line
          * before it, a carriage return after -- and the IOSB counts those
          * three bytes too (VAX V7.3 and Alpha V8.4: 12 bytes written, count
-         * 15; semantic oracle TT.WRITE, rd vms-fc4). With IO$M_NOFORMAT, or
-         * no carriage control, the bytes go as they are. */
+         * 15; semantic oracle TT.WRITE, rd vms-fc4). "$" (prompt) is the new
+         * line before the text and no carriage return after: the record is
+         * left open (rd vms-1b6a). With IO$M_NOFORMAT, or no carriage
+         * control, the bytes go as they are. */
         int record = ((p4 & 0xFF) == 0x20) && !(func & IO$M_NOFORMAT);
-        /* IO$M_REFRESH: a read in progress is shown again after the write;
-         * without it the read's line stays where the output left it */
-        uint32_t st = !(p1 && p2) ? SS$_NORMAL
+        int prompt = ((p4 & 0xFF) == 0x24) && !(func & IO$M_NOFORMAT);
+        /* An empty record (P2 = 0, P4 " ") is still a record: its new line and
+         * carriage return show a blank line, as DCL's blank output lines do on
+         * VAX V7.3 (SHOW CPU / SHOW PROCESS goldens, rd vms-1b6a).
+         * IO$M_REFRESH: a read in progress is shown again after the write;
+         * without it the read's line stays where the output left it. */
+        uint32_t st = (record && !p2) ? vms_kif_tt_write_record(ec, p1, 0)
+                    : !(p1 && p2) ? SS$_NORMAL
                     : (func & IO$M_REFRESH)
                           ? vms_kif_tt_write_flags(ec, p1, p2, VMS_TT_WR_REFRESH |
                                                    (record ? VMS_TT_WR_RECORD
+                                                    : prompt ? VMS_TT_WR_PROMPT
                                                     : (func & IO$M_NOFORMAT) ? VMS_TT_WR_NOFORMAT : 0))
                     : record ? vms_kif_tt_write_record(ec, p1, p2)
+                    : prompt ? vms_kif_tt_write_prompt(ec, p1, p2)
                     : (func & IO$M_NOFORMAT) ? vms_kif_tt_write_noformat(ec, p1, p2)
                     : vms_kif_tt_write(ec, p1, p2);
         if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }

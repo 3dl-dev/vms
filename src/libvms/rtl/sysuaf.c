@@ -445,6 +445,13 @@ int sysuaf_account_captive(const sysuaf_record_t *rec)
     return (sysuaf_flags_to_mask(rec->flags) & UAI$M_CAPTIVE) ? 1 : 0;
 }
 
+uint32_t sysuaf_record_uaf_flags(const sysuaf_record_t *rec)
+{
+    if (!rec)
+        return 0;
+    return le32(rec->raw.uaf$l_flags) | sysuaf_flags_to_mask(rec->flags);
+}
+
 /*
  * PASSWORD-EXPIRATION (vms-c6df). See the contract in sysuaf.h.
  *

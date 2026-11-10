@@ -425,6 +425,27 @@ static struct vms_proc *find_by_vms_pid(uint32_t vms_pid)
 }
 
 /*
+ * find_task_row - the row of process `vms_pid` that is the task `tgid` (rd
+ * vms-e70f). An image task (CONTINUE, DCL's RUN) shares its creator's VMS PID,
+ * so a VMS PID can name two rows; the one that created a subprocess, or armed
+ * its completion, is the one its termination record and completion belong to
+ * -- the row that will $WAITFR and GETEXIT. Falls back to the PID alone.
+ */
+static struct vms_proc *find_task_row(uint32_t vms_pid, uint32_t tgid)
+{
+    struct vms_proc *proc;
+    int bkt;
+
+    if (tgid) {
+        exec_hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
+            if (proc->vms_pid == vms_pid && (uint32_t)proc->linux_pid == tgid)
+                return proc;
+        }
+    }
+    return find_by_vms_pid(vms_pid);
+}
+
+/*
  * vms_proc_access_identity - the UIC and ENABLED privileges the executive holds
  * for the process `vms_pid`, for an access decision made on its behalf (rd
  * vms-046: NETACP asking whether a requester could use the reply mailbox it
@@ -1302,7 +1323,7 @@ void vms_proc_deliver_abnormal_completion(struct vms_proc *child)
     if (!child->compl_armed)
         return;
 
-    parent   = find_by_vms_pid(child->compl_parent_pid);
+    parent   = find_task_row(child->compl_parent_pid, child->compl_parent_linux_pid);
     c_efn    = child->compl_efn;
     c_astadr = child->compl_astadr;
     c_astprm = child->compl_astprm;
@@ -1336,26 +1357,84 @@ void vms_proc_deliver_abnormal_completion(struct vms_proc *child)
  * subprocess's resources are gone. Both halves are atomic-safe (nothing here
  * sleeps); step 2 is the substrate's and may sleep.
  */
-void vms_proc_termination_capture(const struct vms_proc *victim,
+/*
+ * One VMS process, several task rows (rd vms-ff24). An image task (CONTINUE)
+ * shares its creator's VMS PID: the process's creating row and its image's row
+ * end separately, in either order. The process has ended only when its LAST
+ * row goes, and its completion is its image's. So, when a row ends while
+ * another row of the same VMS PID lives on:
+ *   - an image task (its owner is its own process) hands the completion it
+ *     recorded to the row that created it; that task's own record to its
+ *     creator row is posted as always (DCL reads it by substrate pid);
+ *   - the process's creating row (its owner is ANOTHER process) hands the
+ *     creator's record and completion on to the surviving row, and posts
+ *     nothing: the creator is told once, when the process is gone, with the
+ *     image's completion.
+ * Called under vms_proc_hash_lock with `victim` already unlinked.
+ */
+static void vms_proc_hand_on_locked(struct vms_proc *victim, struct vms_termination *t)
+{
+    struct vms_proc *survivor = find_by_vms_pid(victim->vms_pid);
+    const int has = victim->has_exit_status || victim->has_inh_status;
+    const uint32_t cond = victim->has_exit_status ? victim->exit_status : victim->inh_status;
+
+    if (!survivor)
+        return;
+    if (victim->owner_vms_pid == victim->vms_pid) {
+        struct vms_proc *creator = find_task_row(victim->vms_pid, victim->owner_linux_pid);
+        if (creator && has) {
+            creator->inh_status = cond;
+            creator->has_inh_status = 1;
+        }
+        return;
+    }
+    survivor->owner_vms_pid = victim->owner_vms_pid;
+    survivor->owner_linux_pid = victim->owner_linux_pid;
+    if (has && !survivor->has_exit_status && !survivor->has_inh_status) {
+        survivor->inh_status = cond;
+        survivor->has_inh_status = 1;
+    }
+    if (victim->compl_armed && !survivor->compl_armed) {
+        survivor->compl_armed = 1;
+        survivor->compl_acmode = victim->compl_acmode;
+        survivor->compl_parent_pid = victim->compl_parent_pid;
+        survivor->compl_parent_linux_pid = victim->compl_parent_linux_pid;
+        survivor->compl_efn = victim->compl_efn;
+        survivor->compl_astadr = victim->compl_astadr;
+        survivor->compl_astprm = victim->compl_astprm;
+    }
+    t->handed_on = 1;
+}
+
+void vms_proc_termination_capture(struct vms_proc *victim,
                                   struct vms_termination *t)
 {
     memset(t, 0, sizeof(*t));
     t->owner_vms_pid    = victim->owner_vms_pid;
     t->vms_pid          = victim->vms_pid;
     t->linux_pid        = (uint32_t)victim->linux_pid;
-    t->condition        = victim->has_exit_status ? victim->exit_status : SS__ABORT;
-    t->has_status       = victim->has_exit_status;
+    t->condition        = victim->has_exit_status ? victim->exit_status
+                        : victim->has_inh_status ? victim->inh_status : SS__ABORT;
+    t->has_status       = victim->has_exit_status || victim->has_inh_status;
     t->compl_armed      = victim->compl_armed;
     t->compl_acmode     = victim->compl_acmode;
     t->compl_parent_pid = victim->compl_parent_pid;
+    t->compl_parent_linux_pid = victim->compl_parent_linux_pid;
+    t->owner_linux_pid  = victim->owner_linux_pid;
     t->compl_efn        = victim->compl_efn;
     t->compl_astadr     = victim->compl_astadr;
     t->compl_astprm     = victim->compl_astprm;
+    vms_proc_hand_on_locked(victim, t);
+    t->term_mbx_unit    = victim->term_mbx_unit;
 }
 
 void vms_proc_termination_post_locked(const struct vms_termination *t)
 {
-    struct vms_proc *owner = t->owner_vms_pid ? find_by_vms_pid(t->owner_vms_pid) : NULL;
+    struct vms_proc *owner;
+
+    if (t->handed_on)
+        return;                      /* the process lives on in another row */
+    owner = t->owner_vms_pid ? find_task_row(t->owner_vms_pid, t->owner_linux_pid) : NULL;
 
     if (owner) {
         struct vms_termrec *r = &owner->termrec[owner->termrec_next % VMS_TERMREC_MAX];
@@ -1366,13 +1445,88 @@ void vms_proc_termination_post_locked(const struct vms_termination *t)
         r->has_status = t->has_status;
     }
     if (t->compl_armed) {
-        struct vms_proc *parent = find_by_vms_pid(t->compl_parent_pid);
+        struct vms_proc *parent = find_task_row(t->compl_parent_pid, t->compl_parent_linux_pid);
         if (parent)
             spawn_notify_deliver(parent, t->compl_efn, t->compl_astadr,
                                  t->compl_astprm, t->compl_acmode);
     }
 }
 
+
+/*
+ * vms_proc_termination_mailbox - the deleted process's termination message
+ * into its $CREPRC termination mailbox (rd vms-6d9; struct vms_exec_mbxmsg in
+ * vms_ioctl.h). The substrate's exit hook calls it UNLOCKED, after the
+ * process's resources are released (step 2) -- the message allocation may
+ * sleep. The mailbox's owner is the creator's VMS process; for DCL's image task
+ * (VMS_CREPRC_PCB_CONTINUE) that is the image's own VMS PID.
+ */
+void vms_proc_termination_mailbox(const struct vms_termination *t)
+{
+    struct vms_exec_mbxmsg msg;
+
+    /* NEGCTL-ANCHORED (cli-wait-no-termination-message) */
+    if (t->term_mbx_unit == 0)
+        return;
+    memset(&msg, 0, sizeof(msg));
+    msg.msgtyp     = VMS_EXEC_MBXMSG_TERM;
+    msg.has_status = t->has_status;
+    msg.finalsts   = t->condition;
+    msg.pid        = t->vms_pid;
+    msg.task_pid   = t->linux_pid;
+    vms_mbx_exec_post(t->term_mbx_unit, t->owner_vms_pid ? t->owner_vms_pid : t->vms_pid,
+                      &msg, sizeof(msg), 0);
+}
+
+/*
+ * vms_proc_ctrly_image - CTRL/Y reached the CLI (rd vms-6d9). The terminal
+ * driver has fired the CTRL/Y AST that a task of VMS process `vms_pid` armed
+ * (`arming_task`: DCL). On VMS the image runs IN that process, and a CTRL/Y
+ * interrupts it whatever the image does (OpenVMS User's Manual, "Interrupting
+ * an image": CTRL/Y returns control to DCL and the image can be resumed with
+ * CONTINUE). OVMX's image is a second task of the same VMS process (DCL's
+ * CONTINUE task, the one with a termination mailbox), so the executive stops
+ * it -- with the stop signal the image cannot catch or ignore -- and tells DCL
+ * through the task's termination mailbox, where DCL is waiting. An image that
+ * armed its OWN CTRL/Y AST is not the CLI's to interrupt: then the arming task
+ * is the image, and nothing here applies to it.
+ *
+ * Not atomic-context safe for the stop on every substrate: called by the
+ * terminal driver after its own lock is dropped, where the substrate interrupt
+ * is delivered.
+ */
+void vms_proc_ctrly_image(uint32_t vms_pid, uint32_t arming_task)
+{
+    struct vms_proc *p;
+    exec_task_ref_t *ref = NULL;
+    struct vms_exec_mbxmsg msg;
+    uint32_t unit = 0, task = 0;
+    int bkt;
+
+    if (vms_pid == 0)
+        return;
+    exec_lock(&vms_proc_hash_lock);
+    exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
+        if (p->vms_pid == vms_pid && p->term_mbx_unit != 0 &&
+            (uint32_t)p->linux_pid != arming_task) {
+            ref  = p->pid_ref;
+            unit = p->term_mbx_unit;
+            task = (uint32_t)p->linux_pid;
+            break;
+        }
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    if (!ref)
+        return;
+    /* As vms_ioctl_procctl: a PCB deleted after the unlock leaves a ref whose
+     * process is gone, which exec_task_signal reports as -ESRCH. */
+    (void)exec_task_signal(ref, EXEC_SIG_STOP);
+    memset(&msg, 0, sizeof(msg));
+    msg.msgtyp   = VMS_EXEC_MBXMSG_CTRLY;
+    msg.pid      = vms_pid;
+    msg.task_pid = task;
+    vms_mbx_exec_post(unit, vms_pid, &msg, sizeof(msg), 1);
+}
 
 /*
  * termrec_find - the caller's own termination record for its ended subprocess
@@ -1464,6 +1618,7 @@ long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg)
         child->compl_armed      = 1;
         child->compl_acmode     = acmode;
         child->compl_parent_pid = proc->vms_pid;
+        child->compl_parent_linux_pid = (uint32_t)proc->linux_pid;
         child->compl_efn        = args.efn;
         child->compl_astadr     = args.astadr;
         child->compl_astprm     = args.astprm;
@@ -1526,7 +1681,7 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg)
      * nothing to notify -- no fabrication, no hang.
      */
     if (proc->compl_armed) {
-        struct vms_proc *parent = find_by_vms_pid(proc->compl_parent_pid);
+        struct vms_proc *parent = find_task_row(proc->compl_parent_pid, proc->compl_parent_linux_pid);
         uint32_t c_efn    = proc->compl_efn;
         uint64_t c_astadr = proc->compl_astadr;
         uint64_t c_astprm = proc->compl_astprm;
@@ -1628,6 +1783,20 @@ long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg)
 
     args.condition  = target->exit_status;
     args.has_exited = target->has_exit_status;
+    if (!target->has_exit_status && args.select == VMS_JPI_SEL_PID) {
+        /* Another process's completion is its image's, which may be recorded
+         * on another of its task rows (rd vms-ff24). */
+        struct vms_proc *row;
+        int bkt;
+
+        exec_hash_for_each(vms_proc_hash, bkt, row, hash_node) {
+            if (row->vms_pid == target->vms_pid && row->has_exit_status) {
+                args.condition  = row->exit_status;
+                args.has_exited = 1;
+                break;
+            }
+        }
+    }
     exec_unlock(&vms_proc_hash_lock);
 
     args.success  = (uint8_t)(args.condition & VMS_STS_M_SUCCESS);
@@ -1787,6 +1956,67 @@ long vms_ioctl_pprop(struct vms_proc *proc, unsigned long arg)
             proc->parse_style_image = (uint8_t)args.value;
     }
     exec_unlock(&vms_proc_hash_lock);
+    args.status = SS__NORMAL;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_lgi - the login data LOGINOUT leaves for the CLI (rd vms-838b).
+ *
+ * On VMS DCL learns that it is starting a login -- and the account's CAPTIVE /
+ * DISCTLY flags and its login command file -- from the process LOGINOUT built,
+ * never from an argument list. LOGINOUT writes that state in kernel mode while
+ * it logs the process in. SET is therefore gated exactly as SETIDENT is: CMKRNL
+ * enabled, in a LOGIN process, before the image after LOGINOUT runs. An image
+ * cannot write its own login data -- so a captive account's DCL cannot be told
+ * it is not captive. GET reads the caller's own; a process LOGINOUT did not log
+ * in reads flags 0 (a plain, non-login CLI).
+ */
+long vms_ioctl_lgi(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_lgi_args args;
+    size_t i;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if (args.op == VMS_LGI_OP_GET) {
+        exec_lock(&proc->mode_lock);
+        args.flags     = proc->lgi_flags;
+        args.uaf_flags = proc->lgi_uaf_flags;
+        memcpy(args.lgicmd, proc->lgi_cmd, VMS_LGICMD_SIZE);
+        exec_unlock(&proc->mode_lock);
+        args.status = SS__NORMAL;
+        goto out;
+    }
+    if (args.op != VMS_LGI_OP_SET || (args.flags & ~VMS_LGI_F_LOGIN) != 0) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    /* The spec must be NUL-terminated inside the buffer. */
+    for (i = 0; i < VMS_LGICMD_SIZE && args.lgicmd[i] != '\0'; i++)
+        ;
+    if (i == VMS_LGICMD_SIZE) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    exec_lock(&proc->mode_lock);
+    /* NEGCTL-ANCHORED (lgi-set-outside-login) */
+    if (vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL) != SS__NORMAL ||
+        proc->login_images == 0) {
+        exec_unlock(&proc->mode_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+    proc->lgi_flags     = args.flags;
+    proc->lgi_uaf_flags = args.uaf_flags;
+    memset(proc->lgi_cmd, 0, VMS_LGICMD_SIZE);
+    memcpy(proc->lgi_cmd, args.lgicmd, i);
+    exec_unlock(&proc->mode_lock);
     args.status = SS__NORMAL;
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
@@ -1963,6 +2193,44 @@ out:
 }
 
 /*
+ * The SYSGEN PQL_DPGFLQUOTA / PQL_MPGFLQUOTA pair (rd vms-89dd8), loaded by
+ * STARTUP.EXE from OVMXVMSSYS.PAR through VMS_IOCTL_PQL_LOAD. The executive has
+ * no default of its own: pql_loaded == 0 means "never told". Guarded by
+ * vms_proc_hash_lock.
+ */
+static uint32_t pql_dpgflquota, pql_mpgflquota;
+static int pql_loaded;
+
+long vms_ioctl_pql_load(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_pql_load_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    if (args.flags & ~VMS_PQL_LOAD_F_CLEAR) {
+        args.status = SS__BADPARAM;
+    } else if (!(proc->cur_privs & VMS_PRV_M_CMKRNL)) {
+        args.status = SS__NOPRIV;
+    } else {
+        exec_lock(&vms_proc_hash_lock);
+        if (args.flags & VMS_PQL_LOAD_F_CLEAR) {
+            pql_loaded = 0;
+            pql_dpgflquota = pql_mpgflquota = 0;
+        } else {
+            pql_dpgflquota = args.dpgflquota;
+            pql_mpgflquota = args.mpgflquota;
+            pql_loaded = 1;
+        }
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NORMAL;
+    }
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_creprc_pcb - $CREPRC's creator creates the new process's PCB
  * (rd vms-c43, design note 3.1). The caller is the creator; the target is a
  * task it forked and is holding before exec. A DETACHED identity is the one
@@ -1992,7 +2260,7 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
     given = (args.flags & VMS_CREPRC_PCB_F_IDENTITY) != 0;
     network = (args.flags & VMS_CREPRC_PCB_F_NETWORK) != 0;
     if ((args.flags & ~(0xFFu | VMS_CREPRC_PCB_F_LOGIN | VMS_CREPRC_PCB_F_IDENTITY |
-                        VMS_CREPRC_PCB_F_NETWORK)) != 0 ||
+                        VMS_CREPRC_PCB_F_NETWORK | VMS_CREPRC_PCB_F_QUOTA)) != 0 ||
         (network && kind != VMS_CREPRC_PCB_DETACHED) ||
         (kind != VMS_CREPRC_PCB_SUBPROCESS && kind != VMS_CREPRC_PCB_DETACHED &&
          kind != VMS_CREPRC_PCB_CONTINUE) ||
@@ -2019,14 +2287,30 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
             goto out;
         }
     }
+    /* The termination mailbox (rd vms-6d9): one the creator holds a channel
+     * to, or none. */
+    if (args.mbxunt != 0 && !vms_mbx_proc_holds_unit(proc, args.mbxunt)) {
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
     args.status = vms_proc_create_for(proc, args.child_pid, kind, args.username,
                                       args.uic, args.privs, &args.vms_pid);
+    if ((args.status & 1) && args.mbxunt != 0) {
+        struct vms_proc *np;
+
+        exec_lock(&vms_proc_hash_lock);
+        np = find_by_linux_pid(args.child_pid);
+        if (np)
+            np->term_mbx_unit = args.mbxunt;
+        exec_unlock(&vms_proc_hash_lock);
+    }
     /* A LOGIN process (rd vms-a2c): SETIDENT is allowed in it while the task
      * that is becoming LOGINOUT, and LOGINOUT's own image, run -- two image
      * activations' worth (vms_proc_image_activated counts them down). A
      * subprocess with a GIVEN identity ($CREPRC uic/prvadr) takes it now,
      * from the executive, instead of stamping it itself. */
-    if ((args.status & 1) && (login || given || network)) {
+    if ((args.status & 1) && (login || given || network ||
+                              (args.flags & VMS_CREPRC_PCB_F_QUOTA))) {
         struct vms_proc *np;
 
         exec_lock(&vms_proc_hash_lock);
@@ -2037,6 +2321,37 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
          * as the executive says, never a guess from its missing terminal. */
         if (np && network)
             np->network = 1;
+        /* The quota list ($CREPRC "quota", rd vms-89dd8): the EXECUTIVE sources
+         * the new process's PGFLQUOTA -- the listed PQL$_PGFLQUOTA, else the
+         * SYSGEN default PQL_DPGFLQUOTA -- clamped up to PQL_MPGFLQUOTA, and
+         * marks the block sourced so va_quota_check enforces it. The other
+         * limits are the creator's when it has a sourced block (a subprocess
+         * shares its job's limits), otherwise left zero/unsourced. The child
+         * has not been released yet, so nothing runs against the block. */
+        /* NEGCTL-ANCHORED (creprc-quota-list-ignored) */
+        if (np && (args.flags & VMS_CREPRC_PCB_F_QUOTA)) {
+            uint32_t pg = args.pgflquota;
+            uint32_t dpg, mpg;
+            int loaded;
+
+            /* vms_proc_hash_lock is held here; it also guards the pair. */
+            dpg = pql_dpgflquota;
+            mpg = pql_mpgflquota;
+            loaded = pql_loaded;
+            /* NEGCTL-ANCHORED (creprc-pql-default-hardcoded) */
+            if (loaded) {
+                if (pg == 0)
+                    pg = dpg;
+                if (pg < mpg)
+                    pg = mpg;
+                if (proc->quota_valid)
+                    np->quota = proc->quota;
+                np->quota.pgflquota = pg;
+                np->quota_valid = 1;
+            }
+            /* else: no SYSGEN state was ever loaded -- no invented value, the
+             * child stays unsourced as before. */
+        }
         exec_unlock(&vms_proc_hash_lock);
         if (np && given)
             vms_proc_apply_ticket_identity(np, args.username, args.uic, args.privs);
@@ -2189,6 +2504,341 @@ long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg)
     args.status = SS__NORMAL;
     if (args.op == VMS_SUBST_OP_BECOME && exec_become_substrate_id(uid) != 0)
         args.status = SS__ABORT;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/* ================================================================
+ * The $CREPRC creation record (rd vms-416d).
+ *
+ * $CREPRC's creator and the task it forked synchronise through THIS executive
+ * object, never through a host pipe. On VMS the executive creates the process
+ * and $CREPRC returns once it exists; OVMX creates it with fork(), so the two
+ * halves meet here:
+ *
+ *   creator  OPEN                       -> a record, owned by the creator
+ *   task     ARRIVE(rec)                 the task that will run the image (the
+ *                                        fork child; for PRC$M_DETACH the
+ *                                        grandchild) names ITSELF -- the
+ *                                        executive reads its substrate pid off
+ *                                        the calling task, nothing is
+ *                                        self-reported -- and waits
+ *   creator  ACCEPT(rec, watch)          waits for the arrival (or the watched
+ *                                        fork child's death: nothing arrives),
+ *                                        then VMS_IOCTL_CREPRC_PCB for it
+ *   creator  ANSWER(rec, status, pid)    the PCB status + VMS PID wake the task
+ *   intermed HOLD(rec, watch)            the detach intermediate stays alive,
+ *                                        linking creator and grandchild (the
+ *                                        PCB's parentage rule), until the
+ *                                        answer -- or the grandchild's death
+ *   task     REPORT(rec, status)         after naming / terminal binding, the
+ *                                        task's creation status
+ *   creator  RESULT(rec)                 waits for the report, or the task's
+ *                                        death before it (OVMX$_PRCLOST)
+ *   creator  CLOSE(rec)
+ *
+ * ARRIVE and HOLD are the only executive calls a task with no PCB may make
+ * besides ESTABLISH_SYSTEM; neither makes it a row (rd vms-2a5): the row is
+ * the creator's VMS_IOCTL_CREPRC_PCB. Every wait ends on its predicate, on the
+ * death of the party it waits for (exec_pid_running, re-checked every
+ * CREPRC_SYNC_POLL_MS), or on a signal (-EINTR; the caller re-issues the op,
+ * which is idempotent). A creator that dies leaves its record to be swept by
+ * the next OPEN; a task waiting on it is released with SS$_ABORT.
+ * ================================================================ */
+
+#define CREPRC_SYNC_SLOTS   128u
+#define CREPRC_SYNC_POLL_MS 50u
+
+#define CRS_ARRIVED   0x01u
+#define CRS_ANSWERED  0x02u
+#define CRS_REPORTED  0x04u
+#define CRS_ABANDONED 0x08u     /* the task (or its intermediate's grandchild)
+                                 * died before arriving */
+
+struct creprc_sync_rec {
+    uint32_t gen;               /* 0 = free; id = gen << 8 | slot */
+    uint32_t creator;           /* creator's substrate pid */
+    uint32_t task;              /* arrived task's substrate pid */
+    uint32_t state;             /* CRS_* */
+    uint32_t pcb_status, vms_pid, report;
+};
+
+static struct creprc_sync_rec creprc_sync_tab[CREPRC_SYNC_SLOTS];
+static uint32_t creprc_sync_gen;
+static exec_lock_t creprc_sync_lock;
+static exec_cv_t creprc_sync_cv;
+
+void vms_creprc_sync_init(void)
+{
+    exec_lock_init(&creprc_sync_lock);
+    exec_cv_init(&creprc_sync_cv);
+}
+
+void vms_creprc_sync_cleanup(void)
+{
+    exec_cv_destroy(&creprc_sync_cv);
+    exec_lock_destroy(&creprc_sync_lock);
+}
+
+/* The live record `id` names, or NULL. Caller holds creprc_sync_lock. */
+static struct creprc_sync_rec *creprc_sync_find(uint32_t id)
+{
+    uint32_t slot = id & 0xFFu;
+
+    if (slot >= CREPRC_SYNC_SLOTS || id == 0)
+        return NULL;
+    if (creprc_sync_tab[slot].gen == 0 || creprc_sync_tab[slot].gen != (id >> 8))
+        return NULL;
+    return &creprc_sync_tab[slot];
+}
+
+/* OPEN: a fresh record for the calling creator. Records of creators that are
+ * no longer running are reclaimed first (their creation can never finish). */
+static uint32_t creprc_sync_open(uint32_t me, uint32_t *id_out)
+{
+    uint32_t owner[CREPRC_SYNC_SLOTS];
+    uint32_t i, slot = CREPRC_SYNC_SLOTS;
+
+    /* Snapshot the owners, test liveness unlocked (exec_pid_running may take
+     * a sleeping substrate lock), then reclaim under the lock, re-checking the
+     * slot still belongs to the same dead owner. */
+    exec_lock(&creprc_sync_lock);
+    for (i = 0; i < CREPRC_SYNC_SLOTS; i++)
+        owner[i] = creprc_sync_tab[i].gen ? creprc_sync_tab[i].creator : 0;
+    exec_unlock(&creprc_sync_lock);
+    for (i = 0; i < CREPRC_SYNC_SLOTS; i++)
+        if (owner[i] != 0 && owner[i] != me && exec_pid_running(owner[i]))
+            owner[i] = 0;              /* alive: keep */
+    exec_lock(&creprc_sync_lock);
+    for (i = 0; i < CREPRC_SYNC_SLOTS; i++) {
+        struct creprc_sync_rec *r = &creprc_sync_tab[i];
+        if (owner[i] != 0 && owner[i] != me && r->gen && r->creator == owner[i])
+            memset(r, 0, sizeof(*r));
+        if (r->gen == 0 && slot == CREPRC_SYNC_SLOTS)
+            slot = i;
+    }
+    if (slot == CREPRC_SYNC_SLOTS) {
+        exec_unlock(&creprc_sync_lock);
+        return SS__INSFMEM;
+    }
+    creprc_sync_gen = (creprc_sync_gen + 1u) & 0x00FFFFFFu;
+    if (creprc_sync_gen == 0)
+        creprc_sync_gen = 1;
+    memset(&creprc_sync_tab[slot], 0, sizeof(creprc_sync_tab[slot]));
+    creprc_sync_tab[slot].gen = creprc_sync_gen;
+    creprc_sync_tab[slot].creator = me;
+    *id_out = (creprc_sync_gen << 8) | slot;
+    exec_cv_broadcast(&creprc_sync_cv);   /* a reclaimed slot's waiters: gone */
+    exec_unlock(&creprc_sync_lock);
+    return SS__NORMAL;
+}
+
+/*
+ * creprc_sync_wait - wait on record `id` until `want` is in its state.
+ *
+ * `watch` is the substrate pid whose death also ends the wait (0: none); when
+ * it is found not running, `on_death` is OR'd into the state (if nonzero) and
+ * the wait ends with SS$_ABORT unless `want` was reached first. The creator's
+ * death ends a task-side wait (`watch_creator`). Returns 0 with *st set, or
+ * -EINTR (signal; nothing changed, the op may be re-issued).
+ */
+static long creprc_sync_wait(uint32_t id, uint32_t want, uint32_t watch,
+                             uint32_t on_death, int watch_creator, uint32_t *st,
+                             struct creprc_sync_rec *snap)
+{
+    for (;;) {
+        struct creprc_sync_rec *r;
+        uint32_t creator;
+        int intr, to;
+
+        exec_lock(&creprc_sync_lock);
+        r = creprc_sync_find(id);
+        if (r == NULL) {
+            exec_unlock(&creprc_sync_lock);
+            *st = SS__ABORT;            /* closed or reclaimed: the creation is over */
+            return 0;
+        }
+        if ((r->state & want) == want) {
+            *snap = *r;
+            exec_unlock(&creprc_sync_lock);
+            *st = SS__NORMAL;
+            return 0;
+        }
+        if (r->state & CRS_ABANDONED) {
+            *snap = *r;
+            exec_unlock(&creprc_sync_lock);
+            *st = SS__ABORT;
+            return 0;
+        }
+        intr = exec_cv_wait_timeout(&creprc_sync_cv, &creprc_sync_lock,
+                                    CREPRC_SYNC_POLL_MS, &to);
+        r = creprc_sync_find(id);
+        if (r != NULL && (r->state & want) == want) {
+            *snap = *r;
+            exec_unlock(&creprc_sync_lock);
+            *st = SS__NORMAL;            /* the predicate wins over a signal */
+            return 0;
+        }
+        creator = r ? r->creator : 0;
+        exec_unlock(&creprc_sync_lock);
+        if (intr)
+            return -EINTR;
+        if (watch != 0 && !exec_pid_running(watch)) {
+            exec_lock(&creprc_sync_lock);
+            r = creprc_sync_find(id);
+            if (r != NULL && (r->state & want) != want) {
+                if (on_death)
+                    r->state |= on_death;
+                exec_cv_broadcast(&creprc_sync_cv);
+                exec_unlock(&creprc_sync_lock);
+                *st = SS__ABORT;
+                return 0;
+            }
+            exec_unlock(&creprc_sync_lock);
+            continue;                     /* reached `want` just before dying */
+        }
+        if (watch_creator && creator != 0 && !exec_pid_running(creator)) {
+            *st = SS__ABORT;
+            return 0;
+        }
+    }
+}
+
+/*
+ * vms_ioctl_creprc_sync - the $CREPRC creation record (above). `proc` is NULL
+ * for ARRIVE and HOLD from a task that has no PCB yet; every creator-side op
+ * needs the caller's PCB and the record to be the caller's.
+ */
+long vms_ioctl_creprc_sync(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_creprc_sync_args args;
+    struct creprc_sync_rec *r, snap;
+    uint32_t me = exec_current_pid();
+    uint32_t st = SS__NORMAL;
+    long rc;
+
+    memset(&args, 0, sizeof(args));
+    memset(&snap, 0, sizeof(snap));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    switch (args.op) {
+    case VMS_CREPRC_SYNC_OPEN:
+        if (proc == NULL)
+            return -ESRCH;
+        args.status = creprc_sync_open(me, &args.rec);
+        goto out;
+
+    case VMS_CREPRC_SYNC_ARRIVE:
+        /* The task names itself: its pid is read here, never passed in. */
+        exec_lock(&creprc_sync_lock);
+        r = creprc_sync_find(args.rec);
+        if (r == NULL) {
+            exec_unlock(&creprc_sync_lock);
+            args.status = SS__ABORT;
+            goto out;
+        }
+        if ((r->state & CRS_ARRIVED) && r->task != me) {
+            exec_unlock(&creprc_sync_lock);
+            args.status = SS__BADPARAM;     /* another task already arrived */
+            goto out;
+        }
+        r->task = me;
+        r->state |= CRS_ARRIVED;
+        exec_cv_broadcast(&creprc_sync_cv);
+        exec_unlock(&creprc_sync_lock);
+        rc = creprc_sync_wait(args.rec, CRS_ANSWERED, 0, 0, 1, &st, &snap);
+        if (rc)
+            return rc;
+        args.status = st;
+        args.value = (st & 1) ? snap.pcb_status : SS__ABORT;
+        args.vms_pid = (st & 1) ? snap.vms_pid : 0;
+        goto out;
+
+    case VMS_CREPRC_SYNC_HOLD:
+        rc = creprc_sync_wait(args.rec, CRS_ANSWERED, args.pid, CRS_ABANDONED, 1,
+                              &st, &snap);
+        if (rc)
+            return rc;
+        args.status = st;
+        goto out;
+
+    case VMS_CREPRC_SYNC_REPORT:
+        exec_lock(&creprc_sync_lock);
+        r = creprc_sync_find(args.rec);
+        if (r == NULL || !(r->state & CRS_ARRIVED) || r->task != me) {
+            exec_unlock(&creprc_sync_lock);
+            args.status = r == NULL ? SS__ABORT : SS__NOPRIV;
+            goto out;
+        }
+        r->report = args.value;
+        r->state |= CRS_REPORTED;
+        exec_cv_broadcast(&creprc_sync_cv);
+        exec_unlock(&creprc_sync_lock);
+        args.status = SS__NORMAL;
+        goto out;
+
+    case VMS_CREPRC_SYNC_ACCEPT:
+    case VMS_CREPRC_SYNC_ANSWER:
+    case VMS_CREPRC_SYNC_RESULT:
+    case VMS_CREPRC_SYNC_CLOSE:
+        break;
+    default:
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+
+    /* Creator-side ops: the caller is a VMS process and owns the record. */
+    if (proc == NULL)
+        return -ESRCH;
+    exec_lock(&creprc_sync_lock);
+    r = creprc_sync_find(args.rec);
+    if (r == NULL || r->creator != me) {
+        exec_unlock(&creprc_sync_lock);
+        args.status = r == NULL ? SS__BADPARAM : SS__NOPRIV;
+        goto out;
+    }
+    switch (args.op) {
+    case VMS_CREPRC_SYNC_ANSWER:
+        r->pcb_status = args.value;
+        r->vms_pid = args.vms_pid;
+        r->state |= CRS_ANSWERED;
+        exec_cv_broadcast(&creprc_sync_cv);
+        exec_unlock(&creprc_sync_lock);
+        args.status = SS__NORMAL;
+        goto out;
+    case VMS_CREPRC_SYNC_CLOSE:
+        memset(r, 0, sizeof(*r));
+        exec_cv_broadcast(&creprc_sync_cv);
+        exec_unlock(&creprc_sync_lock);
+        args.status = SS__NORMAL;
+        goto out;
+    case VMS_CREPRC_SYNC_ACCEPT:
+        exec_unlock(&creprc_sync_lock);
+        rc = creprc_sync_wait(args.rec, CRS_ARRIVED, args.pid, CRS_ABANDONED, 0,
+                              &st, &snap);
+        if (rc)
+            return rc;
+        args.status = st;
+        args.pid = (st & 1) ? snap.task : 0;
+        goto out;
+    default: /* VMS_CREPRC_SYNC_RESULT */ {
+        uint32_t task = r->task;
+        exec_unlock(&creprc_sync_lock);
+        if (task == 0) {
+            args.status = SS__BADPARAM;     /* RESULT only after an ACCEPT */
+            goto out;
+        }
+        rc = creprc_sync_wait(args.rec, CRS_REPORTED, task, 0, 0, &st, &snap);
+        if (rc)
+            return rc;
+        args.status = st;
+        args.value = (st & 1) ? snap.report : 0;
+        goto out;
+    }
+    }
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;

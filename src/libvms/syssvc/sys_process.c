@@ -194,11 +194,13 @@
 #include <time.h>
 #include <stdio.h>
 #include "ovmx_async.h"
+#include "ovmx_substrate.h"  /* OVMX_SUBSTRATE_SCOPE (rd vms-a66e) */
 #include "starlet.h"
 #include "rms_textfile.h"   /* a VMS-file SYS$INPUT is checked through RMS (rd vms-003b) */
 #include "lnmdef.h"
 #include "ovmx_status.h"
 #include "prcdef.h"
+#include "pqldef.h"
 #include "pscandef.h"
 #include "vmsfs/filespec.h"   /* vmsfs_to_linux_path: a VMS image spec */
 #include <sched.h>
@@ -321,7 +323,8 @@ uint32_t sys$exit(uint32_t code) {
  */
 static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
 {
-    if (linux_pid == (uint32_t)getpid()) {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
+    if (linux_pid == vms_kif_substrate_pid()) {
         /* User + system CPU of every thread of this process, the figure
          * getrusage(RUSAGE_SELF) gives; clock_gettime is also a DEC C RTL
          * entry point, so the OpenVMS-calling-standard build has it too. */
@@ -1008,71 +1011,24 @@ uint32_t sys$wake(const uint32_t *pidadr,
 }
 
 /*
- * creprc_write_all / creprc_read_all -- the $CREPRC creation handshake's
- * transfers, made SIGNAL-PROOF.
+ * THE CREATION HANDSHAKE IS SIGNAL-PROOF (vms-8019; since rd vms-416d it runs
+ * through the executive's creation record, VMS_IOCTL_CREPRC_SYNC, not a pipe).
  *
- * WHY THESE EXIST (the defect they delete): a bare read() on the pipe
- * returns -1/EINTR whenever a signal is delivered to the CALLER through a
- * handler installed without SA_RESTART. That is not an exotic condition --
- * src/vmsdcl/dcl_main.c installs DCL's interactive SIGINT and SIGQUIT
- * handlers with sa_flags = 0, and DCL is the process that calls $CREPRC
- * (RUN, RUN/DETACHED). A Ctrl-C landing in the handshake window made the
- * short-read branch fire with the child PERFECTLY HEALTHY: $CREPRC reported
- * OVMX$_PRCLOST -- "no VMS process was created, nothing was ever entered in
- * the table" -- for a process that WAS created, IS in the executive's table
- * and IS enumerable by SHOW SYSTEM, and then reaped it. Measured on a
- * NATIVE host against this branch's own LIBVMS$SHR.EXE and recorded on
- * vms-8019: 788 of 4000 calls under a DCL-shaped handler, 0 of 4000 without
- * one. (Under QEMU the same window is a fraction of a millisecond wide,
- * which is why tests/qemu/test_syssvc_procnam.c's P13 holds the forked
- * child still with ptrace instead of trying to catch it.)
+ * WHY IT MUST BE: src/vmsdcl/dcl_main.c installs DCL's interactive SIGINT and
+ * SIGQUIT handlers with sa_flags = 0 (no SA_RESTART), and DCL is the process
+ * that calls $CREPRC (RUN, RUN/DETACHED). When the handshake was a bare read()
+ * on a pipe, a Ctrl-C landing in the window made $CREPRC report OVMX$_PRCLOST
+ * -- "no VMS process was created" -- for a process that WAS created and IS in
+ * the executive's table, and then reap it (788 of 4000 calls on a native host
+ * under a DCL-shaped handler, 0 of 4000 without one; recorded on vms-8019;
+ * tests/qemu/test_syssvc_procnam.c P13 holds the window open with ptrace).
  *
  * The signal disposition of the caller is not a fact about the child, so it
- * must not be able to change what $CREPRC says about the child. With these
- * loops in place a short read really does mean "the child died before
- * reporting", which is the only condition OVMX$_PRCLOST is documented to
- * name, and is what makes the unconditional waitpid() below correct rather
- * than an indefinite block on a live process.
- *
- * The child's write needs the same treatment for the same reason with the
- * roles swapped: a child that reported successfully but was interrupted
- * mid-write still exec's its image, and the parent would see a short read
- * and declare a running process lost.
- *
- * A genuine EOF (read returns 0) and a genuine error other than EINTR both
- * stop the loop and are reported as a short transfer.
+ * must not change what $CREPRC says about the child. vms_kif_creprc_sync()
+ * re-enters an interrupted wait exactly as $WAITFR does (kif_wait_call), and
+ * every op is idempotent, so a wait ends only on its predicate or on the
+ * other party's death -- the only condition OVMX$_PRCLOST names.
  */
-static ssize_t creprc_write_all(int fd, const void *buf, size_t len)
-{
-    const char *p = (const char *)buf;
-    size_t done = 0;
-    while (done < len) {
-        ssize_t w = write(fd, p + done, len - done);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        if (w == 0) break;
-        done += (size_t)w;
-    }
-    return (ssize_t)done;
-}
-
-static ssize_t creprc_read_all(int fd, void *buf, size_t len)
-{
-    char *p = (char *)buf;
-    size_t done = 0;
-    while (done < len) {
-        ssize_t r = read(fd, p + done, len - done);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        if (r == 0) break;      /* genuine EOF: the writer is gone */
-        done += (size_t)r;
-    }
-    return (ssize_t)done;
-}
 
 /*
  * creprc_dynamic_terminal_path - resolve a DYNAMIC terminal name (RTAn:) to its
@@ -1363,7 +1319,36 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                       uint32_t baspri, uint32_t uic, uint32_t mbxunt,
                       uint32_t stsflg, const void *itemlst,
                       const struct dsc$descriptor_s *node) {
-    (void)quota; (void)baspri; (void)mbxunt;
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
+    (void)baspri; (void)mbxunt;
+
+    /*
+     * The QUOTA LIST (rd vms-89dd8): packed entries, a one-byte PQL$_ code
+     * then a longword value, ended by PQL$_LISTEND (OpenVMS System Services
+     * Reference, $CREPRC). The executive sources the new process's quotas
+     * from it (VMS_CREPRC_PCB_F_QUOTA); this only carries what the list says.
+     * PGFLQUOTA is the limit the executive enforces ($EXPREG/$CRETVA); the
+     * other entries are validated but not yet sourced (no executive state to
+     * hold them), so a list naming them is accepted, never silently faked.
+     */
+    uint32_t quota_flags = 0, quota_pgfl = 0;
+    if (quota) {
+        const uint8_t *qp = (const uint8_t *)quota;
+        int n;
+        quota_flags = VMS_CREPRC_PCB_F_QUOTA;
+        for (n = 0; n < 64; n++, qp += 5) {
+            uint32_t v;
+            if (qp[0] == PQL$_LISTEND)
+                break;
+            if (qp[0] >= PQL$_LENGTH)
+                return SS$_BADPARAM;
+            memcpy(&v, qp + 1, sizeof v);
+            if (qp[0] == PQL$_PGFLQUOTA)
+                quota_pgfl = v;
+        }
+        if (n == 64)
+            return SS$_BADPARAM;
+    }
 
     /* Creating a process on another cluster node, or a non-empty $CREPRC item
      * list, is not supported: refuse honestly instead of creating a local
@@ -1443,6 +1428,24 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             access(staged, X_OK) == 0)
             snprintf(img_path, sizeof(img_path), "%s", staged);
     }
+
+    /*
+     * AN IMAGE ONLY THE VOLUME HOLDS (rd vms-e70f). On OVMX/Alpha an image that
+     * is not boot-staged -- one LINKed into a user directory, the cc1/as/collect2
+     * the DEC C exec*() functions create subprocesses for -- has no substrate
+     * path at all: the VMS image activator reads it off the ODS-2 volume through
+     * the ACP. The created process then runs IMGACT.EXE with the VMS spec as its
+     * first argument (the vms-fb4 launch mode DCL's RUN uses for the same case),
+     * and an image IMGACT cannot find fails activation there, as on VMS.
+     */
+    char launch_spec[512] = "";
+#if defined(__alpha__) || defined(__alpha)
+    /* Also the fallback for an image the substrate cannot exec itself: one whose
+     * interpreter path names the retired /vms passthrough (DCL's RUN falls back
+     * the same way, dcl_cmd_process.c). */
+    if (access(OVMX_BOOT_STAGE_DIR "/IMGACT.EXE", X_OK) == 0)
+        dsc$strncpy(launch_spec, image, sizeof(launch_spec));
+#endif
 
     struct vms_pcb *parent_pcb = vms_pcb_get();
 
@@ -1547,9 +1550,10 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      * itself in the executive's table (the entry is keyed by ITS tgid).
      * So the child registers with the executive, performs $SETPRN if a
      * name was asked for, and reports BOTH the status AND the process ID
-     * the executive assigned it back over a pipe. $CREPRC returns that
-     * status, and that process ID, to its caller. The pipe is O_CLOEXEC,
-     * so it costs the activated image nothing.
+     * the executive assigned it back through the executive's CREATION
+     * RECORD (VMS_IOCTL_CREPRC_SYNC, rd vms-416d) -- never a host pipe.
+     * $CREPRC returns that status, and that process ID, to its caller.
+     * The record holds nothing the activated image inherits.
      *
      * WHY pidadr CANNOT BE THE fork() RETURN (vms-2b8 changed this): the
      * executive now ASSIGNS VMS process IDs from its own generator
@@ -1573,6 +1577,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
         uint32_t status;
         uint32_t vms_pid;
     };
+    uint32_t sst;
 
     if (pidadr) *pidadr = 0;
 
@@ -1614,38 +1619,96 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
 
     const int use_ticket = detached && child_username[0] != 0;
 
-    int namefd[2] = { -1, -1 };
-    if (pipe(namefd) < 0)
-        return SS$_INSFMEM;
-    /* Not pipe2(O_CLOEXEC): that needs _GNU_SOURCE, and this file is
-     * built against both glibc and musl. */
-    fcntl(namefd[0], F_SETFD, FD_CLOEXEC);
-    fcntl(namefd[1], F_SETFD, FD_CLOEXEC);
+    /*
+     * DECIDE STAMP-VS-REFUSE BEFORE THE PROCESS IS NAMED OR REGISTERED
+     * (vms-8be).
+     *
+     * `engage` decides whether an identity establishment is even attempted:
+     * a subprocess inherits by continuation and needs it only for an
+     * explicit override, a detached process always establishes the
+     * creator-computed identity. `child_username[0]` then splits
+     * stamp-vs-refuse. The CLAIMED-BUT-INEFFECTIVE guard (vms-bbd, INV-6):
+     * an override with no executive user name to stamp it under (the
+     * unauthenticated boot STARTUP-DCL, vms-a2d1) cannot reach the row
+     * through SETIDENT (which refuses an empty name), so it is refused
+     * (SS$_NOPRIV) rather than silently dropped while the caller is told
+     * %RUN-S-PROC_ID.
+     *
+     * This refusal is a function of the ARGUMENTS ALONE, so it is taken
+     * HERE, in the creator, before anything is forked (rd vms-416d; it was
+     * taken in the forked task before) -- so before vms_kif_setprn or the
+     * creator's VMS_IOCTL_CREPRC_PCB could enter anything in the executive's
+     * process table. A refused override
+     * therefore NAMES nothing and REGISTERS nothing: it leaves NO live PCB
+     * behind (vms-8be), rather than registering a named row and then
+     * racing vms_proc_reap_dead() to tear it down once the refusal is
+     * already a foregone conclusion. A caller that probes the refused name
+     * finds no process, which is what the LARP guard must guarantee.
+     */
+    int override_asked = (uic != 0 || prvadr != NULL);
+    int engage = detached ? (child_username[0] != 0 || override_asked)
+                          : override_asked;
+    /*
+     * PRC$M_LOGINOUT: THE SESSION STARTS AS ITS CREATOR (rd vms-a2c).
+     * The executive constructs the SYSTEM identity once per boot, for
+     * the boot task, and refuses every later ESTABLISH_SYSTEM -- so a
+     * login session can no longer make that call itself, as it did
+     * before (design record §2). It gets $CREPRC's default instead: its
+     * creator's user name, UIC and privileges, on the PCB the creator
+     * makes for it (use_ticket below). JOB_CONTROL and the DECnet
+     * daemon are SYSTEM, created by STARTUP, so the session holds the
+     * same identity it established for itself before, and LOGINOUT
+     * re-personas it to the authenticated user. A creator with no
+     * identity to lend creates a session that cannot read SYSUAF and is
+     * refused honestly. The design's endpoint -- the authority to read
+     * SYSUAF belongs to the LOGINOUT IMAGE -- is INSTALL /PRIVILEGED
+     * (rd vms-7c64); until it lands, the creator's identity is the
+     * authority.
+     */
+    if (loginout)
+        engage = 0;
 
     /*
-     * THE CREATOR CREATES THE NEW PROCESS'S PCB (rd vms-c43, design note 3.1).
-     * The task that will run the image sends its substrate pid on pcbreq and
-     * waits; the creator issues VMS_IOCTL_CREPRC_PCB for it -- identity from
-     * the creator's row (a subprocess) or the identity $CREPRC computed and the
-     * creator may give (a detached process) -- and answers status + VMS PID on
-     * pcbgo. The task never registers itself. A task that will not be made a
-     * VMS process here closes pcbreq unwritten, and the creator reads EOF.
+     * A DETACHED process whose creator has no user name to give it gets no
+     * PCB: the executive makes one only for its creator, and a task does not
+     * enter the table on its own (rd vms-2a5). Every process descends from
+     * the boot task's SYSTEM identity, so this is not reached on a booted
+     * system; if it is, the creation fails honestly rather than run an image
+     * as no VMS process. Like the override refusal above, a function of the
+     * arguments alone: nothing is forked for it.
      */
-    int pcbreq[2] = { -1, -1 }, pcbgo[2] = { -1, -1 };
-    if (pipe(pcbreq) < 0 || pipe(pcbgo) < 0) {
-        close(namefd[0]); close(namefd[1]);
-        if (pcbreq[0] >= 0) { close(pcbreq[0]); close(pcbreq[1]); }
-        return SS$_INSFMEM;
+    if ((engage && child_username[0] == 0) || (detached && !use_ticket)) {
+        if (loginout)
+            fprintf(stderr,
+                    "%%OVMX-W-NOSYSID, login session was not created with its "
+                    "creator's identity (status %08X); "
+                    "SYS$SYSTEM:SYSUAF.DAT read will be refused\n",
+                    (unsigned)SS$_NOPRIV);
+        return SS$_NOPRIV;
     }
-    fcntl(pcbreq[0], F_SETFD, FD_CLOEXEC); fcntl(pcbreq[1], F_SETFD, FD_CLOEXEC);
-    fcntl(pcbgo[0], F_SETFD, FD_CLOEXEC);  fcntl(pcbgo[1], F_SETFD, FD_CLOEXEC);
+
+    /*
+     * THE CREATION RECORD (rd vms-416d). Creator and created task meet in an
+     * EXECUTIVE object, never a host pipe (kernel-core/vms_proctab.c,
+     * vms_ioctl_creprc_sync): the task ARRIVEs (the executive reads its
+     * substrate pid off the calling task -- nothing is self-reported), the
+     * creator ACCEPTs it and makes its PCB (VMS_IOCTL_CREPRC_PCB) and
+     * ANSWERs, the task REPORTs how naming and terminal binding went, the
+     * creator reads the RESULT. A party that dies ends the other side's wait
+     * in the executive (its liveness is the executive's to test), which is
+     * what EOF on the pipe used to say. With no executive the OPEN fails and
+     * so does the creation -- honestly, nothing is forked.
+     */
+    /* NEGCTL-ANCHORED (creprc-handshake-host-pipe) */
+    uint32_t rec = 0;
+    sst = vms_kif_creprc_sync(VMS_CREPRC_SYNC_OPEN, &rec, NULL, NULL, NULL);
+    if (!(sst & 1))
+        return sst;
 
     pid_t pid = fork();
     if (pid < 0) {
         int why = errno;
-        close(namefd[0]);
-        close(namefd[1]);
-        close(pcbreq[0]); close(pcbreq[1]); close(pcbgo[0]); close(pcbgo[1]);
+        (void)vms_kif_creprc_sync(VMS_CREPRC_SYNC_CLOSE, &rec, NULL, NULL, NULL);
         /* No host fork at all (the OpenVMS-calling-standard build,
          * ovmx_host_absent.h): the service is not available there. */
         return why == ENOSYS ? SS$_UNSUPPORTED : SS$_INSFMEM;
@@ -1657,12 +1720,8 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * can fail, and tell the creator how it went and what process ID
          * the executive gave it. An unnamed process is expressed by never
          * calling $SETPRN, never by naming it something invented. */
-        close(pcbreq[0]);
-        close(pcbgo[1]);
         struct creprc_report rep = { 0, 0 };
         struct vms_procinfo self_info;
-
-        close(namefd[0]);
 
         /*
          * PRC$M_DETACH: BECOME A DETACHED PROCESS BEFORE REGISTERING.
@@ -1683,26 +1742,27 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          *             ECHILD. That is the observable difference between
          *             a detached process and a subprocess.
          *
-         * The grandchild inherits namefd[1] and is therefore the task
-         * that reports back, so $CREPRC's pidadr is still the process ID
+         * The GRANDchild is the task that ARRIVEs at the creation record
+         * and reports back, so $CREPRC's pidadr is still the process ID
          * the executive assigned to the process that RUNS THE IMAGE --
          * never the intermediate's. The creation handshake is unchanged
          * and unconditional: a detached process is a VMS process, so it
          * has a PCB and a process ID from the moment it exists.
          *
-         * The intermediate closes its copy of the write end before
-         * exiting, so if the grandchild dies before reporting, the
-         * creator's read still sees EOF (and answers OVMX$_PRCLOST)
-         * rather than blocking on a descriptor nothing will ever write.
+         * The creator watches the intermediate and the intermediate
+         * watches the grandchild (both in the executive), so if the
+         * grandchild dies before arriving the creator's wait still ends
+         * (and answers OVMX$_PRCLOST) rather than blocking on a task that
+         * will never arrive.
          */
-        int ticket_sync = -1;   /* grandchild's end: closed once it claimed */
         if (detached) {
             setsid();
             /* rd vms-ff75: the intermediate stays alive until the grandchild
              * has claimed its ticket -- the executive honours the ticket only
              * while the creator is still the grandchild's ANCESTOR, i.e. while
-             * this intermediate links them. EOF on the pipe (claim done, or
-             * the grandchild died) releases it.
+             * this intermediate links them. The creator's answer in the
+             * creation record (the PCB exists), or the grandchild's death,
+             * releases it.
              *
              * rd vms-fe7: WITHOUT a ticket the intermediate waits too, until
              * the grandchild has ENTERED the executive's table. A process the
@@ -1718,24 +1778,17 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
              * 7 of 16 boots measured on main, JOB_CONTROL registered under
              * init every time it happened, under its intermediate every time it
              * did not. */
-            int syncfd[2] = { -1, -1 };
-            if (pipe(syncfd) < 0)
-                _exit(1);           /* creator reads EOF -> OVMX$_PRCLOST */
             pid_t svc = fork();
             if (svc < 0)
-                _exit(1);           /* creator reads EOF -> OVMX$_PRCLOST */
+                _exit(1);   /* the creator sees its watched task die -> OVMX$_PRCLOST */
             if (svc > 0) {
-                char b;
-                close(namefd[1]);
-                close(pcbreq[1]);
-                close(pcbgo[0]);
-                close(syncfd[1]);
-                while (read(syncfd[0], &b, 1) < 0 && errno == EINTR)
-                    ;
+                /* HOLD until the creator has answered the grandchild (its PCB
+                 * exists), or the grandchild died first -- which the executive
+                 * records, ending the creator's wait. */
+                uint32_t w = (uint32_t)svc;
+                (void)vms_kif_creprc_sync(VMS_CREPRC_SYNC_HOLD, &rec, &w, NULL, NULL);
                 _exit(0);           /* reparent the grandchild away */
             }
-            close(syncfd[0]);
-            ticket_sync = syncfd[1];
         }
         /*
          * ESTABLISH THE CHILD'S EXECUTIVE IDENTITY BY CONTINUATION (vms-19e9).
@@ -1761,52 +1814,6 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * creator. It keeps the SETIDENT stamp path below, with the identity
          * $CREPRC computed in the creator (child_username/child_uic/child_privs).
          */
-        /*
-         * DECIDE STAMP-VS-REFUSE BEFORE THE PROCESS IS NAMED OR REGISTERED
-         * (vms-8be).
-         *
-         * `engage` decides whether an identity establishment is even attempted:
-         * a subprocess inherits by continuation and needs it only for an
-         * explicit override, a detached process always establishes the
-         * creator-computed identity. `child_username[0]` then splits
-         * stamp-vs-refuse. The CLAIMED-BUT-INEFFECTIVE guard (vms-bbd, INV-6):
-         * an override with no executive user name to stamp it under (the
-         * unauthenticated boot STARTUP-DCL, vms-a2d1) cannot reach the row
-         * through SETIDENT (which refuses an empty name), so it is refused
-         * (SS$_NOPRIV) rather than silently dropped while the caller is told
-         * %RUN-S-PROC_ID.
-         *
-         * This refusal is a function of the ARGUMENTS ALONE, so it is taken
-         * HERE -- before vms_kif_setprn / vms_kif_register_subprocess enter
-         * this task in the executive's process table. A refused override
-         * therefore NAMES nothing and REGISTERS nothing: it leaves NO live PCB
-         * behind (vms-8be), rather than registering a named row and then
-         * racing vms_proc_reap_dead() to tear it down once the refusal is
-         * already a foregone conclusion. A caller that probes the refused name
-         * finds no process, which is what the LARP guard must guarantee.
-         */
-        int override_asked = (uic != 0 || prvadr != NULL);
-        int engage = detached ? (child_username[0] != 0 || override_asked)
-                              : override_asked;
-        /*
-         * PRC$M_LOGINOUT: THE SESSION STARTS AS ITS CREATOR (rd vms-a2c).
-         * The executive constructs the SYSTEM identity once per boot, for
-         * the boot task, and refuses every later ESTABLISH_SYSTEM -- so a
-         * login session can no longer make that call itself, as it did
-         * before (design record §2). It gets $CREPRC's default instead: its
-         * creator's user name, UIC and privileges, on the PCB the creator
-         * makes for it (use_ticket below). JOB_CONTROL and the DECnet
-         * daemon are SYSTEM, created by STARTUP, so the session holds the
-         * same identity it established for itself before, and LOGINOUT
-         * re-personas it to the authenticated user. A creator with no
-         * identity to lend creates a session that cannot read SYSUAF and is
-         * refused honestly. The design's endpoint -- the authority to read
-         * SYSUAF belongs to the LOGINOUT IMAGE -- is INSTALL /PRIVILEGED
-         * (rd vms-7c64); until it lands, the creator's identity is the
-         * authority.
-         */
-        if (loginout)
-            engage = 0;
 
         rep.status = SS$_NORMAL;
 
@@ -1835,18 +1842,10 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * process with a creator-given identity, asks its creator to create
          * its row and waits. Before anything here touches the executive, so
          * nothing registers this task on its own first. */
-        uint32_t pcb_status = SS$_NORMAL;
-        if (!(engage && child_username[0] == 0) && (!detached || use_ticket)) {
-            uint32_t me = (uint32_t)getpid();
-            uint32_t go[2] = { 0, 0 };
-            if (creprc_write_all(pcbreq[1], &me, sizeof(me)) != (ssize_t)sizeof(me) ||
-                creprc_read_all(pcbgo[0], go, sizeof(go)) != (ssize_t)sizeof(go))
-                pcb_status = SS$_ABORT;
-            else
-                pcb_status = go[0];
-        }
-        close(pcbreq[1]);
-        close(pcbgo[0]);
+        uint32_t pcb_status = SS$_ABORT, pcb_vms_pid = 0;
+        if (!(vms_kif_creprc_sync(VMS_CREPRC_SYNC_ARRIVE, &rec, NULL,
+                                  &pcb_status, &pcb_vms_pid) & 1))
+            _exit(1);   /* the creator is gone or gave up: nobody to report to */
         if (loginout && (!use_ticket || !(pcb_status & 1)))
             fprintf(stderr,
                     "%%OVMX-W-NOSYSID, login session was not created with its "
@@ -1854,12 +1853,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                     "SYS$SYSTEM:SYSUAF.DAT read will be refused\n",
                     (unsigned)pcb_status);
 
-        if (engage && child_username[0] == 0) {
-            /* Override asked with no user name to stamp it under: refuse
-             * before touching the executive, so nothing is registered or
-             * named under the refused identity (vms-8be). */
-            rep.status = SS$_NOPRIV;
-        } else {
+        {
             /*
              * ESTABLISH THE CHILD'S EXECUTIVE IDENTITY BY CONTINUATION
              * (vms-19e9).
@@ -1888,23 +1882,8 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
              * stamp path below, with the identity $CREPRC computed in the
              * creator (child_username/child_uic/child_privs).
              */
-            if (!detached || use_ticket) {
-                rep.status = pcb_status;
-                if (ticket_sync >= 0) {     /* the PCB exists: release the intermediate */
-                    close(ticket_sync);
-                    ticket_sync = -1;
-                }
-            } else {
-                /* A detached process whose creator has no user name to give it
-                 * has no PCB: the executive makes one only for its creator, and
-                 * a task does not enter the table on its own (rd vms-2a5). Every
-                 * process descends from the boot task's SYSTEM identity, so this
-                 * is not reached on a booted system; if it is, the creation fails
-                 * honestly rather than run an image as no VMS process. */
-                rep.status = SS$_NOPRIV;
-                close(ticket_sync);
-                ticket_sync = -1;
-            }
+            /* The PCB, from the creator (refusals by argument never fork). */
+            rep.status = pcb_status;
 
             if ((rep.status & 1) && child_prcnam[0])
                 rep.status = vms_kif_setprn(child_prcnam);
@@ -1952,26 +1931,15 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 rep.status = tst;
         }
 
-        /* Retried on EINTR and on a short write: an interrupted report
-         * from a child that is about to exec its image would reach the
-         * creator as a short read, i.e. as OVMX$_PRCLOST for a running
-         * process. */
-        /* Whatever path was taken, never carry the intermediate's release
-         * into the image (it would wait for the image to exit). */
-        if (ticket_sync >= 0) {
-            close(ticket_sync);
-            ticket_sync = -1;
-        }
-        ssize_t w = creprc_write_all(namefd[1], &rep, sizeof(rep));
-        close(namefd[1]);
-        /* A report the creator never received describes a process the
-         * creator does not know exists. The creator reads a short transfer
-         * as OVMX$_PRCLOST -- "nothing was created" -- so the child must
-         * not go on to activate the image and make that statement false.
-         * Only a genuine write error can end the loop short, and this
-         * keeps "short transfer" and "no process" the same fact rather
-         * than two facts that can disagree. */
-        if (!(rep.status & 1) || w != (ssize_t)sizeof(rep))
+        /* THE REPORT, into the creation record (rd vms-416d). A report the
+         * creator can never receive (the record is gone: the creator died
+         * or gave up) describes a process the creator does not know exists,
+         * and the creator answers OVMX$_PRCLOST -- "nothing was created" --
+         * so the task must not go on to activate the image and make that
+         * statement false. */
+        uint32_t posted = rep.status;
+        sst = vms_kif_creprc_sync(VMS_CREPRC_SYNC_REPORT, &rec, NULL, &posted, NULL);
+        if (!(rep.status & 1) || !(sst & 1))
             _exit(1);
 
         /* Child: Initialize PCB with inherited context */
@@ -1980,7 +1948,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             const char *username = child_username[0] ? child_username
                                  : (parent_pcb ? parent_pcb->username
                                                : "UNKNOWN");
-            vms_pcb_set_identity((uint32_t)getpid(), child_uic,
+            vms_pcb_set_identity(vms_kif_substrate_pid(), child_uic,
                                  username, child_prcnam);
             if (parent_pcb && parent_pcb->default_dir[0])
                 vms_pcb_set_default_dir(parent_pcb->default_dir);
@@ -2050,11 +2018,25 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 char path[256];
                 dsc$strncpy(path, output, sizeof(path));
                 int fd = creprc_open_outstream(path);
+                /* A VMS FILE as the stream, for a detached process or a
+                 * subprocess alike (rd vms-691d: SPAWN/OUTPUT=file): the
+                 * name becomes the process's SYS$OUTPUT and the stream the
+                 * null device, which the image's run-time library (or the
+                 * CLI, src/vmsdcl/dcl_mbx.c) replaces with the file it
+                 * $CREATEs through RMS. A subprocess no longer writes on
+                 * its creator's terminal because its file was a VMS name. */
+                /* NEGCTL-ANCHORED (creprc-subprocess-output-file-on-creator-terminal) */
+                int vfile = fd < 0 && creprc_is_vms_file_spec(path);
                 /* NEGCTL-ANCHORED (creprc-detached-output-vms-file-not-written) */
-                if (fd < 0 && detached && creprc_is_vms_file_spec(path))
+                if (vfile)
+                    creprc_define_stream("SYS$OUTPUT", path);
+                /* A mailbox (a DEC C pipe end exec*() hands over, rd vms-a66e)
+                 * is the new process's SYS$OUTPUT, as on VMS; its C RTL writes
+                 * it through $QIO (src/vmsrms/crtl_devfd.c). */
+                if (fd < 0 && creprc_is_mailbox(path))
                     creprc_define_stream("SYS$OUTPUT", path);
                 /* NEGCTL-ANCHORED (creprc-detached-output-on-creator-terminal) */
-                if (fd < 0 && detached)
+                if (fd < 0 && (detached || vfile))
                     fd = open("/dev/null", O_WRONLY);
                 if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
             } else if (detached) {
@@ -2065,9 +2047,12 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 char path[256];
                 dsc$strncpy(path, error, sizeof(path));
                 int fd = creprc_open_outstream(path);
-                if (fd < 0 && detached && creprc_is_vms_file_spec(path))
+                int vfile = fd < 0 && creprc_is_vms_file_spec(path);
+                if (vfile)
                     creprc_define_stream("SYS$ERROR", path);
-                if (fd < 0 && detached)
+                if (fd < 0 && creprc_is_mailbox(path))
+                    creprc_define_stream("SYS$ERROR", path);
+                if (fd < 0 && (detached || vfile))
                     fd = open("/dev/null", O_WRONLY);
                 if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
             } else if (detached) {
@@ -2085,27 +2070,37 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * PRC.NOIMAGE.STATE: gone before any $WAKE).
          */
         if (stsflg & PRC$M_HIBER) {
-            if (access(img_path, X_OK) != 0)
+            /* An image only the volume holds is IMGACT's to find: the process
+             * stays until activation fails, as on VMS (observed PRC.NOIMAGE). */
+            if (!launch_spec[0] && access(img_path, X_OK) != 0)
                 _exit(1);
             (void)sys$hiber();
         }
 
-        execl(img_path, img_path, (char *)NULL);
+        if (access(img_path, X_OK) == 0)
+            execl(img_path, img_path, (char *)NULL);
+        if (launch_spec[0])
+            execl(OVMX_BOOT_STAGE_DIR "/IMGACT.EXE",
+                  OVMX_BOOT_STAGE_DIR "/IMGACT.EXE", launch_spec, (char *)NULL);
         _exit(1);  /* exec failed */
     }
 
     /* Parent process */
-    close(namefd[1]);
-    close(pcbreq[1]);
-    close(pcbgo[0]);
+    struct creprc_report rep = { 0, 0 };
+    /* r: did the task's report reach the creator? The waits below end only on
+     * their predicate or on the watched task's death (a caller's signal is
+     * re-entered, vms_kif_creprc_sync), so "no report" means "the task died
+     * before reporting" -- the precondition of both the OVMX$_PRCLOST return
+     * and the unconditional waitpid() below. */
+    int r = 0;
     {
-        /* Create the new process's PCB when its task asks (rd vms-c43). EOF
-         * means it will not be a VMS process made here (a refused identity
-         * override, or a detached process without a creator-given identity),
-         * or it died first; its report below says which. */
-        uint32_t cpid = 0;
-        if (creprc_read_all(pcbreq[0], &cpid, sizeof(cpid)) == (ssize_t)sizeof(cpid)) {
-            uint32_t go[2] = { 0, 0 };
+        /* Create the new process's PCB when its task arrives (rd vms-c43). The
+         * creator watches the task it forked (for a detached process, the
+         * intermediate, which watches the grandchild): an arrival that never
+         * comes because that task died ends the wait with SS$_ABORT. */
+        uint32_t task = (uint32_t)pid;
+        if (vms_kif_creprc_sync(VMS_CREPRC_SYNC_ACCEPT, &rec, &task, NULL, NULL) & 1) {
+            uint32_t go_st, go_pid = 0;
             /* A LOGINOUT session is a LOGIN process: the one kind in which
              * the executive lets SETIDENT stamp an identity (rd vms-a2c). A
              * subprocess given an explicit uic/prvadr takes that identity from
@@ -2119,21 +2114,22 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 pflags |= VMS_CREPRC_PCB_F_NETWORK;
             if (!detached && (uic != 0 || prvadr != NULL) && child_username[0])
                 pflags |= VMS_CREPRC_PCB_F_IDENTITY;
-            go[0] = vms_kif_creprc_pcb(cpid, pflags,
-                                       child_username, child_uic, child_privs, &go[1]);
-            (void)creprc_write_all(pcbgo[1], go, sizeof(go));
+            go_st = vms_kif_creprc_pcb_q(task, pflags | quota_flags,
+                                         child_username, child_uic, child_privs,
+                                         quota_pgfl, &go_pid);
+            if (vms_kif_creprc_sync(VMS_CREPRC_SYNC_ANSWER, &rec, NULL, &go_st, &go_pid) & 1) {
+                uint32_t report = 0;
+                if (vms_kif_creprc_sync(VMS_CREPRC_SYNC_RESULT, &rec, NULL, &report, NULL) & 1) {
+                    r = 1;
+                    rep.status = report;
+                    rep.vms_pid = go_pid;   /* the PID the executive gave the task */
+                }
+            }
         }
-        close(pcbreq[0]);
-        close(pcbgo[1]);
+        /* Closing the record releases any party still waiting on it (with
+         * SS$_ABORT): a task that never got its answer exits, unexec'd. */
+        (void)vms_kif_creprc_sync(VMS_CREPRC_SYNC_CLOSE, &rec, NULL, NULL, NULL);
     }
-    struct creprc_report rep = { 0, 0 };
-    /* Retried on EINTR: see creprc_read_all. A signal caught by the
-     * CALLER must not be able to change what $CREPRC says about the
-     * CHILD, and it is what makes r < sizeof(rep) mean "the child died
-     * before reporting" -- the precondition of both the OVMX$_PRCLOST
-     * return and the unconditional waitpid() below. */
-    ssize_t r = creprc_read_all(namefd[0], &rep, sizeof(rep));
-    close(namefd[0]);
 
     /*
      * DETACHED: `pid` is the INTERMEDIATE, which has already exited, and
@@ -2150,30 +2146,30 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      */
     if (detached) {
         int mstatus;
-        while (waitpid(pid, &mstatus, 0) < 0 && errno == EINTR)
-            ;
+        (void)vms_kif_substrate_reap((uint32_t)pid, &mstatus, 0);   /* rd vms-e70f */
     }
 
-    if (r != (ssize_t)sizeof(rep) || !(rep.status & 1)) {
+    if (!r || !(rep.status & 1)) {
         /*
          * EITHER WAY, THE CHILD IS DEAD AND MUST BE REAPED HERE. Only
          * the name-refusal case used to be reaped, so the short-read
          * case leaked a zombie for a process the caller was
          * simultaneously told had been created.
          *
-         * THAT CLAIM IS TRUE ONLY BECAUSE OF creprc_read_all(): a bare
-         * read() also came back short when the CALLER caught a signal
-         * under a handler without SA_RESTART, and this branch then ran
-         * against a live, correctly created process -- either killing it
-         * (the close() above turns its report into SIGPIPE) or blocking
-         * the waitpid() below for the whole life of the image it had
-         * just started, depending only on which of the two reached the
-         * pipe first. Both halves of this branch -- the status and the
-         * reap -- depend on a short transfer meaning the child died.
-         * The child likewise refuses to activate its image if its own
-         * report did not get through, so the two cannot disagree.
+         * THAT CLAIM IS TRUE ONLY BECAUSE THE WAITS ARE SIGNAL-PROOF: when
+         * the handshake was a bare read() on a pipe, it also came back short
+         * when the CALLER caught a signal under a handler without
+         * SA_RESTART, and this branch then ran against a live, correctly
+         * created process -- either killing it or blocking the waitpid()
+         * below for the whole life of the image it had just started
+         * (vms-8019). Both halves of this branch -- the status and the reap
+         * -- depend on "no report" meaning the child died; the creation
+         * record's waits end only on the report or on the task's death
+         * (vms_kif_creprc_sync re-enters a signalled wait). The child
+         * likewise refuses to activate its image if its own report did not
+         * get through, so the two cannot disagree.
          *
-         *  - r == sizeof(rep) with a failure status: the executive
+         *  - a report with a failure status: the executive
          *    refused the name (SS$_DUPLNAM within the UIC group, or
          *    SS$_IVLOGNAM for a malformed one) and the child exited
          *    itself. The caller gets the executive's OWN status.
@@ -2201,17 +2197,16 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          */
         if (!detached) {
             int wstatus;
-            while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR)
-                ;
+            (void)vms_kif_substrate_reap((uint32_t)pid, &wstatus, 0);
         }
-        return (r == (ssize_t)sizeof(rep)) ? rep.status : OVMX$_PRCLOST;
+        return r ? rep.status : OVMX$_PRCLOST;
     }
 
     /*
      * The ONLY success return in this function, and it is structurally
-     * unreachable without a process ID the executive assigned: rep was
-     * read whole and rep.status is a success, so rep.vms_pid is the
-     * value the child read back out of its own executive row. There is
+     * unreachable without a process ID the executive assigned: the task
+     * reported success, which it does only on a PCB the executive made
+     * (its ANSWER), so rep.vms_pid is the VMS PID of that row. There is
      * no path here that reports success with a zero process ID.
      */
     if (pidadr)

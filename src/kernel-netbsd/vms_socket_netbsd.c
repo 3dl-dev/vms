@@ -46,6 +46,9 @@
 #include <sys/errno.h>
 #include <netinet/in.h>         /* struct sockaddr_in, IPPROTO_TCP/IP */
 #include <netinet/tcp.h>        /* TCP_NODELAY */
+#include <sys/pserialize.h>     /* pserialize_read_enter/_exit (exec_socket_iflist) */
+#include <net/if.h>              /* IFNET_READER_FOREACH, IFADDR_READER_FOREACH */
+#include <net/if_dl.h>           /* struct sockaddr_dl, CLLADDR */
 
 #include "exec_kbackend.h"      /* the op declarations (via exec_kbackend_netbsd.h) */
 
@@ -227,6 +230,31 @@ exec_socket_recv(exec_socket_t s, void *buf, size_t len)
 	return (long)(len - uio.uio_resid);     /* 0 = orderly peer close (EOF) */
 }
 
+/* IO$M_NOW: complete at once; -EAGAIN when nothing is queued. */
+long
+exec_socket_recv_now(exec_socket_t s, void *buf, size_t len)
+{
+	struct uio uio;
+	struct iovec iov;
+	int flags = MSG_DONTWAIT;
+	int rc;
+
+	iov.iov_base = buf;
+	iov.iov_len = len;
+	memset(&uio, 0, sizeof(uio));
+	uio.uio_iov = &iov;
+	uio.uio_iovcnt = 1;
+	uio.uio_offset = 0;
+	uio.uio_resid = len;
+	uio.uio_rw = UIO_READ;
+	UIO_SETUP_SYSSPACE(&uio);
+
+	rc = soreceive(s->so, NULL, &uio, NULL, NULL, &flags);
+	if (rc)
+		return -rc;
+	return (long)(len - uio.uio_resid);
+}
+
 int
 exec_socket_shutdown(exec_socket_t s)
 {
@@ -391,6 +419,114 @@ exec_socket_accept(exec_socket_t s, exec_socket_t *out)
 	h->l2 = NULL;
 	*out = h;
 	return 0;
+}
+
+/*
+ * exec_socket_iflist (rd vms-99f) -- the interface list behind TCPIP SHOW
+ * INTERFACE. NetBSD has one network stack, so the socket only scopes the call
+ * (it must exist, as on Linux). IFNET_READER_FOREACH walks the pserialize-
+ * protected interface list inside a pserialize_read_enter()/_exit() section --
+ * the same reader exec_netdev_primary (vms_lan_netbsd.c) uses -- and
+ * IFADDR_READER_FOREACH takes the FIRST AF_INET address and its netmask. The
+ * link-layer address is CLLADDR(if_sadl). Every value is the live ifnet's;
+ * none is synthesized (no AF_INET address -> addr/mask 0). Contract-only twin
+ * like the rest of SS12 here (no NetBSD BGn: dispatch yet, vms-024).
+ * Clean-room (Rule 8): public net/if.h / net/if_dl.h KPI shapes only.
+ */
+int
+exec_socket_iflist(exec_socket_t s, struct exec_ifent *ent, uint32_t max,
+    uint32_t *count)
+{
+	struct ifnet *ifp;
+	uint32_t n = 0;
+	int ps;
+
+	*count = 0;
+	if (s == NULL || s->so == NULL)
+		return -EINVAL;
+	ps = pserialize_read_enter();
+	IFNET_READER_FOREACH(ifp) {
+		struct exec_ifent *e;
+		struct ifaddr *ifa;
+		unsigned int i, hl;
+
+		if (n >= max)
+			break;
+		e = &ent[n];
+		memset(e, 0, sizeof(*e));
+		for (i = 0; i + 1 < sizeof(e->name) && ifp->if_xname[i] != '\0'; i++)
+			e->name[i] = ifp->if_xname[i];
+		e->flags = (uint32_t)(unsigned short)ifp->if_flags;
+		e->mtu = (uint32_t)ifp->if_mtu;
+		IFADDR_READER_FOREACH(ifa, ifp) {
+			if (ifa->ifa_addr == NULL || ifa->ifa_addr->sa_family != AF_INET)
+				continue;
+			e->addr = ((const struct sockaddr_in *)ifa->ifa_addr)->sin_addr.s_addr;
+			if (ifa->ifa_netmask != NULL)
+				e->mask = ((const struct sockaddr_in *)ifa->ifa_netmask)->sin_addr.s_addr;
+			break;
+		}
+		if (ifp->if_sadl != NULL) {
+			hl = ifp->if_sadl->sdl_alen;
+			if (hl > sizeof(e->hwaddr))
+				hl = sizeof(e->hwaddr);
+			memcpy(e->hwaddr, CLLADDR(ifp->if_sadl), hl);
+			e->hwlen = (uint16_t)hl;
+		}
+		n++;
+	}
+	pserialize_read_exit(ps);
+	*count = n;
+	return 0;
+}
+
+/*
+ * exec_socket_wait_ready (rd vms-99f) -- the readiness wait behind the C RTL's
+ * select()/poll() on BG channels. Each pass reads every socket's live state
+ * under solock with the socketvar.h predicates soreadable()/sowritable() and
+ * so_error / SS_CANTRCVMORE; when none is ready it sleeps one kpause tick and
+ * senses again until the timeout (0 = sense once, < 0 = no limit). Nothing is
+ * synthesized. A tick re-sense, not a selrecord, because there is no poll
+ * context here; contract-only twin like the rest of SS12 (vms-024).
+ */
+int
+exec_socket_wait_ready(exec_socket_t *s, uint32_t n, const uint32_t *want,
+    uint32_t *got, long timeout_ms)
+{
+	long waited = 0;
+	uint32_t i, nready;
+	int err;
+
+	for (;;) {
+		nready = 0;
+		for (i = 0; i < n; i++) {
+			struct socket *so = (s[i] != NULL) ? s[i]->so : NULL;
+
+			got[i] = 0;
+			if (so == NULL)
+				continue;
+			solock(so);
+			if ((want[i] & EXEC_RDY_IN) && soreadable(so))
+				got[i] |= EXEC_RDY_IN;
+			if ((want[i] & EXEC_RDY_OUT) && sowritable(so))
+				got[i] |= EXEC_RDY_OUT;
+			if (so->so_error != 0)
+				got[i] |= EXEC_RDY_ERR;
+			if ((so->so_state & SS_CANTRCVMORE) &&
+			    (so->so_state & SS_CANTSENDMORE))
+				got[i] |= EXEC_RDY_HUP;
+			sounlock(so);
+			if (got[i] != 0)
+				nready++;
+		}
+		if (nready != 0 || timeout_ms == 0 ||
+		    (timeout_ms > 0 && waited >= timeout_ms))
+			return (int)nready;
+		err = kpause("bgready", true, 1, NULL);
+		if (err == EINTR || err == ERESTART)
+			return -EINTR;
+		waited += (1000 + hz - 1) / hz;
+	}
 }
 
 /* ---- SS13: the executive raw datalink, NetBSD binding (rd vms-9394) --------

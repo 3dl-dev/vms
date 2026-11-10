@@ -42,6 +42,7 @@
 #include "exec_hash.h"        /* exec_hash_* (the resource database)          */
 #include "exec_rbtree.h"      /* exec_rbtree_* / exec_rb_* (lock-ID database) */
 #include "vms_rms_lockname.h"   /* the RMS file-access lock's name + identity (rd vms-326) */
+#include "vms_f11b_ser.h"      /* the XQP per-file serialization lock (rd vms-d63) */
 #include "vms_dlm_proxy.h"    /* the PROXY-LKB requester seam (FC-P4.4) */
 #include "vms_dlm_master.h"   /* the MASTER-side door + the delivery proc      */
 #include "vms_dlm_adopt.h"    /* the REMASTER ADOPTION seam (rd vms-14fd)      */
@@ -504,14 +505,31 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
      * with LCK$M_VALBLK set. Target mode need not be NL -- a real VAX EX->CR
      * demote emitted op-0x06 -- so the test is "requested < granted", not
      * "requested == NL". An up-convert or a read-mode holder writes nothing
-     * (a real VAX ignored a write attempted from a CR holder). Only CONVERT
-     * is claimed here; a DEQ-time value-block write was not captured and is
-     * not asserted, so a DEQ still crosses as a plain op-0x03.
+     * (a real VAX ignored a write attempted from a CR holder).
+     *
+     * AND A RELEASE OF A WRITE-MODE HOLDER (rd vms-d63): a real XQP's $DEQ of
+     * its PW F11B$s lock carries the lock's value block, marked written, and
+     * the master stores it (tools/cluster/f11b_ser_valblk_census.py: 1,472 of
+     * 1,496 marked writes stored, 12 of 323 unmarked). $DEQ writes the block
+     * of a lock held at PW or EX, as a conversion down from those modes does;
+     * a lock still WAITING holds no mode it could write from.
      */
-    p->write_valblk = (op == VMS_DLM_POST_CONVERT &&
-                       (lock->flags & LCK_M_VALBLK) &&
-                       lock->granted_mode >= LCK_K_PWMODE &&
-                       lock->requested_mode < lock->granted_mode) ? 1u : 0u;
+    /* rd vms-d63: the LKB's flags, in the LCK$M_ encoding a real request
+     * carries at body[28:30] (lckdef.h values; the executive's own LCK_M_
+     * bits are a different, internal numbering). Only the flags this LKB
+     * really holds -- nothing is added for the wire. */
+    p->req_flags = (uint16_t)(((lock->flags & LCK_M_VALBLK)  ? 0x0001u : 0u) |
+                              ((lock->flags & LCK_M_NOQUEUE) ? 0x0004u : 0u) |
+                              ((lock->flags & LCK_M_SYNCSTS) ? 0x0008u : 0u) |
+                              ((lock->flags & LCK_M_SYSTEM)  ? 0x0010u : 0u));
+    p->write_valblk = ((op == VMS_DLM_POST_CONVERT &&
+                        (lock->flags & LCK_M_VALBLK) &&
+                        lock->granted_mode >= LCK_K_PWMODE &&
+                        lock->requested_mode < lock->granted_mode) ||
+                       (op == VMS_DLM_POST_DEQ &&
+                        (lock->flags & LCK_M_VALBLK) &&
+                        !lock->waiting &&
+                        lock->granted_mode >= LCK_K_PWMODE)) ? 1u : 0u;
     /*
      * ...and whether THIS NODE masters the resource (rd vms-3ac). Read off the
      * RSB here, like everything else, because this is the one place that holds
@@ -2348,8 +2366,24 @@ static uint32_t dlm_resolve_master(struct vms_lock_resource *res, int inbound,
      * here because the SENDER's cluster addressed it here, and that decision is
      * a fact this node received (the same reasoning as the refusal above). It
      * is served, or refused, as the master role decides.
+     *
+     * A SUB-RESOURCE IS NOT IN ANY DIRECTORY (rd vms-623). Only ROOT resources
+     * are (Davis p. 6-29), and a tree has one master: dir_resolve() answers
+     * "this node" for a sub only because its tree is mastered here (a sub of a
+     * tree mastered elsewhere already took that master above, rd vms-b67a).
+     * Looking the sub's NAME up here as if it were a root asked a question
+     * that has no answer, and claiming it recorded an entry nothing ever
+     * releases (dlm_dir_release_self takes back only roots). Measured on the
+     * cluster web demo's Node A (V0.7-15 preflight on a30f53d81): every ACP
+     * access takes the XQP's F11B$s<fid> sub-lock (rd vms-d63); the first ones
+     * claimed F11B$s<fid> under the substrate's placeholder CSID 1, and once the
+     * cluster assigned this node 0x00010002 the next lookup found that entry,
+     * read it as ANOTHER system's mastery with no hash, and refused the $ENQ
+     * SS$_UNSUPPORTED -- the ACP access failed, IMGACT reported
+     * %IMGACT-F-IMGNOTFND for DCL.EXE, and the node did not boot.
      */
-    if (!inbound && dlm_route_own_directory(res, route, dst_csid, &st))
+    if (!inbound && res->parent == NULL &&
+        dlm_route_own_directory(res, route, dst_csid, &st))
         return st;
 
     /* Nobody masters it and we are its directory: master it here ("simply
@@ -3627,6 +3661,48 @@ static uint32_t enq_sub_adopt_tree_master(struct vms_lock_resource *res,
     return st;
 }
 
+/*
+ * THE SUB-RESOURCE'S OWN HASH, off its ROOT parent's (rd vms-d63).
+ *
+ * The master of a tree finds a sub-RSB by the value the request carries at
+ * body[128:132]. OVMX used to send zero there, and a real VAX master answered
+ * every F11B$s<fid> request with a resource of its own making -- (0,0) value
+ * block, vbseq 0 -- beside the RSB its XQP really uses, so the file-header
+ * value block never crossed (vms-5fa r5, SDA RSB 879D7380: 0 of 600 samples).
+ * The value is vms_dlm_sub_name_hash_proven() of the sub's identity and the
+ * parent's held value, both read off the resource blocks; it is stored like a
+ * COMPUTED root value (re-derivable, so it keeps no idle block alive).
+ *
+ * Only under a ROOT parent whose value this node holds: that is the whole
+ * observed coverage (every real parent in the corpus is a root). Anything else
+ * leaves the value unknown and the request carries the zero it always did --
+ * no value is minted. Caller holds no engine lock.
+ */
+static void enq_sub_take_tree_hash(struct vms_lock_resource *res)
+{
+    struct vms_lock_resource *parent = res->parent;
+    uint32_t ph = 0u, h = 0u;
+    int have = 0;
+
+    if (parent == NULL)
+        return;
+    exec_lock(&parent->lock);
+    if (parent->parent == NULL && parent->hash_known) {
+        ph = parent->dir_hash;
+        have = 1;
+    }
+    exec_unlock(&parent->lock);
+    if (!have)
+        return;
+    exec_lock(&res->lock);
+    if (!res->hash_known &&
+        vms_dlm_sub_name_hash_proven(ph, res->res_group, res->res_mode,
+                                     (const uint8_t *)res->name,
+                                     res->name_len, &h) == VMS_DLM_HASH_OK)
+        (void)dir_hash_store(res, h, 1 /* computed */);
+    exec_unlock(&res->lock);
+}
+
 static void enq_proxy_request(struct vms_proc *proc, struct vms_enq_args *a,
                               struct vms_lock_resource *res, uint32_t dst_csid,
                               const struct enq_parent_facts *pf, int *intr)
@@ -3676,8 +3752,13 @@ static void enq_proxy_request(struct vms_proc *proc, struct vms_enq_args *a,
          * request still outstanding AT THE MASTER, and the caller returns
          * -ERESTARTSYS so userspace re-enters it (lab run ci6-evac-11). */
         st = (uint32_t)enq_wait_sync(res, lock, intr);
-        if (intr != NULL && *intr)
+        if (intr != NULL && *intr) {
+            /* The abandoned request's id, for an IN-EXECUTIVE caller that
+             * must $DEQ it before it lets the signal through (rd vms-b6e).
+             * The ioctl path never copies it out. */
+            a->lkid = lock->lkid;
             return;
+        }
         if (st != SS__NORMAL) {
             dlm_proxy_unwind(proc, res, lock);
             a->lkid = 0;
@@ -6698,6 +6779,8 @@ static void enq_resource_identity(struct vms_proc *proc,
  * enq_resource_identity(). vms_enq_core_ex() below is the NULL case, which is
  * what the ioctl and the cross-node arm both reach.
  */
+static long vms_deq_core(struct vms_proc *proc, struct vms_deq_args *io);
+
 static long vms_enq_core_ident(struct vms_proc *proc, struct vms_enq_args *io,
                                struct dlm_xnode_enq_out *xn,
                                const struct dlm_enq_ident *id)
@@ -6803,6 +6886,11 @@ static long vms_enq_core_ident(struct vms_proc *proc, struct vms_enq_args *io,
             goto out;
         }
     }
+    /* rd vms-d63: a sub-resource's own hash, for every frame that will name
+     * it -- the request to the tree's master, and the op-0x12/0x08 records
+     * a re-home or a rebuild sends for it. */
+    if (!xn)
+        enq_sub_take_tree_hash(res);
 
     /*
      * DLM directory lookup + master resolution BEFORE anything is granted.
@@ -6837,8 +6925,10 @@ static long vms_enq_core_ident(struct vms_proc *proc, struct vms_enq_args *io,
 
             enq_proxy_request(proc, &args, res, dst_csid, &pfacts,
                               &wait_intr);
-            if (wait_intr)
+            if (wait_intr) {
+                io->lkid = args.lkid;  /* still outstanding at the master */
                 return -ERESTARTSYS;   /* a signal, not an answer */
+            }
             goto out;      /* enq_proxy_request owns `res` from here */
         }
         if (route == DLM_ROUTE_REMOTE) {
@@ -7103,8 +7193,33 @@ static long vms_enq_core_ident(struct vms_proc *proc, struct vms_enq_args *io,
                      * replaces the old userspace GETLKI poll loop.
                      */
                     wait_st = enq_wait_sync(res, lock, &wait_intr);
-                    if (wait_intr)
+                    if (wait_intr) {
+                        /*
+                         * THE ABANDONED REQUEST GOES (rd vms-b6e). The caller
+                         * re-enters with the SAME arguments -- libvmssys'
+                         * KIF_WAIT_CALL re-issues this $ENQ, an in-executive
+                         * caller calls back in -- and every re-entry is a
+                         * NEW request. Left queued, the old one is an orphan
+                         * nobody holds the id of: granted later, it is a lock
+                         * nobody ever releases. That is what wedged a volume
+                         * (live VAX bench vms-0a7 S3): NETACP's timer signals
+                         * interrupted its F11B$s wait over and over, each
+                         * re-entry queued another EX, the first was granted
+                         * when FAL's write ended, and every later writer on
+                         * the volume -- FAL, LOGINOUT, NETACP itself --
+                         * waited behind it for ever. $DEQ it here, so the
+                         * re-entry is the only request; it may still be
+                         * granted in the window since the wait ended, and a
+                         * $DEQ of a granted lock releases it the same way.
+                         */
+                        struct vms_deq_args d;
+
+                        memset(&d, 0, sizeof(d));
+                        d.lkid = lock->lkid;
+                        (void)vms_deq_core(proc, &d);
+                        io->lkid = 0;
                         return -ERESTARTSYS;  /* a signal, not an answer */
+                    }
                     if (wait_st == SS__DEADLOCK) {
                         /* Never granted: unwind the fresh request. */
                         exec_lock(&proc->lock_list_lock);
@@ -7359,28 +7474,79 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg)
  * resource name is the cluster-wide sync point, so a volume served to a second
  * node serializes through the same resource.
  */
+/*
+ * THE IDENTITY OF A FILES-11 XQP LOCK (rd vms-7649): SYSTEM-WIDE (UIC group 0)
+ * at KERNEL mode (0), because on VMS the XQP takes these locks itself, in
+ * kernel mode, for the volume -- not for the process whose I/O it is serving.
+ * Measured both ways:
+ *   - VAX1's SDA on the resource OVMX failed to reach (lab run vms-5fa,
+ *     2026-11-02, tests/lab/captures/vms-5fa-shared-volume-20261102):
+ *     "F11B$vEVAC5FA     ", Length 18, "Kernel mode", "System".
+ *   - on the wire, every captured F11B$ request names (group 0, mode 0):
+ *     fixtures dlm-real-enq-request (F11B$s, op-0x01) and
+ *     dlm-rebuild-rejoin-f11b (F11B$a, op-0x0d).
+ * The identity is part of the resource (the directory hash is computed over
+ * it). These helpers used to take the MOUNTing process's own (UIC group 1,
+ * user mode 3) -- a DIFFERENT resource, hashed to a different directory node:
+ * OVMXE asked VAX2, was told "you master it", and mastered a second
+ * F11B$vEVAC5FA beside VAX1's, so the two nodes' XQPs never contended.
+ * Stated by the executive (enq_resource_identity's stated arm), never by a
+ * caller, exactly as the RMS file-access lock's is.
+ */
+#define VMS_F11B_LOCK_GROUP   0u
+#define VMS_F11B_LOCK_ACMODE  0u   /* PSL$C_KERNEL */
+
+static const struct dlm_enq_ident vms_f11b_lock_ident = {
+    VMS_F11B_LOCK_GROUP, VMS_F11B_LOCK_ACMODE
+};
+
+/* Every XQP lock's $ENQ goes through here, so its identity is stated once. */
+static long acp_f11b_enq(struct vms_proc *proc, struct vms_enq_args *a)
+{
+    return vms_enq_core_ident(proc, a, NULL, &vms_f11b_lock_ident);
+}
+
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
-                             uint32_t *lkid_out)
+                             uint32_t *lkid_out, int *intr_out)
 {
     struct vms_enq_args a;
 
     if (lkid_out)
         *lkid_out = 0;
+    if (intr_out)
+        *intr_out = 0;
     memset(&a, 0, sizeof(a));
     a.lkmode = LCK_K_EXMODE;
     a.flags  = LCK_M_SYNC;      /* $ENQW: block in-kernel until granted */
     strscpy(a.resnam, resnam, sizeof(a.resnam));
 
     /*
-     * An INTERRUPTED wait (rd vms-f87) is not a status: this caller is an
-     * in-kernel ACP path with no userspace ioctl to restart, so it RE-ENTERS
-     * the wait itself -- the same answer kif_wait_call gives a user service,
-     * and the faithful one (on VMS an AST interrupts a wait, runs, and the wait
-     * resumes). Bounded only by the wait itself completing, exactly like the
-     * uninterrupted case.
+     * AN INTERRUPTED WAIT ENDS THE ACP CALL (rd vms-b6e; was re-entered here,
+     * rd vms-f87). This used to loop on the $ENQ until it came back granted.
+     * But a signal stays pending until the caller returns to user mode, and
+     * the wait does not sleep while one is pending: every pass came straight
+     * back, and every pass was a NEW EX request queued behind the last. On
+     * the live VAX bench (vms-0a7 S3) NETACP -- whose $SETIMR fires every
+     * 5 ms -- did exactly that whenever FAL or LOGINOUT held the volume lock:
+     * it spun in the kernel, and the first of its orphaned requests was
+     * granted when the holder finished and was never released, so every
+     * later ACP write on the volume (FAL's, LOGINOUT's, NETACP.LOG's) waited
+     * for ever.
+     *
+     * The request the $ENQ abandoned is gone by the time it returns (a local
+     * one is $DEQd in vms_enq_core_ident; a proxy's id comes back and is
+     * $DEQd here), *intr_out says so, and the ACP service returns
+     * -ERESTARTSYS before it has changed anything: the signal is delivered,
+     * its AST runs, and the I/O is re-issued -- what VMS does when an AST
+     * interrupts a wait. No caller can observe the interruption.
      */
-    while (vms_enq_core_ex(proc, &a, NULL) != 0)
-        ;   /* ACP volume lock: local, full detection */
+    if (acp_f11b_enq(proc, &a) != 0) {
+        if (a.lkid != 0u)
+            (void)vms_lock_acp_vol_release(proc, a.lkid);
+        if (intr_out)
+            *intr_out = 1;
+        return SS__NORMAL;     /* unused: the caller writes no status */
+    }
     /* Whatever lock the $ENQ created is handed back, whatever status it reported,
      * so the caller's single exit releases it: a granted $ENQ may report SS$_SYNCH
      * as well as SS$_NORMAL, and a lock id kept only on SS$_NORMAL would leak the
@@ -7564,8 +7730,9 @@ uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
     strscpy(a.resnam, resnam, sizeof(a.resnam));
 
     /* Same contract as vms_lock_acp_vol_ex above (rd vms-f87): an interrupted
-     * wait is re-entered here, never reported as a status. */
-    while (vms_enq_core_ex(proc, &a, NULL) != 0)
+     * wait is re-entered here, never reported as a status. The identity is the
+     * XQP's, not the MOUNTing process's (rd vms-7649). */
+    while (acp_f11b_enq(proc, &a) != 0)
         ;
     if (a.status == SS__NORMAL && lkid_out)
         *lkid_out = a.lkid;
@@ -7585,6 +7752,149 @@ uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
         }
     }
     return a.status;
+}
+
+/*
+ * ================================================================
+ * THE XQP'S PER-FILE SERIALIZATION LOCK (rd vms-d63)
+ * ================================================================
+ *
+ * "F11B$s" + the file number, a SUB-lock of "F11B$v" + the volume label, at
+ * (UIC group 0, KERNEL mode), taken PW with LCK$M_VALBLK around an operation
+ * on one file and released with the value block that says what the operation
+ * changed (src/kernel-core/vms_f11b_ser.h carries the measurement and the
+ * counter rules). It is how a node that caches a file's header -- a real VAX
+ * does -- learns that ANOTHER node changed it: without it OVMX's header/EOF
+ * update never reached VAX1's cached FCB, and VAX1 wrote over OVMX's records.
+ *
+ * THE PARENT IS THE CALLER'S OWN. The engine hangs a sub-lock only under a
+ * lock the same process holds (vms_enq_core_ident: plock->proc == proc), and
+ * the ACP runs in whichever process issued the I/O, while the volume's
+ * standing F11B$v lock belongs to the process that MOUNTed it. So each
+ * operation takes its own NL lock on the same F11B$v resource -- NL holds
+ * nothing and blocks nobody (the standing lock's own reasoning, below) -- and
+ * hangs the F11B$s lock under it; both go at the release. On the wire that is
+ * an NL request to the volume's master and a PW sub-lock request to the same
+ * node, the shape of a real XQP's traffic (rd vms-f4c0: every resolvable real
+ * F11B$s request is parented on an F11B$v root).
+ *
+ * THE IDENTITY IS STATED HERE, as the RMS file-access lock's is (rd vms-326):
+ * the XQP's locks are the executive's, not the issuing process's, and the
+ * identity is part of the resource (the directory hash covers it).
+ *
+ * DEADLOCK: the volume lock is NL (grants at once, blocks nobody); the
+ * sub-lock is the only one waited on, and the ACP takes it with its own
+ * volume-sync lock held and no other F11B$s lock held, the one ordering every
+ * ACP path uses. A VAX holding PW on the same file is a bounded critical
+ * section on the VAX; the wait ends when it releases.
+ */
+static const struct dlm_enq_ident vms_f11b_ser_ident = {
+    (uint16_t)VMS_F11B_SER_GROUP, (uint8_t)VMS_F11B_SER_ACMODE
+};
+
+uint32_t vms_lock_acp_file_ser(struct vms_proc *proc, const char *vresnam,
+                               uint32_t vresnam_len, uint32_t fidnum,
+                               uint8_t *vb_out, uint32_t *par_lkid_out,
+                               uint32_t *lkid_out)
+{
+    struct vms_enq_args a;
+    uint8_t name[VMS_F11B_SER_NAME_LEN];
+    uint32_t par = 0;
+
+    if (par_lkid_out)
+        *par_lkid_out = 0;
+    if (lkid_out)
+        *lkid_out = 0;
+    if (proc == NULL || vresnam == NULL || vresnam_len == 0u ||
+        vresnam_len > 31u || fidnum == 0u || vb_out == NULL)
+        return SS__BADPARAM;
+
+    /* The parent: NL on the volume's F11B$v resource, in this process. */
+    memset(&a, 0, sizeof(a));
+    a.lkmode = LCK_K_NLMODE;
+    /* SYSTEM and SYNCSTS, as on every real XQP F11B$ request (wire flags
+     * 0x0639/0x0239/0x007d all carry 0x0018; tools/cluster/
+     * dlm_request_flags_census.py). SYSTEM is part of how a master names the
+     * resource: on all 76,116 real requests with it the identity's group is
+     * 0, and the XQP's resources are exactly those (rd vms-d63, r4 fire). */
+    a.flags = LCK_M_SYNC | LCK_M_SYSTEM | LCK_M_SYNCSTS;
+    memcpy(a.resnam, vresnam, vresnam_len);
+    a.resnam_len = vresnam_len;
+    /* An interrupted wait is re-entered, never reported (vms_lock_acp_vol_ex). */
+    while (vms_enq_core_ident(proc, &a, NULL, &vms_f11b_ser_ident) != 0)
+        ;
+    if (!(a.status & 1u)) {
+        if (a.lkid)
+            (void)vms_lock_acp_vol_release(proc, a.lkid);
+        return a.status;
+    }
+    par = a.lkid;
+
+    /* The file's serialization lock: PW, with its value block. */
+    (void)vms_f11b_ser_name(fidnum, name, (uint32_t)sizeof(name));
+    memset(&a, 0, sizeof(a));
+    a.lkmode = LCK_K_PWMODE;
+    /* On the wire this is 0x0019 (VALBLK|SYNCSTS|SYSTEM); a real XQP's is
+     * 0x0239, which adds NOQUOTA and NODLCKWT -- semantics this executive's
+     * lock manager does not have (no enqueue quota; deadlock search covers
+     * every lock), so it does not claim them. */
+    a.flags = LCK_M_SYNC | LCK_M_VALBLK | LCK_M_SYSTEM | LCK_M_SYNCSTS;
+    a.parid = par;
+    memcpy(a.resnam, name, VMS_F11B_SER_NAME_LEN);
+    a.resnam_len = VMS_F11B_SER_NAME_LEN;   /* counted: the name has NULs */
+    while (vms_enq_core_ident(proc, &a, NULL, &vms_f11b_ser_ident) != 0)
+        ;
+    if (!(a.status & 1u)) {
+        if (a.lkid)
+            (void)vms_lock_acp_vol_release(proc, a.lkid);
+        (void)vms_lock_acp_vol_release(proc, par);
+        return a.status;
+    }
+    memcpy(vb_out, a.valblk, VMS_F11B_SER_VALBLK_LEN);
+    if (par_lkid_out)
+        *par_lkid_out = par;
+    if (lkid_out)
+        *lkid_out = a.lkid;
+    return SS__NORMAL;
+}
+
+/*
+ * Release what vms_lock_acp_file_ser took, WRITING `vb` (the block the
+ * operation computed with vms_f11b_ser_next) as the $DEQ of a PW holder
+ * does: into the resource when this node masters it, on the release frame to
+ * the master when another node does (body[36:52], marked written -- the form
+ * a real XQP's release has). A zero handle is a no-op, so a caller can
+ * release unconditionally at its single exit.
+ */
+uint32_t vms_lock_acp_file_ser_release(struct vms_proc *proc, uint32_t par_lkid,
+                                       uint32_t lkid, const uint8_t *vb)
+{
+    uint32_t st = SS__NORMAL;
+
+    if (lkid != 0u) {
+        struct vms_lock_entry *lk = lock_find_by_id(lkid);
+
+        if (lk) {
+            if (vb != NULL && lk->proc == proc) {
+                struct vms_lock_resource *res = lk->resource;
+
+                exec_lock(&res->lock);
+                if ((lk->flags & LCK_M_VALBLK) && !lk->waiting &&
+                    lk->granted_mode >= LCK_K_PWMODE)
+                    memcpy(lk->valblk, vb, LCK_VALBLK_SIZE);
+                exec_unlock(&res->lock);
+            }
+            lock_put(lk);
+        }
+        st = vms_lock_acp_vol_release(proc, lkid);
+    }
+    if (par_lkid != 0u) {
+        uint32_t pst = vms_lock_acp_vol_release(proc, par_lkid);
+
+        if (st == SS__NORMAL)
+            st = pst;
+    }
+    return st;
 }
 
 /*
@@ -8088,6 +8398,155 @@ void vms_lock_dlm_member_departed(uint32_t departed_csid, uint32_t *found)
     /* ... and the locks this node holds ON BEHALF OF the departed system are
      * released, which is what lets a waiter behind them run (rd vms-4d3). */
     (void)vms_lock_dlm_release_csid_locks(departed_csid, NULL);
+}
+
+/*
+ * rd vms-8cb5: A STATE TRANSITION DISCARDS EVERY DIRECTORY ENTRY, SO NOTHING
+ * THIS NODE TOLD A DIRECTORY BEFORE IT IS STILL HELD THERE.
+ *
+ * Phase 1 of every cluster state transition discards all directory information
+ * cluster-wide (Davis p. 7-40/7-41, p. 6-33), and each MASTER re-registers its
+ * resources at their directory nodes with op-0x0d rebuild records. A real V7.3
+ * does exactly that toward OVMX (every 02/0d in the demo captures is VAXC's).
+ * OVMX originates no op-0x0d, so after a transition the directory node holds NO
+ * entry for a resource this node masters, however many lookups it answered
+ * before.
+ *
+ * `dir_told_csid` is this node's record of "that directory holds my entry", and
+ * it outlived the transition. When the resource's last lock went afterwards,
+ * dlm_dir_remove_fill() found the vector still naming the same node and sent a
+ * cat-0x02 op-0x04 removal for an entry the directory no longer had -- the
+ * removal rd vms-c55 already established VMS never sends: the real VAX answered
+ * cat-0x02 op-0x19 17 ms later and bugchecked LOCKMGRERR (V0.7-15 visitor
+ * gate, c-first-legacy: OVMXA looked up RMS$ for file 80 on OVMXASYS at VAXC,
+ * OVMXB's addition ran a full rebuild, OVMXA's removal followed -- the
+ * captures are named in tests/lab/captures/vms-8cb5-transition-discards-
+ * 20261103/).
+ *
+ * So the transition's start forgets every such record. A removal is sent again
+ * only for an entry a directory is told about AFTER this point (a lookup it
+ * answers 0xf9, or an adoption it names). Returns how many were forgotten.
+ * Same lock order as vms_lock_dlm_member_departed().
+ */
+uint32_t vms_lock_dlm_directory_discarded(void)
+{
+    struct vms_lock_resource *res;
+    uint32_t n = 0u;
+    int bkt;
+
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        exec_lock(&res->lock);
+        if (res->dir_told_csid != 0u) {
+            res->dir_told_csid = 0u;
+            n++;
+        }
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return n;
+}
+
+/*
+ * rd vms-fdeb: THE MASTER RE-REGISTERS ITS DIRECTORY ENTRIES (op-0x0d).
+ *
+ * After the transition above discarded every entry, each master tells the
+ * directory node of every ROOT resource it masters (Davis pp. 7-40..7-42; a
+ * real V7.3 does it after the coordinator's release 4 -- vms_dlm_rm_fsm.h has
+ * the measurement). These two are the engine's half: which resource is owed a
+ * record next, and recording that a directory answered one.
+ *
+ * Owed = a root this node masters, with a name and a known (or computable)
+ * hash, whose directory node by the vector in force is ANOTHER member, and
+ * which no directory has been told of since the discard (dir_told_csid 0).
+ * `vms_lock_dlm_dirreg_told` takes exactly that predicate minus "not told", so
+ * a resource it refuses is one `next` no longer yields either -- the walk
+ * cannot hand the same resource out twice.
+ */
+static int dlm_dirreg_owed(struct vms_lock_resource *res, uint32_t *dir_out)
+{
+    struct vms_dlm_requester_ops ops = dlm_req_ops_get();
+    uint32_t dir = 0u;
+
+    if (res->parent != NULL || res->name_len == 0u ||
+        !res_name_len_ok(res->name_len))
+        return 0;
+    if (res->master_csid == 0u || res->master_csid != vms_local_csid)
+        return 0;
+    if (ops.dir_resolve == NULL)
+        return 0;
+    if (dir_hash_for_routing(res) != SS__NORMAL || !res->hash_known)
+        return 0;
+    if (ops.dir_resolve(ops.ctx, res->dir_hash, &dir) != SS__NORMAL)
+        return 0;
+    if (dir == 0u || dir == vms_local_csid)
+        return 0;   /* this node directs it: nothing goes on the wire */
+    *dir_out = dir;
+    return 1;
+}
+
+int vms_lock_dlm_dirreg_next(const struct vms_dlm_adopt_tree *skip,
+                             uint32_t n_skip, struct vms_dlm_adopt_tree *out,
+                             uint32_t *hash_out, uint32_t *dir_out)
+{
+    struct vms_lock_resource *res;
+    int bkt, found = 0;
+    uint32_t dir = 0u;
+
+    if (out == NULL || hash_out == NULL || dir_out == NULL)
+        return 0;
+    memset(out, 0, sizeof(*out));
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        if (res->parent != NULL || dlm_rebuild_skipped(res, skip, n_skip))
+            continue;
+        exec_lock(&res->lock);
+        if (res->dir_told_csid == 0u && dlm_dirreg_owed(res, &dir) &&
+            res->name_len <= sizeof(out->resnam)) {
+            memcpy(out->resnam, res->name, res->name_len);
+            out->resnam_len = (uint8_t)res->name_len;
+            out->res_group = res->res_group;
+            out->res_mode = res->res_mode;
+            out->ident_valid = 1u;
+            *hash_out = res->dir_hash;
+            *dir_out = dir;
+            found = 1;
+        }
+        exec_unlock(&res->lock);
+        if (found)
+            break;
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return found;
+}
+
+int vms_lock_dlm_dirreg_told(const struct vms_dlm_adopt_tree *id,
+                             uint32_t dir_csid)
+{
+    struct res_key k;
+    struct vms_lock_resource *res;
+    uint32_t dir = 0u;
+    int told = 0;
+
+    if (id == NULL || dir_csid == 0u)
+        return 0;
+    k = res_key_counted(id->resnam, adopt_tree_name_len(id), id->res_group,
+                        id->res_mode);
+    if (!res_name_len_ok(k.name_len))
+        return 0;
+    exec_lock(&vms_res_hash_lock);
+    res = resource_find_key(&k);
+    if (res != NULL) {
+        exec_lock(&res->lock);
+        /* Only where the vector still names the node that answered. */
+        if (dlm_dirreg_owed(res, &dir) && dir == dir_csid) {
+            res->dir_told_csid = dir_csid;
+            told = 1;
+        }
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return told;
 }
 
 /*
@@ -8612,7 +9071,11 @@ static uint32_t vms_lock_dlm_xnode_deq(struct vms_dlm_xnode_args *req)
      * a cross-node $ENQ -- is a later rung: it needs the GRANT reply to carry
      * the LVB and the requester's origin record to surface it.)
      */
-    if ((req->flags & LCK_M_VALBLK) && !lock->waiting)
+    /* rd vms-d63: only a holder at a WRITE mode writes, whatever its frame
+     * said -- the master's own LKB is what knows the mode, and a peer's NL
+     * or CR lock must not overwrite a block it was never entitled to set. */
+    if ((req->flags & LCK_M_VALBLK) && !lock->waiting &&
+        lock->granted_mode >= LCK_K_PWMODE)
         memcpy(res->valblk, req->valblk, LCK_VALBLK_SIZE);
     lock_unlink_from_res(lock);
 

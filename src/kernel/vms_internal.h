@@ -204,6 +204,7 @@
 #define SS__IVDEVNAM    324         /* invalid device name */
 #define SS__NOMOREDEV   2648        /* device scan exhausted */
 #define SS__NOSUCHDEV   2312        /* no such device available */
+#define SS__IVTIME      388         /* invalid time: ssdef.h SS$_IVTIME; $SETIME of a delta time (rd vms-642) */
 #define SS__DEVMOUNT    108        /* device already mounted (ssdef.h SS$_DEVMOUNT) */
 /*
  * SS__DEVNOTMOUNT (SS$_DEVNOTMOUNT == 124, this tree's src/libvms/include/
@@ -255,6 +256,18 @@
  */
 #define SS__TIMEOUT     556
 #define SS__HANGUP      716
+/*
+ * BGn: connect completions (rd vms-d0c4). A connect that the far side or the
+ * network refuses completes with the condition VMS TCP/IP Services reports for
+ * it, not a generic SS$_ABORT: connection refused (ECONNREFUSED) is
+ * SS$_REJECT, no route to the network/host (ENETUNREACH / EHOSTUNREACH) is
+ * SS$_UNREACHABLE, and a connect that timed out (ETIMEDOUT) is SS$_TIMEOUT
+ * (above). Values are the oracle's: docs/oracle/vax73-starlet-defs/SSDEF.txt
+ * "$EQU SS$_REJECT 660" and "$EQU SS$_UNREACHABLE 8340"; ssdef.h carries the
+ * same values and the same citation.
+ */
+#define SS__REJECT      660
+#define SS__UNREACHABLE 8340
 /*
  * Allocation statuses. Unlike the four above, these two were measured
  * directly on the oracle rather than inherited: VMS's own message
@@ -780,9 +793,11 @@ struct vms_lock_resource {
 /* What a deleted process's creator is told (rd vms-9f32), captured at the claim. */
 struct vms_termination {
     uint32_t owner_vms_pid, vms_pid, linux_pid, condition;
-    uint8_t  has_status, compl_armed, compl_acmode, pad;
+    uint8_t  has_status, compl_armed, compl_acmode, handed_on;
     uint32_t compl_parent_pid, compl_efn;
     uint64_t compl_astadr, compl_astprm;
+    uint32_t owner_linux_pid, compl_parent_linux_pid; /* the creating / arming TASK (rd vms-e70f) */
+    uint32_t term_mbx_unit;     /* the termination mailbox (rd vms-6d9), 0 = none */
 };
 
 struct vms_termrec {
@@ -878,6 +893,12 @@ struct vms_proc {
     uint64_t            image_privs;    /* the running installed image's (vms-bdc1) */
     uint8_t             network;          /* $CREPRC PRC$M_NETWRK: a network object's server process (F$MODE NETWORK) */
     uint8_t             login_images;     /* rd vms-a2c: image activations in which SETIDENT is allowed (a login process: 2 at creation) */
+    /* The login data LOGINOUT leaves for the CLI (rd vms-838b, VMS_IOCTL_LGI):
+     * stored under the SETIDENT gate, read by the process's own DCL. Zero in
+     * every process LOGINOUT did not log in. Under mode_lock. */
+    uint32_t            lgi_flags;        /* VMS_LGI_F_* */
+    uint32_t            lgi_uaf_flags;    /* SYSUAF flags, UAI$_FLAGS layout */
+    char                lgi_cmd[VMS_LGICMD_SIZE]; /* login command file spec */
     spinlock_t          mode_lock;
 
     /*
@@ -1095,6 +1116,11 @@ struct vms_proc {
      */
     uint32_t            exit_status;      /* recorded image completion $STATUS */
     uint8_t             has_exit_status;  /* 1 once SETEXIT recorded a value */
+    /* rd vms-ff24: the completion an image task of this process recorded and
+     * ended with (it shares this process's VMS PID). The process's completion
+     * when this row records none of its own; never read as this row's own. */
+    uint8_t             has_inh_status;
+    uint32_t            inh_status;
 
     /*
      * /NOWAIT subprocess-exit completion registration (vms-e9a B1,
@@ -1110,9 +1136,15 @@ struct vms_proc {
     uint8_t             compl_armed;      /* 1 = a parent awaits this proc's exit */
     uint8_t             compl_acmode;     /* access mode to queue the AST at */
     uint32_t            compl_parent_pid; /* VMS PID to notify on exit */
+    uint32_t            compl_parent_linux_pid; /* ... and the task that armed it (rd vms-e70f) */
     uint32_t            compl_efn;        /* parent EF to set, or VMS_EF_NONE */
     uint64_t            compl_astadr;     /* parent completion AST routine (0=none) */
     uint64_t            compl_astprm;     /* parameter for the completion AST */
+    /* $CREPRC's termination mailbox (rd vms-6d9): MBA<unit>:, 0 = none. The
+     * executive writes the process's termination message into it when it is
+     * deleted (vms_proc_termination_mailbox), and, for DCL's image task, a
+     * CTRL/Y message when DCL's CTRL/Y AST fires (vms_proc_ctrly_image). */
+    uint32_t            term_mbx_unit;
 
     /*
      * The process lifecycle (rd vms-9f32). owner_vms_pid is the VMS process
@@ -1125,6 +1157,10 @@ struct vms_proc {
      * SS$_NONEXPR). Guarded by vms_proc_hash_lock.
      */
     uint32_t            owner_vms_pid;
+    /* The creating TASK (rd vms-e70f): an image task (CONTINUE) shares its
+     * creator's VMS PID, so the PID alone does not say which row created this
+     * process; the termination record goes to the task that did. */
+    uint32_t            owner_linux_pid;
     struct vms_termrec  termrec[VMS_TERMREC_MAX];
     uint32_t            termrec_next;
 
@@ -1406,9 +1442,11 @@ void vms_proc_free_claimed(struct vms_proc *proc);
 
 /* Drop table entries whose backing task no longer exists. */
 /* The two halves of process deletion around the substrate's release (rd vms-9f32). */
-void vms_proc_termination_capture(const struct vms_proc *victim,
+void vms_proc_termination_capture(struct vms_proc *victim,
                                   struct vms_termination *t);
 void vms_proc_termination_post_locked(const struct vms_termination *t);
+void vms_proc_termination_mailbox(const struct vms_termination *t);
+void vms_proc_ctrly_image(uint32_t vms_pid, uint32_t arming_task);
 
 /* Deliver a /NOWAIT spawn completion for a subprocess reclaimed WITHOUT a
  * recorded exit (SIGKILL/crash), synthesizing an abnormal $STATUS (vms-2a4).
@@ -1493,7 +1531,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
  * EX-mode $ENQ on a per-volume resource, enqueued directly in the caller's
  * ioctl context (no /dev/vms round-trip). Release with a zero lkid is a no-op. */
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
-                             uint32_t *lkid_out);
+                             uint32_t *lkid_out, int *intr_out);
 uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
 /*
  * THE RMS FILE-ACCESS LOCK, taken by the EXECUTIVE on RMS's behalf (rd
@@ -1516,6 +1554,21 @@ uint32_t vms_lock_rms_file_enq(struct vms_proc *proc,
                                uint32_t *lkid_out);
 uint32_t vms_lock_rms_file_enq_no_label(void);
 uint32_t vms_lock_rms_file_release(struct vms_proc *proc, uint32_t lkid);
+/*
+ * THE XQP'S PER-FILE SERIALIZATION LOCK (rd vms-d63): "F11B$s" + the file
+ * number, a sub-lock of an NL lock on `vresnam` (the volume's "F11B$v" +
+ * label, `vresnam_len` counted bytes) taken in the caller's process, both at
+ * (UIC group 0, KERNEL mode); the sub-lock PW with LCK$M_VALBLK, its granted
+ * value block copied to `vb_out` (16 bytes). Release both with
+ * vms_lock_acp_file_ser_release, which writes `vb` as the $DEQ of a PW holder
+ * does. See vms_lock.c and src/kernel-core/vms_f11b_ser.h.
+ */
+uint32_t vms_lock_acp_file_ser(struct vms_proc *proc, const char *vresnam,
+                               uint32_t vresnam_len, uint32_t fidnum,
+                               uint8_t *vb_out, uint32_t *par_lkid_out,
+                               uint32_t *lkid_out);
+uint32_t vms_lock_acp_file_ser_release(struct vms_proc *proc, uint32_t par_lkid,
+                                       uint32_t lkid, const uint8_t *vb);
 /* The STANDING per-volume lock a faithful MOUNT holds for the whole mount life
  * (vms-25e): an NL-mode $ENQ on the F11B$v<label> resource, held from $MOUNT to
  * $DISMOUNT as the cluster-registration presence marker (not serialization).
@@ -1724,11 +1777,17 @@ long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_pprop(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_lgi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procctl(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg);
+/* rd vms-416d: $CREPRC's creation record (proc NULL for ARRIVE/HOLD) */
+long vms_ioctl_creprc_sync(struct vms_proc *proc, unsigned long arg);
+void vms_creprc_sync_init(void);
+void vms_creprc_sync_cleanup(void);
+long vms_ioctl_pql_load(struct vms_proc *proc, unsigned long arg);   /* rd vms-89dd8 */
 /* Substrate half of creator-driven creation (rd vms-c43): vms_module.c (Linux),
  * vms_netbsd.c (NetBSD). */
 uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,
@@ -1764,6 +1823,12 @@ long vms_ioctl_p0_unmap(struct vms_proc *proc, unsigned long arg);
 struct vms_va_space;
 long vms_ioctl_va(struct vms_proc *proc, unsigned long arg);
 void vms_va_release(struct vms_proc *proc);
+
+/* System time, $GETTIM/$GETUTC/$SETIME (rd vms-642, kernel-core/vms_systime.c). */
+void vms_systime_init(void);
+void vms_systime_cleanup(void);
+uint64_t vms_systime_now(void);
+long vms_ioctl_systime(struct vms_proc *proc, unsigned long arg);
 
 /*
  * P1 control region (vms-68f.ii, in-process image activation foundation,
@@ -1813,8 +1878,14 @@ uint32_t vms_proc_access_identity(const struct vms_proc *caller, uint32_t vms_pi
  * $DASSGN can report SS$_IVCHAN itself).
  */
 int vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
+/* $GETDVI of a mailbox unit (rd vms-a66e; vms_mbx.c) */
+uint32_t vms_mbx_devinfo(const char *devnam, struct vms_devinfo *info);
 /* Give back every mailbox channel a dying process holds. */
 void vms_mbx_release_all(struct vms_proc *proc);
+/* The termination mailbox (rd vms-6d9). */
+int  vms_mbx_proc_holds_unit(struct vms_proc *proc, uint32_t unit);
+void vms_mbx_exec_post(uint32_t unit, uint32_t owner_vms_pid, const void *msg,
+                       uint32_t len, int atomic);
 
 /*
  * Files-11 (ODS-2) ACP -- channel + mount front-end (vms-149, epic vms-208;
@@ -1884,6 +1955,8 @@ long vms_ioctl_bg_dassgn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_pollfd(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_getname(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_sockopt(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_iflist(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_select(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_bind(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_listen(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_accept(struct vms_proc *proc, unsigned long arg);

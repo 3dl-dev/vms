@@ -3,6 +3,7 @@
 
 #include "dcl/dcl_memfile.h"
 #include <stdint.h>
+#include <sys/types.h>
 
 /*
  * dcl_cmd.h - Internal header for split DCL command implementations.
@@ -125,6 +126,13 @@ int cmd_product(struct dcl_command *cmd);
 /* VMS month abbreviations */
 extern const char *vms_months[];
 
+/* The system time -- SYS$GETTIM, the executive's (rd vms-642) -- as a
+ * timespec; returns the $GETTIM status. */
+struct timespec;
+uint32_t dcl_system_time(struct timespec *ts);
+/* Report a system-service condition with its $GETMSG text. */
+void dcl_put_sysmsg(uint32_t st);
+
 /* Queue initialization helper */
 int ensure_queue_init(void);
 
@@ -153,16 +161,18 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si);
  * DCL CREATES ITS IMAGE TASK'S PCB (rd vms-e50, design note 3.1). An image DCL
  * activates runs, on VMS, in DCL's own process; OVMX runs it in a forked task,
  * which DCL makes that same VMS process (VMS_CREPRC_PCB_CONTINUE) while the
- * task waits, before it can exec. Open before fork() (returns 0, or -1 with
- * nothing open); the child calls dcl_pcb_hold_wait() before exec; the parent
- * calls dcl_pcb_hold_release() at once after fork() and gets the status.
+ * task waits, before it can exec. A PIPE segment is a NEW subprocess of DCL
+ * (VMS_CREPRC_PCB_SUBPROCESS, rd vms-1f8). dcl_image_fork() returns as fork()
+ * does; DCL and the task meet in the executive's creation record
+ * (VMS_IOCTL_CREPRC_SYNC, ovmx_subprocess.h) -- no host pipe (rd vms-89bb).
+ * The task is released whether or not its PCB was made: with no executive
+ * there is none to make, and its own service calls then fail honestly.
  */
-int dcl_pcb_hold_open(int fds[2]);
-void dcl_pcb_hold_wait(int fds[2]);
-uint32_t dcl_pcb_hold_release(int fds[2], int child_pid);
-/* The same, making the held task a NEW VMS process of the given kind
- * (VMS_CREPRC_PCB_SUBPROCESS: a PIPE segment, rd vms-1f8). */
-uint32_t dcl_pcb_hold_release_kind(int fds[2], int child_pid, uint32_t kind);
+pid_t dcl_image_fork(uint32_t kind);
+/* The same, the task's PCB naming DCL's mailbox MBA<mbxunt>: as its $CREPRC
+ * termination mailbox (rd vms-6d9; 0 = none); *pcb_status (may be NULL) gets
+ * the executive's answer for the PCB. */
+pid_t dcl_image_fork_mbx(uint32_t kind, uint32_t mbxunt, uint32_t *pcb_status);
 void dcl_sysinput_restore(struct dcl_sysinput *si);
 
 /* P1 control-region establishment (vms-68f.v, in-process image activation).
@@ -202,6 +212,9 @@ int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
 /* External functions used by command implementations */
 extern void dcl_error(const char *facility, int severity, const char *ident,
                       const char *fmt, ...);
+/* A "-FAC-S-IDENT, text" continuation line of the message just shown. */
+extern void dcl_error_cont(const char *facility, int severity, const char *ident,
+                           const char *fmt, ...);
 /* Print %SYSTEM-E-UNSUPPORTED and return SS$_UNSUPPORTED (dcl_io.c). */
 extern uint32_t dcl_unsupported(void);
 extern int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
@@ -218,6 +231,10 @@ extern int dcl_directory_header_spec(const char *def, const char *spec,
                                      char *vms_dir, size_t dir_size);
 extern int dcl_format_filespec(const char *linux_path, char *vms_spec,
                                size_t spec_size);
+/* SYS$OUTPUT/SYS$INPUT/SYS$ERROR equivalence names the terminal (dcl_cmd_io.c) */
+extern int dcl_logical_is_terminal(const char *equiv);
+/* SYS$OUTPUT (0) / SYS$ERROR (1) is routed to the file `spec` (dcl_io.c) */
+extern int dcl_ppf_routed_to_file(int which, const char *spec);
 extern int dcl_translate_logical(const char *name, char *result,
                                  size_t result_size);
 extern int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,
@@ -226,8 +243,6 @@ extern void dcl_eval_expr_string(struct dcl_context *ctx, const char *expr,
                                  char *out, size_t outlen);
 extern int dcl_execute_line(const char *line);
 extern int dcl_execute_script(const char *filename, int argc, char **argv);
-extern int dcl_read_input(struct dcl_context *ctx, const char *prompt,
-                          char *buffer, size_t bufsize);
 
 /* VMS filesystem protection functions */
 extern int      vmsfs_parse_protection(const char *str, uint16_t *prot);

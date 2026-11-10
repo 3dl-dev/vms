@@ -1,0 +1,31 @@
+# setimr-arms-under-table-lock -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$SETIMR queues its timer with the timer signal blocked, so an AST that re-arms its own timer runs after the service returns and never deadlocks on the timer table (rd vms-2a84)";;
+        targets)      echo "libvms/syssvc/sys_time.c";;
+        suites_red)   echo "test_syssvc_setimr_ast_rearm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$setimr blocks SIGRTMIN before it takes timer_mutex and restores it after the unlock. The mutation leaves the signal deliverable in sys\$setimr only (its first timer_sig_block; \$CANTIM's is kept). A 100 ns timer then expires before the unlock, its handler runs in the same thread and waits for the mutex that thread holds, for ever. The rearm subprocess never finishes. The sequence subprocess queues the same 100 ns timers from its mainline, so its handler deadlocks the same way and it never finishes either (knock-on). Suites whose timers are milliseconds long rarely expire inside that window.";;
+        require_fail) cat <<'EOF2'
+*** an AST that re-arms its own $SETIMR never deadlocks inside $SETIMR ***
+  and every re-armed chain ran to its end
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+*** expired $SETIMR requests hold nothing: 10000 timers in a row all succeed ***
+  and every one of their ASTs ran
+EOF2
+                      ;;
+        knock_on_why)  echo "The sequence subprocess's mainline \$SETIMR is the same unprotected window: its own handler deadlocks on timer_mutex at the first timer that expires inside it.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    timer_sig_block(&sig_old);         /\* its AST runs after the return \*/$|    sigprocmask(SIG_BLOCK, NULL, \&sig_old); /* NEGCTL setimr-arms-under-table-lock */|' "$_file"
+    :
+}

@@ -6,6 +6,8 @@
  * device allocation table for SHOW USERS and SSH session management.
  */
 
+#include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -182,8 +184,8 @@ int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
         return DCL_TT_NODRIVER;
     /* what DCL has written through stdio reaches the terminal before the
      * prompt does */
-    fflush(stdout);
-    fflush(stderr);
+    dcl_out_flush();
+    dcl_err_flush();
 
     static char pbuf[512];
     size_t plen = 0;
@@ -238,8 +240,8 @@ int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
         return DCL_TT_GONE;
     if (!dcl_tt_assign())
         return DCL_TT_NODRIVER;
-    fflush(stdout);
-    fflush(stderr);
+    dcl_out_flush();
+    dcl_err_flush();
     if (ilen > sizeof ibuf)
         ilen = sizeof ibuf;
     memcpy(pbuf, prompt, plen);
@@ -287,7 +289,7 @@ void dcl_tt_raw_write(const void *b, size_t n)
     uint16_t iosb[4];
     if (!n || !dcl_tt_assign())
         return;
-    fflush(stdout);
+    dcl_out_flush();
     (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK | IO$M_NOFORMAT, iosb, NULL, 0,
                    (void *)b, (uint32_t)n, 0, 0, 0, 0);
 }
@@ -297,9 +299,55 @@ void dcl_tt_qio_write(const void *b, size_t n)
     uint16_t iosb[4];
     if (!n || !dcl_tt_assign())
         return;
-    fflush(stdout);
+    dcl_out_flush();
     (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0,
                    (void *)b, (uint32_t)n, 0, 0, 0, 0);
+}
+
+/*
+ * One output record to the terminal SYS$OUTPUT names, through the terminal
+ * driver: $QIO IO$_WRITEVBLK with P4 " " -- one record with implied carriage
+ * control, as RMS writes a record to a terminal (vms-28db). The driver renders
+ * the new line for where the cursor is (a line feed a previous record or
+ * message left owed is paid first) and ends the record with its carriage
+ * return. Appending our own CR LF instead overprinted a line whose line feed
+ * was owed (an error message just shown) and broke the echo-relative bytes the
+ * keystroke oracle compares (LE.CTRLU R: VAX "<CR>1<CR><LF>").
+ * 0 when the driver took it; -1 when the process's output is not the
+ * executive's terminal (no driver, or output redirected to a pipe), or the
+ * record is empty (the class driver writes no record for P2 = 0), and the
+ * caller writes the process stream instead.
+ */
+int dcl_tt_put_record(const char *text, size_t n)
+{
+    uint16_t iosb[4];
+
+    if (n == 0 || !isatty(STDOUT_FILENO) || !dcl_tt_assign())
+        return -1;
+    if (n > 4096)
+        n = 4096;
+    dcl_out_flush();
+    dcl_err_flush();
+    uint32_t st = sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0,
+                           (void *)text, (uint32_t)n, 0, ' ', 0, 0);
+    return ((st & 1) && (iosb[0] & 1)) ? 0 : -1;
+}
+
+int dcl_tt_output_ready(void)
+{
+    return isatty(STDOUT_FILENO) && dcl_tt_assign();
+}
+
+int dcl_tt_put_text(const char *text, size_t n, int open)
+{
+    uint16_t iosb[4];
+
+    if (!dcl_tt_assign())
+        return -1;
+    memset(iosb, 0, sizeof iosb);
+    uint32_t st = sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0,
+                           (void *)text, (uint32_t)n, 0, open ? '$' : ' ', 0, 0);
+    return ((st & 1) && (iosb[0] & 1)) ? 0 : -1;
 }
 
 int dcl_tt_getc(int poll)
@@ -363,7 +411,7 @@ int dcl_page_begin(struct dcl_pager *pg)
     pg->save = -1;
     if (!isatty(STDOUT_FILENO) || !dcl_tt_assign())
         return 0;                       /* not a terminal: no pager */
-    fflush(stdout);
+    dcl_out_flush();
     /* A scratch file that cannot take data means no pager, and the listing goes
      * straight to the terminal -- never into a buffer that silently drops it
      * (rd vms-f47: tmpfs refuses writes below 4 MB of available memory). */
@@ -378,6 +426,7 @@ int dcl_page_begin(struct dcl_pager *pg)
         pg->save = -1;
         return 0;
     }
+    dcl_out_capture(pg->tmp);           /* DCL's own records too, not only an image's */
     return 1;
 }
 
@@ -390,11 +439,12 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
 
     if (!pg->tmp)
         return;
-    fflush(stdout);
-    int page_werr = ferror(stdout);      /* the buffer filled mid-command */
-    clearerr(stdout);
+    dcl_out_flush();
+    int page_werr = dcl_out_error();      /* the buffer filled mid-command */
+    dcl_out_clearerr();
+    dcl_out_capture(NULL);
     if (page_werr)
-        fprintf(stderr, "%%DCL-W-PAGEFULL, output exceeded the paging buffer; the listing is incomplete\n");
+        dcl_err_printf("%%DCL-W-PAGEFULL, output exceeded the paging buffer; the listing is incomplete\n");
     dup2(pg->save, STDOUT_FILENO);
     close(pg->save);
     pg->save = -1;
@@ -411,10 +461,10 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
      * its own CR) */
     if (nlines <= page_len) {
         while (fgets(line, sizeof line, pg->tmp))
-            fputs(line, stdout);
+            dcl_out_fputs(line);
         for (long i = nlines; i < page_len; i++)
-            fputc('\n', stdout);
-        fflush(stdout);
+            dcl_out_putc('\n');
+        dcl_out_flush();
         fclose(pg->tmp);
         pg->tmp = NULL;
         return;
@@ -476,8 +526,8 @@ int dcl_tt_inquire(char *reply, size_t replysz)
 
     if (!dcl_tt_assign())
         return DCL_TT_NODRIVER;
-    fflush(stdout);
-    fflush(stderr);
+    dcl_out_flush();
+    dcl_err_flush();
     memset(mask, 0, sizeof mask);
     mask['c' >> 5] |= 1u << ('c' & 31);
     mask['Z' >> 5] |= 1u << ('Z' & 31);
@@ -521,32 +571,22 @@ int dcl_tt_inquire(char *reply, size_t replysz)
 }
 
 /*
- * dcl_tt_read_line - one line for INQUIRE / READ SYS$INPUT / READ /PROMPT
- * from an interactive terminal: through the terminal driver when stdin is
- * that terminal, else (a pipe, a file, or no driver) the plain stream. 0 with
- * buf filled, -1 at end of file (^Z, or the stream's EOF).
+ * dcl_tt_read_line - one line for INQUIRE / READ SYS$INPUT / READ /PROMPT:
+ * through the terminal driver ($QIO IO$_READPROMPT) when SYS$INPUT is the
+ * terminal, else the next record of what SYS$INPUT names -- a mailbox by
+ * $QIO, a file by RMS, or (no executive) the substrate stream (dcl_in.c).
+ * 0 with buf filled, -1 at end of file (^Z, or the stream's EOF).
  */
 int dcl_tt_read_line(const char *prompt, char *buf, size_t bufsz)
 {
-    size_t len;
-
-    if (isatty(STDIN_FILENO)) {
+    if (dcl_in_route() == DCL_IN_ROUTE_NONE && isatty(STDIN_FILENO)) {
         int n = dcl_tt_read(prompt, prompt ? strlen(prompt) : 0, buf, bufsz, 0, 0, NULL);
         if (n >= 0)
             return 0;
         if (n != DCL_TT_NODRIVER)
             return -1;
     }
-    if (prompt && prompt[0]) {
-        fputs(prompt, stdout);
-        fflush(stdout);
-    }
-    if (!fgets(buf, (int)bufsz, stdin))
-        return -1;
-    len = strlen(buf);
-    if (len > 0 && buf[len - 1] == '\n')
-        buf[len - 1] = '\0';
-    return 0;
+    return dcl_in_get(prompt, buf, bufsz) < 0 ? -1 : 0;
 }
 
 /*

@@ -1,0 +1,34 @@
+# link-image-takes-build-flags -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "LINK.EXE takes the VMS LINK command (rd vms-3cb1): the shipped SYS\$SYSTEM:LINK.EXE (src/vmslink/link.c built with OVMX_LINK_IMAGE) obtains its command from the CLI and reads it through CLI\$DCL_PARSE / CLI\$PRESENT / CLI\$GET_VALUE against the LINK command table (link_cli.c, link_cld.h)";;
+        targets)      echo "vmslink/link.c";;
+        suites_red)   echo "test_syssvc_mmk_build";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The shipped LINK.EXE is built with the host build tool's argv front end again (link_buildtool.c: -o / --use / --library / --executable flags) instead of the CLI\$ front end -- the pre-vms-3cb1 shape in which a Unix flag vector, not the VMS LINK command, drives the image. DCL's LINK /SHAREABLE=... OVMXRT.OLB/INCLUDE=(...),OVMXSTR.OPT/OPTIONS and LINK /EXECUTABLE=.../MAP=... OVMXRT.OLB/LIBRARY,OVMXRT.OPT/OPTIONS then reach an image that does not read the CLI at all: it refuses the command (%LINK-F-BUILDTOOL) and writes no map, no shareable and no executable. ISOLATION: test_syssvc_mmk_build is the only suite that runs SYS\$SYSTEM:LINK.EXE in the guest.";;
+        require_fail) cat <<'EOF2'
+DCL LINK/MAP=OVMXRT.MAP wrote the link map (Object Module Synopsis, Symbols By Name, Image Synopsis)
+DCL LINK/SHAREABLE=OVMXSTR.EXE linked module VMS_STRING (/INCLUDE) into a shareable image exporting vms_strlen (SYMBOL_VECTOR from /OPTIONS)
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+the map lists the module /LIBRARY pulled from OVMXRT.OLB and the symbol vms_strlen it defines
+the MMK-driven LINK.EXE produced OVMXRT.EXE in the guest
+OVMXRT.EXE is a valid OVMX image (ELF ET_DYN) -- LINK really linked it in QEMU
+OVMXRT.EXE carries PT_INTERP=IMGACT.EXE (/run/ovmx-boot, ACP-staged) -- it is an image the kernel activates through IMGACT, not a bare ELF
+IMGACT activated the MMK-driven OVMXRT.EXE and it RAN to exit 216 (vms_strlen("OVMXRT")*36) -- the LINK pulled VMS_STRING from the .OLB and the image really runs
+EOF2
+                      ;;
+        knock_on_why)  echo "With no LINK command read, the executable link fails too: OVMXRT.EXE is never written, so its presence, validity, PT_INTERP and activation checks redden under the same root.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^#ifdef OVMX_LINK_IMAGE$|#ifdef OVMX_LINK_IMAGE_NEGCTL_OFF /* NEGCTL link-image-takes-build-flags */|' "$_file"
+    :
+}

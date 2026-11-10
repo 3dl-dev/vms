@@ -4,6 +4,8 @@
  * All cmd_set_* functions and the SET dispatcher.
  */
 
+#include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -551,7 +553,7 @@ static int cmd_set_terminal(struct dcl_command *cmd)
             if ((vms_kif_getjpi_self(&pi) & 1) && pi.terminal[0])
                 snprintf(dev, sizeof dev, "%s", pi.terminal[0] == '_' ? pi.terminal + 1 : pi.terminal);
             dcl_error("SET", 0, "NOTSET", "error modifying %s", dev);
-            fprintf(stderr, "-SET-I-UNKTERM, unknown terminal type\n");
+            dcl_err_printf("-SET-I-UNKTERM, unknown terminal type\n");
         }
     }
 
@@ -861,7 +863,7 @@ static int cmd_set_acl(struct dcl_command *cmd)
             const char *m = set_acl_sysmsg(st, &sev);
             const char *rest = acetxt[i] + (ep < strlen(acetxt[i]) ? ep : 0);
             dcl_error("SET", 4, "SYNTAX", "error parsing '%s'", rest + (rest[0] == '(' ? 1 : 0));
-            if (m) fprintf(stderr, "-SYSTEM-%c-%s\n", sev, m);
+            if (m) dcl_err_printf("-SYSTEM-%c-%s\n", sev, m);
             return (int)st;
         }
     }
@@ -905,7 +907,7 @@ static int cmd_set_acl(struct dcl_command *cmd)
                     struct dsc$descriptor_s xd = { sizeof(txt), DSC$K_DTYPE_T, DSC$K_CLASS_S, txt };
                     dcl_error("SET", 0, "NOSUCHACE", "ACE for object %s, does not exist", match);
                     if (sys$format_acl(&ad, &tl, &xd, NULL, NULL, NULL, NULL, NULL) & 1)
-                        fprintf(stderr, "    %.*s\n", (int)tl, txt);
+                        dcl_err_printf("    %.*s\n", (int)tl, txt);
                 }
                 dcl_error("SET", 4, "WRITEERR", "error writing %s", match);
             } else {
@@ -915,8 +917,8 @@ static int cmd_set_acl(struct dcl_command *cmd)
                     dcl_error("SET", 2, "OPENIN", "error opening %s as input", match);
                 else
                     dcl_error("SET", 2, "WRITEERR", "error writing %s", match);
-                if (m) fprintf(stderr, "-SYSTEM-%c-%s\n", sev, m);
-                else fprintf(stderr, "-SYSTEM-E-STATUS, status %%X%08X\n", st);
+                if (m) dcl_err_printf("-SYSTEM-%c-%s\n", sev, m);
+                else dcl_err_printf("-SYSTEM-E-STATUS, status %%X%08X\n", st);
             }
             worst = st;
         }
@@ -1005,7 +1007,7 @@ static void set_print_cond(uint32_t st, int secondary)
     if (vms_status_string(st, m, sizeof m) > 0) {
         if (secondary && m[0] == '%')
             m[0] = '-';
-        fprintf(stderr, "%s\n", m);
+        dcl_err_printf("%s\n", m);
     }
 }
 
@@ -1212,8 +1214,8 @@ static int cmd_set_protection(struct dcl_command *cmd)
  * suppressed, for the SET PASSWORD prompts below: $QIO IO$_READPROMPT with
  * IO$M_NOECHO through the executive's terminal driver (rd vms-f8c), the read
  * VMS's own SET PASSWORD issues. The caller has already written its prompt,
- * so this read carries none. Off the OVMX runtime (no terminal driver behind
- * TT:) the descriptor is read plainly. Returns 0 on success (buf holds the
+ * so this read carries none. With no terminal driver behind TT: it is the
+ * next record of SYS$INPUT (dcl_in.c). Returns 0 on success (buf holds the
  * trimmed line), -1 on EOF/read error.
  */
 static int dcl_read_noecho_line(char *buf, size_t bufsz)
@@ -1221,14 +1223,14 @@ static int dcl_read_noecho_line(char *buf, size_t bufsz)
     int rc = 0;
     int n;
 
-    fflush(stdout);
+    dcl_out_flush();
     n = dcl_tt_read(NULL, 0, buf, bufsz, IO$M_NOECHO, 0, NULL);
     if (n >= 0)
         return 0;
     if (n != DCL_TT_NODRIVER)
         return -1;
 
-    if (fgets(buf, (int)bufsz, stdin) == NULL)
+    if (dcl_in_get(NULL, buf, bufsz) < 0)
         rc = -1;
     if (rc == 0) {
         size_t len = strlen(buf);
@@ -1368,10 +1370,10 @@ static int cmd_set_password(struct dcl_command *cmd)
 
     char old_pw[128], new_pw[128], verify_pw[128];
 
-    printf("Old password: ");
-    fflush(stdout);
+    dcl_out_printf("Old password: ");
+    dcl_out_flush();
     if (dcl_read_noecho_line(old_pw, sizeof(old_pw)) != 0) {
-        printf("\n");
+        dcl_out_printf("\n");
         return SS$_ABORT;
     }
 
@@ -1381,21 +1383,21 @@ static int cmd_set_password(struct dcl_command *cmd)
      * check -- reused here rather than invented, because this is the same
      * check against the same SYSUAF hash, not a different condition. */
     if (!sysuaf_authenticate(&rec, old_pw)) {
-        printf("\nUser authorization failure\n");
+        dcl_out_printf("\nUser authorization failure\n");
         return SS$_INVLOGIN;
     }
 
-    printf("New password: ");
-    fflush(stdout);
+    dcl_out_printf("New password: ");
+    dcl_out_flush();
     if (dcl_read_noecho_line(new_pw, sizeof(new_pw)) != 0) {
-        printf("\n");
+        dcl_out_printf("\n");
         return SS$_ABORT;
     }
 
-    printf("Verification: ");
-    fflush(stdout);
+    dcl_out_printf("Verification: ");
+    dcl_out_flush();
     if (dcl_read_noecho_line(verify_pw, sizeof(verify_pw)) != 0) {
-        printf("\n");
+        dcl_out_printf("\n");
         return SS$_ABORT;
     }
 
@@ -1451,7 +1453,7 @@ static int cmd_set_password(struct dcl_command *cmd)
         return SS$_FILACCERR;
     }
 
-    printf("%%SET-S-PASSWORD, password for user %s changed\n", ctx->username);
+    dcl_out_printf("%%SET-S-PASSWORD, password for user %s changed\n", ctx->username);
     return SS$_NORMAL;
 }
 
@@ -1761,10 +1763,10 @@ static int cmd_set_process(struct dcl_command *cmd)
              * report per Rule 10. */
             if (st == SS$_DUPLNAM) {
                 dcl_error("SET", 2, "NOTSET", "error modifying process name");
-                fprintf(stderr, "-SYSTEM-F-DUPLNAM, duplicate name\n");
+                dcl_err_printf("-SYSTEM-F-DUPLNAM, duplicate name\n");
             } else if (st == SS$_IVLOGNAM) {
                 dcl_error("SET", 2, "NOTSET", "error modifying process name");
-                fprintf(stderr,
+                dcl_err_printf(
                         "-SYSTEM-F-IVLOGNAM, invalid logical name\n");
             } else
                 dcl_error("OVMX", 2, "SETPRNFAIL",
@@ -2243,7 +2245,7 @@ static int cmd_set_uic(struct dcl_command *cmd)
 
     if (cmd->param_count < 2) {
         /* No argument: display current UIC */
-        printf("  Current UIC: [%03o,%03o]\n", ctx->uic_group, ctx->uic_member);
+        dcl_out_printf("  Current UIC: [%03o,%03o]\n", ctx->uic_group, ctx->uic_member);
         return SS$_NORMAL;
     }
 
@@ -2334,126 +2336,72 @@ static int cmd_set_working_set(struct dcl_command *cmd)
 }
 
 /*
- * SET TIME [dd-mmm-yyyy:hh:mm:ss] — set system clock (privileged).
+ * SET TIME[=time] -- set the system time, or with no time recalibrate it from
+ * the time-of-year clock (OpenVMS DCL Dictionary, SET TIME). It is $SETIME
+ * (rd vms-642): the executive changes the system time every process reads --
+ * SHOW TIME, F$TIME, $GETTIM and the C RTL's time() in any process -- and
+ * decides the privilege itself: OPER and LOG_IO, else %SYSTEM-F-NOPRIV. The
+ * substrate's clock is never touched.
  *
- * Requires OPER or SYSPRV privilege.  Uses settimeofday(2).
+ * time is a DCL absolute time, dd-mmm-yyyy[:hh:mm:ss.cc] (DCL joins date and
+ * time with a colon, $BINTIM with a blank), or hh:mm[:ss.cc] for a time today.
+ * One that is not a time is %CLI-W-IVATIME (docs/oracle/messages/
+ * alpha84-msgcat2.txt, %X00038290).
  */
+#define CLI_IVATIME 0x00038290u
 static int cmd_set_time(struct dcl_command *cmd)
 {
-    if (cmd->param_count < 2) {
-        /* No argument: display current time (same as SHOW TIME).
-         * Reading the clock requires no privilege on VMS or Linux. */
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        struct tm tm;
-        localtime_r(&ts.tv_sec, &tm);
-        static const char *mon_abbr[] = {
-            "JAN","FEB","MAR","APR","MAY","JUN",
-            "JUL","AUG","SEP","OCT","NOV","DEC"
-        };
-        printf("  %2d-%s-%04d %02d:%02d:%02d.%02d\n",
-               tm.tm_mday, mon_abbr[tm.tm_mon], 1900 + tm.tm_year,
-               tm.tm_hour, tm.tm_min, tm.tm_sec,
-               (int)(ts.tv_nsec / 10000000));
-        return SS$_NORMAL;
-    }
+    uint32_t st;
 
-    /*
-     * Privilege check -- OPER, required when actually setting the clock.
-     * enforced_privs_held() reads the executive's live privileges masked to
-     * VMS_PRV_M_ENFORCED; OPER has been in that mask since vms-768, so this
-     * gate admits exactly the processes that hold OPER (SYSTEM, whose SYSUAF
-     * record authorizes ALL, does; an ordinary user does not).
-     */
-    uint64_t held = enforced_privs_held();
-    if (!(held & PRV$M_OPER)) {
-        dcl_error("SET", 2, "NOPRIV", "no privilege for SET TIME");
-        return SS$_NOPRIV;
+    if (cmd->param_count < 2 || !cmd->params[1][0]) {
+        st = sys$setime(NULL);
+        if (!(st & 1))
+            dcl_put_sysmsg(st);
+        return (int)st;
     }
 
     const char *time_str = cmd->params[1];
-
-    /* Parse VMS format: dd-MMM-yyyy:hh:mm:ss or hh:mm:ss (time only) */
-    static const char *mon_names[] = {
-        "JAN","FEB","MAR","APR","MAY","JUN",
-        "JUL","AUG","SEP","OCT","NOV","DEC"
-    };
-
     char ts_buf[64];
-    strncpy(ts_buf, time_str, sizeof(ts_buf) - 1);
-    ts_buf[sizeof(ts_buf) - 1] = '\0';
-    for (size_t i = 0; ts_buf[i]; i++)
-        ts_buf[i] = (char)toupper((unsigned char)ts_buf[i]);
+    size_t n = 0;
+    for (; time_str[n] && n < sizeof ts_buf - 1; n++)
+        ts_buf[n] = (char)toupper((unsigned char)time_str[n]);
+    ts_buf[n] = '\0';
 
-    struct tm new_tm;
-    memset(&new_tm, 0, sizeof(new_tm));
-
-    /* Get current local time as base */
-    time_t now = time(NULL);
-    localtime_r(&now, &new_tm);
-
-    int day = 0, mon = -1, year = 0;
-    int hr = 0, mi = 0, sc = 0;
-    char mon_str[4] = {0};
-    int have_date = 0;
-
-    /* Try full datetime first, then time-only */
-    if (sscanf(ts_buf, "%d-%3s-%d:%d:%d:%d",
-               &day, mon_str, &year, &hr, &mi, &sc) >= 3) {
-        have_date = 1;
-    } else if (sscanf(ts_buf, "%d:%d:%d", &hr, &mi, &sc) >= 2) {
-        /* time only — keep current date */
+    char abs_buf[96];
+    char *dash = strrchr(ts_buf, '-');
+    if (dash) {
+        /* dd-mmm-yyyy[:time]: DCL's date/time colon is $BINTIM's blank. */
+        char *colon = strchr(dash, ':');
+        if (colon)
+            *colon = ' ';
+        snprintf(abs_buf, sizeof abs_buf, "%s", ts_buf);
     } else {
-        dcl_error("SET", 2, "IVTIME",
-                  "invalid time specification - \\%s\\", time_str);
-        return SS$_IVTIME;
-    }
-
-    if (have_date) {
-        for (int m = 0; m < 12; m++) {
-            if (strncmp(mon_str, mon_names[m], 3) == 0) {
-                mon = m;
-                break;
-            }
+        /* A time of day, today: the date is the system time's. */
+        uint16_t now[7];
+        st = sys$numtim(now, NULL);
+        if (!(st & 1)) {
+            dcl_put_sysmsg(st);
+            return (int)st;
         }
-        if (mon < 0) {
-            dcl_error("SET", 2, "IVTIME",
-                      "invalid month - \\%s\\", mon_str);
-            return SS$_IVTIME;
-        }
-        new_tm.tm_mday = day;
-        new_tm.tm_mon  = mon;
-        new_tm.tm_year = year - 1900;
+        snprintf(abs_buf, sizeof abs_buf, "%u-%s-%04u %s",
+                 (unsigned)now[2], vms_months[now[1] - 1], (unsigned)now[0], ts_buf);
     }
 
-    new_tm.tm_hour   = hr;
-    new_tm.tm_min    = mi;
-    new_tm.tm_sec    = sc;
-    new_tm.tm_isdst  = -1;
-
-    time_t new_t = mktime(&new_tm);
-    if (new_t == (time_t)-1) {
-        dcl_error("SET", 2, "IVTIME",
-                  "cannot convert time - \\%s\\", time_str);
-        return SS$_IVTIME;
+    uint64_t t = 0;
+    struct dsc$descriptor_s td = { (uint16_t)strlen(abs_buf), DSC$K_DTYPE_T,
+                                   DSC$K_CLASS_S, abs_buf };
+    if (!strchr(abs_buf, '-') || !(sys$bintim(&td, (struct _generic_64 *)&t) & 1) ||
+        (int64_t)t < 0) {
+        dcl_error("CLI", 0, "IVATIME",
+                  "invalid absolute time - use DD-MMM-YYYY:HH:MM:SS.CC format\n \\%s\\",
+                  time_str);
+        return (int)CLI_IVATIME;
     }
 
-    struct timeval tv;
-    tv.tv_sec  = new_t;
-    tv.tv_usec = 0;
-
-    if (settimeofday(&tv, NULL) != 0) {
-        if (errno == EPERM) {
-            dcl_error("SET", 2, "NOPRIV",
-                      "cannot set system time - insufficient OS privilege");
-            return SS$_NOPRIV;
-        }
-        dcl_error("SET", 2, "IVTIME",
-                  "cannot set system time - %s", vms_strerror(errno));
-        return SS$_IVTIME;
-    }
-
-    return SS$_NORMAL;
+    st = sys$setime(&t);
+    if (!(st & 1))
+        dcl_put_sysmsg(st);
+    return (int)st;
 }
 
 /*
@@ -2531,7 +2479,7 @@ static int cmd_set_host(struct dcl_command *cmd)
     dcl_resolve_path(ctx, img_spec, linux_path, sizeof(linux_path));
     if (!dcl_resolve_activatable(ctx, img_spec, linux_path,
                                  resolved, sizeof(resolved))) {
-        printf("%%SET-I-NOTAVAIL, DECnet is not available on this system\n");
+        dcl_out_printf("%%SET-I-NOTAVAIL, DECnet is not available on this system\n");
         return SS$_NORMAL;
     }
     strncpy(linux_path, resolved, sizeof(linux_path) - 1);
@@ -2634,7 +2582,7 @@ static int cmd_set_accounting(struct dcl_command *cmd)
                       VMS_ACCOUNTING_STATE_PATH);
             return SS$_BADPARAM;
         }
-        printf("%%SET-I-INTSET, accounting enabled\n");
+        dcl_out_printf("%%SET-I-INTSET, accounting enabled\n");
     } else if (has_disable) {
         if (ovmx_accounting_set_enabled(0) != 0) {
             dcl_error("OVMX", 2, "WRITEFAIL",
@@ -2642,9 +2590,9 @@ static int cmd_set_accounting(struct dcl_command *cmd)
                       VMS_ACCOUNTING_STATE_PATH);
             return SS$_BADPARAM;
         }
-        printf("%%SET-I-INTSET, accounting disabled\n");
+        dcl_out_printf("%%SET-I-INTSET, accounting disabled\n");
     } else {
-        printf("%%SET-I-INTSET, accounting is %s\n",
+        dcl_out_printf("%%SET-I-INTSET, accounting is %s\n",
                ovmx_accounting_is_enabled() ? "enabled" : "disabled");
     }
     return SS$_NORMAL;

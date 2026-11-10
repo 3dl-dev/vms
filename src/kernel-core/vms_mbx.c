@@ -582,6 +582,49 @@ out:
  * allocate then re-check), so two concurrent writers on the same mailbox
  * cannot both pass the quota check for bytes only one of them can have.
  */
+/* Fire every write-attention AST armed on `mbx` (vms-9003; see the write
+ * path below). Caller holds mbx->lock. Shared by a process's write and the
+ * executive's own (vms_mbx_exec_post, rd vms-6d9). */
+static void mbx_fire_wrtattn_locked(struct vms_mailbox *mbx)
+{
+    struct vms_mbx_wrtattn_reg *w, *wtmp;
+
+    exec_list_for_each_entry_safe(w, wtmp, &mbx->wrtattn, list) {
+        struct vms_ast_entry *ast;
+        struct vms_ast_state *ast_state;
+
+        exec_list_del(&w->list);
+
+        ast = exec_zalloc_atomic(sizeof(*ast));
+        if (ast) {
+            ast->astadr = w->astadr;
+            ast->astprm = w->astprm;
+            ast->acmode = w->acmode;
+
+            ast_state = &w->proc->ast[w->acmode];
+            exec_lock(&ast_state->lock);
+            if (ast_state->count < VMS_AST_MAX_PER_MODE) {
+                exec_list_add_tail(&ast->list, &ast_state->pending);
+                ast_state->count++;
+                exec_unlock(&ast_state->lock);
+                /* Async delivery (vms-feb): wake w->proc if it is
+                 * hibernating, so its $HIBER drains and RUNS this write-
+                 * attention AST instead of waiting for an explicit
+                 * $SETAST(1). Done after ast_state->lock is dropped --
+                 * vms_ast_notify_arrival takes proc->hiber_lock, which must
+                 * nest OUTSIDE ast_state->lock, never inside. mbx->lock is
+                 * still held; hiber_lock nesting under it is a fresh edge
+                 * (nothing takes mbx->lock under hiber_lock). */
+                vms_ast_notify_arrival(w->proc);
+            } else {
+                exec_free(ast);
+                exec_unlock(&ast_state->lock);
+            }
+        }
+        exec_free(w);
+    }
+}
+
 long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_mbx_write_args *a;
@@ -723,44 +766,7 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
      * lock-order edge is introduced. A full AST queue drops the notification
      * (the quota is the reader's, exactly as the lock manager treats it).
      */
-    {
-        struct vms_mbx_wrtattn_reg *w, *wtmp;
-
-        exec_list_for_each_entry_safe(w, wtmp, &mbx->wrtattn, list) {
-            struct vms_ast_entry *ast;
-            struct vms_ast_state *ast_state;
-
-            exec_list_del(&w->list);
-
-            ast = exec_zalloc_atomic(sizeof(*ast));
-            if (ast) {
-                ast->astadr = w->astadr;
-                ast->astprm = w->astprm;
-                ast->acmode = w->acmode;
-
-                ast_state = &w->proc->ast[w->acmode];
-                exec_lock(&ast_state->lock);
-                if (ast_state->count < VMS_AST_MAX_PER_MODE) {
-                    exec_list_add_tail(&ast->list, &ast_state->pending);
-                    ast_state->count++;
-                    exec_unlock(&ast_state->lock);
-                    /* Async delivery (vms-feb): wake w->proc if it is
-                     * hibernating, so its $HIBER drains and RUNS this write-
-                     * attention AST instead of waiting for an explicit
-                     * $SETAST(1). Done after ast_state->lock is dropped --
-                     * vms_ast_notify_arrival takes proc->hiber_lock, which must
-                     * nest OUTSIDE ast_state->lock, never inside. mbx->lock is
-                     * still held; hiber_lock nesting under it is a fresh edge
-                     * (nothing takes mbx->lock under hiber_lock). */
-                    vms_ast_notify_arrival(w->proc);
-                } else {
-                    exec_free(ast);
-                    exec_unlock(&ast_state->lock);
-                }
-            }
-            exec_free(w);
-        }
-    }
+    mbx_fire_wrtattn_locked(mbx);
     exec_unlock(&mbx->lock);
 
     a->status = SS__NORMAL;
@@ -1081,4 +1087,117 @@ void vms_mbx_release_all(struct vms_proc *proc)
         mbx_put(ch->mbx);
         exec_free(ch);
     }
+}
+
+/*
+ * vms_mbx_devinfo - $GETDVI of a mailbox unit (rd vms-a66e). A mailbox is not
+ * a struct vms_device row, so the device table's $GETDVI asks here when the
+ * name is no row of its own: the MBAn: unit's physical name, DC$_MAILBOX /
+ * DT$_MBX (the $DCDEF class and type of a mailbox), the unit's channel count,
+ * its creator's PID and UIC (the owner), and DVI$_DEVBUFSIZ its maximum
+ * message size (I/O User's Reference, Mailbox Driver). Nothing else is filled:
+ * a value this table does not keep is left 0 ("not recorded"), not composed.
+ * Returns SS__NORMAL, SS__NOSUCHDEV (no such unit) or the name's parse status.
+ */
+uint32_t vms_mbx_devinfo(const char *devnam_in, struct vms_devinfo *info)
+{
+    char devnam[VMS_DEVNAM_SIZE];
+    struct vms_mailbox *mbx;
+    uint32_t st = mbx_normalize_devnam(devnam_in, devnam, sizeof(devnam));
+
+    if (st != SS__NORMAL)
+        return SS__NOSUCHDEV;
+    exec_lock(&vms_mbx_list_lock);
+    mbx = mbx_find_locked(devnam);
+    if (mbx) {
+        memset(info, 0, sizeof(*info));
+        exec_lock(&mbx->lock);
+        strscpy(info->devnam, mbx->devnam, sizeof(info->devnam));
+        strscpy(info->fulldevnam, mbx->devnam, sizeof(info->fulldevnam));
+        info->devclass  = 160;              /* DC$_MAILBOX */
+        info->devtype   = 1;                /* DT$_MBX */
+        info->refcnt    = mbx->refcnt;
+        info->owner_pid = mbx->owner_vms_pid;
+        info->owner_uic = mbx->owner_uic;
+        info->devbufsiz = mbx->maxmsg;
+        exec_unlock(&mbx->lock);
+    }
+    exec_unlock(&vms_mbx_list_lock);
+    return mbx ? SS__NORMAL : SS__NOSUCHDEV;
+}
+
+/*
+ * THE TERMINATION MAILBOX (rd vms-6d9; vms_ioctl.h, struct vms_exec_mbxmsg).
+ *
+ * vms_mbx_proc_holds_unit - does `proc` hold a channel to MBA<unit>:? The one
+ * check $CREPRC's mbxunt needs: a creator names a mailbox it can reach, never an
+ * arbitrary unit another process created.
+ */
+int vms_mbx_proc_holds_unit(struct vms_proc *proc, uint32_t unit)
+{
+    struct vms_mbx_chan *ch;
+    int found = 0;
+
+    exec_lock(&proc->chan_lock);
+    exec_list_for_each_entry(ch, &proc->mbx_channels, list) {
+        if (ch->mbx && ch->mbx->unit == unit) {
+            found = 1;
+            break;
+        }
+    }
+    exec_unlock(&proc->chan_lock);
+    return found;
+}
+
+/*
+ * vms_mbx_exec_post - the EXECUTIVE writes one message into MBA<unit>: (the
+ * termination message at process deletion, the CTRL/Y message for DCL's image
+ * task). The mailbox must still exist and still belong to the VMS process
+ * `owner_vms_pid` that named it -- a unit freed and reused by another process
+ * hears nothing. The message is queued and readers woken exactly as a process's
+ * write is (same lock, same write-attention ASTs); the sender a reader sees is
+ * the process the message is about. Never waits for room: the executive does
+ * not stall a rundown or an interrupt for a reader, and its message is queued
+ * past the mailbox's buffer quota (the quota bounds what PROCESSES write; a
+ * termination message lost to a full mailbox would leave its reader waiting
+ * forever). Only a message larger than the mailbox's MAXMSG is not queued.
+ * `atomic`: the caller may not sleep.
+ */
+void vms_mbx_exec_post(uint32_t unit, uint32_t owner_vms_pid, const void *msg,
+                       uint32_t len, int atomic)
+{
+    struct vms_mailbox *mbx;
+    struct vms_mbx_msg *m;
+    int queued = 0;
+
+    if (unit == 0 || len > VMS_MBX_IOCTL_MAXLEN)
+        return;
+    m = atomic ? exec_zalloc_atomic(sizeof(*m) + len) : exec_alloc(sizeof(*m) + len);
+    if (!m)
+        return;
+    m->len = len;
+    m->sender_pid = owner_vms_pid;
+    m->eof = 0;
+    memcpy(m->data, msg, len);
+
+    exec_lock(&vms_mbx_list_lock);
+    exec_list_for_each_entry(mbx, &vms_mbx_list, list) {
+        if (mbx->unit != unit)
+            continue;
+        if (mbx->owner_vms_pid != owner_vms_pid)
+            break;
+        exec_lock(&mbx->lock);
+        if (len <= mbx->maxmsg) {
+            mbx->bufquo_used += len;
+            exec_list_add_tail(&m->list, &mbx->msgq);
+            exec_cv_broadcast(&mbx->read_wq);
+            mbx_fire_wrtattn_locked(mbx);
+            queued = 1;
+        }
+        exec_unlock(&mbx->lock);
+        break;
+    }
+    exec_unlock(&vms_mbx_list_lock);
+    if (!queued)
+        exec_free(m);
 }

@@ -48,6 +48,9 @@ the MMK-driven LINK.EXE produced OVMXRT.EXE in the guest
 OVMXRT.EXE is a valid OVMX image (ELF ET_DYN) -- LINK really linked it in QEMU
 OVMXRT.EXE carries PT_INTERP=IMGACT.EXE (/run/ovmx-boot, ACP-staged) -- it is an image the kernel activates through IMGACT, not a bare ELF
 IMGACT activated the MMK-driven OVMXRT.EXE and it RAN to exit 216 (vms_strlen("OVMXRT")*36) -- the LINK pulled VMS_STRING from the .OLB and the image really runs
+DCL LINK/MAP=OVMXRT.MAP wrote the link map (Object Module Synopsis, Symbols By Name, Image Synopsis)
+the map lists the module /LIBRARY pulled from OVMXRT.OLB and the symbol vms_strlen it defines
+DCL LINK/SHAREABLE=OVMXSTR.EXE linked module VMS_STRING (/INCLUDE) into a shareable image exporting vms_strlen (SYMBOL_VECTOR from /OPTIONS)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'

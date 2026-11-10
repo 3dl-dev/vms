@@ -67,7 +67,7 @@ WORKDIR="${WORKDIR:-/tmp/vms-cd3-nodeC}"
 OUT="${OUT:-/tmp/vms55-nodeC-cluster.dsk.gz}"
 
 SYSTEM_PW="${SYSTEM_PW:-QUOKKA1953}"          # pcjs README's measured SYSTEM password
-NEW_SYSTEM_PW="${NEW_SYSTEM_PW:-OVMXCLUSTER1}" # only used if the account's password has expired
+NEW_SYSTEM_PW="${NEW_SYSTEM_PW:-}"           # only used if the account's password has expired (vms-aa2: never a literal)
 SCSNODE="VAXC"
 SCSSYSTEMID=1989                               # DECnet 1.965 -> area*1024+node = 1989
 DECNET_ADDR="1.965"
@@ -160,6 +160,7 @@ wait_for_nudge 'Username:' 180   # vms-902: cold VAX boot + full STARTUP.COM (li
 send "SYSTEM" 1.5
 send "$SYSTEM_PW" 3
 if grep -q 'password has expired' "$LOG"; then
+    [ -n "$NEW_SYSTEM_PW" ] || { echo "SYSTEM password expired: set NEW_SYSTEM_PW (operator fact, vms-aa2)" >&2; exit 1; }
     wait_for 'New password:' 10
     send "$NEW_SYSTEM_PW" 2
     wait_for 'Verification:' 10

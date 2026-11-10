@@ -22,6 +22,7 @@ typedef char *cp32;     /* host source scans compile every product file */
 extern int printf(const char *, ...);
 extern int waitpid(int, int *, int);
 extern void _exit(int);
+extern int *__errno_location(void);
 int decc$$alloc_vfork_blocks(void);
 void *decc$$vfork_jmpbuf(void);
 int decc$$vfork_setjmp(void *) __attribute__((__returns_twice__));
@@ -49,6 +50,7 @@ int main(void)
     if (pid == 0) {
         /* DEC C: this runs in the parent, on the child's behalf. */
         execv("SYS$SYSTEM:CC1.EXE", av);
+        printf("OVMX cc1 run: exec failed, errno=%d\n", *__errno_location());   /* a verdict, not a silent 127 */
         _exit(127);                     /* not reached: exec returns via vfork */
     }
     int pid_ok = pid > 0;

@@ -93,16 +93,17 @@ fi
 # ---- assert the full two-TU + link plan, in dependency order ----
 line() { grep -nxF "$1" plan1.txt | head -1 | cut -d: -f1; }
 
-C_LNK=$(line 'TCC -x c -c -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_RMS_IO -I VMSLINK$SRC: -I OVMX$INCLUDE: -I RMS$INCLUDE: LINK.C -o LINK.OBJ')
-C_RMS=$(line 'TCC -x c -c -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_RMS_IO -I VMSLINK$SRC: -I OVMX$INCLUDE: -I RMS$INCLUDE: OVMX_LINK_RMS_IO.C -o OVMX_LINK_RMS_IO.OBJ')
-# The LINK line: --executable, all six --use producers, then the two objects.
-L_LNK=$(grep -nE '^LNK --executable .*--use SYS\$LIBRARY:DECC\$SHR\.EXE.*--use SYS\$LIBRARY:LIBVMSRMS\$SHR\.EXE .*-o LINKSH\.EXE LINK\.OBJ OVMX_LINK_RMS_IO\.OBJ$' plan1.txt | head -1 | cut -d: -f1)
+C_LNK=$(line 'TCC -x c -c -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_RMS_IO -DOVMX_LINK_IMAGE -I VMSLINK$SRC: -I OVMX$INCLUDE: -I RMS$INCLUDE: LINK.C -o LINK.OBJ')
+C_RMS=$(line 'TCC -x c -c -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_RMS_IO -DOVMX_LINK_IMAGE -I VMSLINK$SRC: -I OVMX$INCLUDE: -I RMS$INCLUDE: OVMX_LINK_RMS_IO.C -o OVMX_LINK_RMS_IO.OBJ')
+# The LINK line (VMS LINK command, rd vms-3cb1): the two objects and the six
+# shareable images of RTLIBS.OPT.
+L_LNK=$(grep -nE '^LNK /EXECUTABLE=LINKSH\.EXE/NOSYSLIB/NOSYSSHR LINK\.OBJ,OVMX_LINK_RMS_IO\.OBJ,RTLIBS\.OPT/OPTIONS$' plan1.txt | head -1 | cut -d: -f1)
 
 fails=0
 need() { if [ -z "$2" ]; then echo "FAIL: $1"; fails=$((fails+1)); else echo "  PASS: $1 (plan line $2)"; fi; }
 need "MMK resolved the TCC compile of LINK.C -> LINK.OBJ (CFLAGS/INCS macros expanded, -DOVMX_RMS_IO)" "$C_LNK"
 need "MMK resolved the TCC compile of OVMX_LINK_RMS_IO.C -> OVMX_LINK_RMS_IO.OBJ" "$C_RMS"
-need "MMK resolved the LINK --executable of the two objects against the six shareables -> LINKSH.EXE (RTLIBS macro expanded)" "$L_LNK"
+need "MMK resolved the LINK/EXECUTABLE of the two objects against the six shareables (RTLIBS.OPT) -> LINKSH.EXE" "$L_LNK"
 [ "$fails" -eq 0 ] || { echo "FAIL: MMK did not resolve the full LINK.EXE self-host plan"; exit 1; }
 
 # Dependency order: both compiles precede the link.

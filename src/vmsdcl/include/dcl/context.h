@@ -100,6 +100,9 @@ struct dcl_context {
      * dcl_script.c checks return_requested and stops; return_status carries the
      * optional status argument, or $STATUS when RETURN gives none. */
     int return_requested;
+    /* A command that failed but branched to its own /ERROR= or /END_OF_FILE=
+     * label: its $STATUS is the failure, but no error action is taken. */
+    int status_handled;
     int return_status;
 
     /* Control-Y handling */
@@ -135,15 +138,17 @@ struct dcl_context {
      * stdio fopen() on a vmsfs_to_linux_path passthrough -- the passthrough
      * cannot see files that live only on the genuine ODS-2 SYS$DISK
      * (SYS$STARTUP:VMS$PHASES.DAT et al). `reader`/`writer` hold the RMS
-     * handle; `fp` is kept ONLY for the SYS$OUTPUT:/SYS$ERROR:/SYS$INPUT:
-     * standard-stream channels, which are process streams, not RMS files.
-     * Exactly one of {fp, reader, writer} is non-NULL on an open channel. */
+     * handle; `ppf` marks a channel on SYS$OUTPUT:/SYS$ERROR:/SYS$INPUT:, whose
+     * READ/WRITE go where that process-permanent logical name points (a file
+     * through RMS, the terminal through $QIO) -- never a host stdio stream
+     * (libc-drop vms-28db). Exactly one of {ppf, reader, writer} is set. */
     struct {
-        FILE *fp;
+        int  ppf;   /* a channel on a process-permanent file: 1 SYS$OUTPUT, 2 SYS$ERROR, 3 SYS$INPUT */
         struct dcl_rms_reader *reader;
         struct dcl_rms_writer *writer;
         char name[64];
         int  mode;  /* 0=read, 1=write, 2=append */
+        int  named; /* OPEN defined its name as a process logical (CLOSE removes it) */
     } channels[16];
 
     /* SET MESSAGE flags (1 = show, 0 = suppress) */

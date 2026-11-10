@@ -220,6 +220,14 @@ struct vms_dlm_proxy_post {
 	uint8_t  write_valblk;
 
 	/*
+	 * THE REQUEST'S $ENQ FLAGS, in the public LCK$M_ encoding (rd vms-d63):
+	 * the LKB's own flags, mapped by the engine at post time, carried at
+	 * body[28:30] of a new request (vms_cluster_codec_dlm.h, struct
+	 * vms_dlm_enq_request, for the measurement).
+	 */
+	uint16_t req_flags;
+
+	/*
 	 * DOES THIS NODE ITSELF MASTER THE RESOURCE? (rd vms-3ac)
 	 *
 	 * Read off the RESOURCE BLOCK at post time -- `res->master_csid ==
@@ -611,6 +619,16 @@ uint32_t vms_lock_dlm_dir_hash_computed_wrong(void);
  * mastered resource was freed, and those it could not hand over. */
 uint32_t vms_lock_dlm_dir_removes_posted(void);
 uint32_t vms_lock_dlm_dir_removes_unposted(void);
+/*
+ * rd vms-8cb5: a cluster state transition has begun, and with it Phase 1's
+ * cluster-wide discard of directory information (Davis p. 7-40/7-41, p. 6-33).
+ * Forget every "that directory node holds my entry" record (`dir_told_csid`):
+ * a real master re-registers its entries with op-0x0d and OVMX sends none, so
+ * no directory holds one any more -- and a removal for an entry a directory
+ * does not hold is what draws a real V7.3's op-0x19 and LOCKMGRERR. Returns
+ * how many records were forgotten.
+ */
+uint32_t vms_lock_dlm_directory_discarded(void);
 
 /*
  * HOW MANY PROXY TRANSMISSIONS WERE REFUSED BECAUSE THIS NODE MASTERS THE

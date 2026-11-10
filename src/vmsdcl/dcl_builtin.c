@@ -17,12 +17,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 
+#include "dcl/dcl_out.h"
 #include "dcl/context.h"
 #include "dcl/parser.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
 #include "ssdef.h"
+#include "starlet.h"   /* sys$gettim: the system time (dcl_system_time) */
+#include "descrip.h"
+#include "msgdef.h"
 
 /* BACKUP command (dcl_backup.c) */
 extern int cmd_backup(struct dcl_command *cmd);
@@ -39,6 +44,40 @@ const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
     "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
 };
+
+/*
+ * dcl_system_time - the system time, as a host timespec for DCL's formatting
+ * (rd vms-642). It is SYS$GETTIM's -- the executive's system time, which SET
+ * TIME changes for every process -- never the substrate clock. Returns the
+ * $GETTIM status (SS$_NOSUCHDEV with no executive; *ts is then untouched).
+ */
+uint32_t dcl_system_time(struct timespec *ts)
+{
+    uint64_t t = 0;
+    uint32_t st = sys$gettim(&t);
+
+    if (!(st & 1))
+        return st;
+    t -= 0x007C95674BEB4000ULL;          /* 17-NOV-1858 -> 1-JAN-1970, 100 ns */
+    ts->tv_sec = (time_t)(t / 10000000ULL);
+    ts->tv_nsec = (long)(t % 10000000ULL) * 100;
+    return st;
+}
+
+/* dcl_put_sysmsg - report a system-service condition as VMS does: the message
+ * $GETMSG gives for it ("%SYSTEM-F-NOPRIV, insufficient privilege or object
+ * protection violation"). */
+void dcl_put_sysmsg(uint32_t st)
+{
+    char msg[256];
+    uint16_t len = 0;
+    struct dsc$descriptor_s md = { sizeof msg - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, msg };
+
+    if (sys$getmsg(st, &len, &md, MSG$M_ALL, NULL) & 1) {
+        msg[len] = '\0';
+        dcl_err_printf("%s\n", msg);
+    }
+}
 
 /* ================================================================== */
 /*             Per-verb qualifier tables (Phase 1, vms-097)            */
@@ -360,6 +399,7 @@ static const struct dcl_qual_def q_open[] = {
     { "READ",   CDU_VT_NONE, 0, NULL, NULL },
     { "WRITE",  CDU_VT_NONE, 0, NULL, NULL },
     { "APPEND", CDU_VT_NONE, 0, NULL, NULL },
+    { "ERROR",  CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     QUAL_END
 };
 /* SPAWN reads /NOWAIT and /OUTPUT. Declaring "NOWAIT" (not "WAIT" negatable)
@@ -376,9 +416,13 @@ static const struct dcl_qual_def q_spawn[] = {
      * than being rejected by the validator with %DCL-W-IVQUAL. VALREQ: a name
      * is required. Only qualifiers the handler actually honors are declared
      * (honest over-restriction, INV-DCL): the remaining VMS SPAWN qualifiers
-     * (/INPUT, /LOG, /SYMBOLS, /LOGICAL_NAMES, ...) stay %DCL-W-IVQUAL until
+     * (/LOG, /SYMBOLS, /LOGICAL_NAMES, ...) stay %DCL-W-IVQUAL until
      * the handler acts on them, never a fake accept. */
     { "PROCESS", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    /* /INPUT=file names the subprocess's SYS$INPUT (rd vms-691d): cmd_spawn
+     * hands it to lib$spawn, which gives it to $CREPRC (or, after a command
+     * string, feeds its records to the CLI after the command). */
+    { "INPUT",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     QUAL_END
 };
 /* INQUIRE reads /NOPUNCTUATION literally (same NO-undo case as SPAWN's
@@ -435,28 +479,46 @@ static const struct dcl_qual_def q_analyze[] = {
     QUAL_END
 };
 /* LINK (DCL Dictionary: LINK). cmd_link() hands SYS$SYSTEM:LINK.EXE the command
- * tail as typed; LINK.EXE (src/vmslink/vms_cli.c) acts on /EXECUTABLE, /OPTIONS,
- * /LIBRARY, /SHAREABLE (as an options-file or file qualifier), /INFORMATIONALS and
- * the debug/traceback/library-search qualifiers, and refuses with a message the ones
- * it cannot honour (/MAP, /FULL, /CROSS_REFERENCE, /SHAREABLE as an image kind).
- * The table lets DCL accept exactly the qualifiers LINK.EXE then judges; a
- * qualifier outside it draws %DCL-W-IVQUAL here. */
+ * tail through the CLI; LINK.EXE parses it with CLI$DCL_PARSE against its own
+ * LINK command table (src/vmslink/link_cld.h, rd vms-3cb1), acts on what it
+ * honours and refuses the rest with %LINK-F-NOTSUPP. This table carries the same
+ * qualifier set (OpenVMS Linker Utility Manual), so DCL draws %DCL-W-IVQUAL only
+ * for a qualifier LINK does not define. */
 static const struct dcl_qual_def q_link[] = {
     { "EXECUTABLE",       CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
     { "SHAREABLE",        CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "SYSTEM",           CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "SYMBOL_TABLE",     CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "DSF",              CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
     { "MAP",              CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
-    { "FULL",             CDU_VT_NONE,  0,               NULL, NULL },
-    { "CROSS_REFERENCE",  CDU_VT_NONE,  0,               NULL, NULL },
-    { "DEBUG",            CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
-    { "TRACEBACK",        CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
-    { "INFORMATIONALS",   CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "BRIEF",            CDU_VT_NONE,  0,               NULL, NULL },
+    { "FULL",             CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "CROSS_REFERENCE",  CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
     { "OPTIONS",          CDU_VT_NONE,  0,               NULL, NULL },
     { "LIBRARY",          CDU_VT_NONE,  0,               NULL, NULL },
     { "INCLUDE",          CDU_VT_VALUE, CDU_Q_VALREQ,    NULL, NULL },
     { "SELECTIVE_SEARCH", CDU_VT_NONE,  0,               NULL, NULL },
     { "SYSLIB",           CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
     { "SYSSHR",           CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "SYSEXE",           CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
     { "USERLIBRARY",      CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "DEBUG",            CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "TRACEBACK",        CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "INFORMATIONALS",   CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "BPAGE",            CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "CONTIGUOUS",       CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "DEMAND_ZERO",      CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "DNI",              CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "GST",              CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "HEADER",           CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "NATIVE_ONLY",      CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "P0IMAGE",          CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "PROTECT",          CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "REPLACE",          CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "SECTION_BINDING",  CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "THREADS_ENABLE",   CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "ALPHA",            CDU_VT_NONE,  0,               NULL, NULL },
+    { "VAX",              CDU_VT_NONE,  0,               NULL, NULL },
     QUAL_END
 };
 /* PRODUCT (DCL Dictionary: PRODUCT). cmd_product() honours /SOURCE=kit and

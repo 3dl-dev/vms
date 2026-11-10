@@ -391,6 +391,7 @@ static void rab_req(struct rabdef *rab, struct ovmx_rmsabi_rab *io)
     io->usz = rab->rab$w_usz;
     io->rbf_in = rab->rab$l_rbf;
     io->rsz_in = rab->rab$w_rsz;
+    io->rhb = rab->rab$l_rhb;
 }
 
 /* The record the engine returned, addressed in the caller's buffer. */

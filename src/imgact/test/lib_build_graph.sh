@@ -100,5 +100,20 @@ build_producer_graph() {
         "$WORK/LINK.EXE" "$SYSLIB/LIBVMSRMS\$SHR.EXE" \
         "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSFS\$SHR.EXE" "$SYSLIB/LIBVMSSYS\$SHR.EXE" \
         "$VMSRMS_DIR" "$LIBVMS_INC" "$VMSFS_INC"
+
+    # rd vms-569: with a C RTL archive that has the system-call funnel (musl
+    # from src/crtl-musl-x86_64/build-musl.sh -- the QEMU executive harness's),
+    # DECC$SHR is relinked with its C RTL layer over RMS and VMS channels, now
+    # that the LIBVMSRMS$SHR/LIBVMS$SHR it calls exist. Every universal keeps
+    # its index (the pass only appends), so the producers above, bound to the
+    # first DECC$SHR by index, bind to this one unchanged. Stock musl has no
+    # funnel and keeps the first DECC$SHR.
+    if nm --defined-only "$LIBC" 2>/dev/null | awk '{print $NF}' | grep -qxF __ovmx_sys_hook; then
+        echo "== DECC\$SHR.EXE (the RMS-backed pass: C RTL over RMS + VMS channels, vms-569) =="
+        CC="$CC" CRTL_RMS_USE="$SYSLIB/LIBVMSRMS\$SHR.EXE" CRTL_VMS_USE="$SYSLIB/LIBVMS\$SHR.EXE" \
+            CRTL_SYS_USE="$SYSLIB/LIBVMSSYS\$SHR.EXE" \
+            sh "$LINK_DIR/mk_decc_shr.sh" "$WORK/LINK.EXE" "$WORK/DECC\$SHR.pass2.EXE" "$LIBC" "$LIBGCC"
+        mv "$WORK/DECC\$SHR.pass2.EXE" "$SYSLIB/DECC\$SHR.EXE"
+    fi
     echo "-- full six-library producer graph linked VMS-native ($ARCH) --"
 }

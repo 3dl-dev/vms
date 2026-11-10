@@ -1064,6 +1064,156 @@ static void a_signal_ends_the_wait_instead_of_spinning(void)
 	vms_lock_cleanup();
 }
 
+/*
+ * AN INTERRUPTED VOLUME-LOCK WAIT LEAVES NO ORPHAN REQUEST BEHIND (rd vms-b6e).
+ *
+ * WHAT HAPPENED (live VAX bench, vms-0a7 S3). NETACP writes NETACP.LOG through
+ * RMS, and its $SETIMR fires every 5 ms. When FAL or LOGINOUT held the Files-11
+ * volume-sync lock (F11B$s) at the moment NETACP's $PUT needed it, NETACP's
+ * wait was interrupted by its own timer signal. vms_lock_acp_vol_ex re-entered
+ * the $ENQ in a loop, and every pass was a NEW EX request queued behind the
+ * last. The first of them was granted when the holder finished -- to nobody,
+ * because nobody kept its id -- so the volume lock was held for ever, and FAL,
+ * LOGINOUT and NETACP all stopped writing: NETACP.LOG got no more lines, the
+ * BIG COPY ended LINKDISCON, the inbound login hung.
+ *
+ * WHAT THIS PROVES, on the real engine. One interrupted wait, then:
+ *   - vms_lock_acp_vol_ex COMES BACK (it does not wait or spin in the
+ *     executive), says it was interrupted, and hands back no lock;
+ *   - the waiter holds NO lock afterwards -- the request is gone, not queued;
+ *   - once the holder releases, a third writer gets the volume lock AT ONCE:
+ *     no orphan stands in its way.
+ * And the same for a user $ENQW (the ioctl path): its abandoned request goes
+ * too, since KIF_WAIT_CALL's re-entry is a new request.
+ *
+ * Bounded like the vms-f87 test: each wait runs on a thread joined with a
+ * deadline, so the regression is a named failed assertion, not a hang.
+ */
+#define B6E_RES "F11B$sB6EVOLUME   "
+
+struct b6e_call {
+	struct vms_proc *proc;
+	uint32_t         status;
+	uint32_t         lkid;
+	int              intr;
+	int              done;
+};
+
+static void *b6e_vol_thread(void *arg)
+{
+	struct b6e_call *c = arg;
+
+	c->status = vms_lock_acp_vol_ex(c->proc, B6E_RES, &c->lkid, &c->intr);
+	c->done = 1;
+	return NULL;
+}
+
+/* 1 = came back within `secs`. On a miss the holder is released so the thread
+ * can finish; if it still cannot, the suite ends with its verdict (a waiter
+ * left inside the engine would make everything after it meaningless). */
+static int b6e_run(struct b6e_call *c, unsigned int secs,
+		   struct vms_proc *holder, uint32_t *holder_lkid)
+{
+	pthread_t th;
+	struct timespec ts;
+
+	c->done = 0;
+	if (pthread_create(&th, NULL, b6e_vol_thread, c) != 0)
+		return 0;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	ts.tv_sec += (time_t)secs;
+	if (pthread_timedjoin_np(th, NULL, &ts) == 0)
+		return 1;
+	if (holder != NULL && holder_lkid != NULL && *holder_lkid != 0u) {
+		(void)vms_lock_acp_vol_release(holder, *holder_lkid);
+		*holder_lkid = 0u;
+	}
+	clock_gettime(CLOCK_REALTIME, &ts);
+	ts.tv_sec += (time_t)secs;
+	if (pthread_timedjoin_np(th, NULL, &ts) != 0) {
+		printf("  (a volume-lock waiter never came back -- the orphaned "
+		       "request holds the volume; ending the suite)\n");
+		fflush(stdout);
+		_exit(ct_summary("test_lock_host"));
+	}
+	return 0;
+}
+
+static void an_interrupted_volume_lock_wait_leaves_no_orphan(void)
+{
+	struct vms_proc holder, waiter, third, uwaiter;
+	struct b6e_call c;
+	struct intr_call u;
+	uint32_t holder_lkid = 0, uholder_lkid = 0;
+	int hintr = 1;
+
+	if (vms_lock_init() != 0) {
+		ct_check(0, "b6e: vms_lock_init");
+		return;
+	}
+	printf("-- rd vms-b6e: an interrupted F11B$s wait leaves no orphan "
+	       "request holding the volume --\n");
+	proc_init(&holder);
+	proc_init(&waiter);
+	proc_init(&third);
+	proc_init(&uwaiter);
+
+	ct_check(vms_lock_acp_vol_ex(&holder, B6E_RES, &holder_lkid, &hintr) ==
+		 SS__NORMAL && holder_lkid != 0u && hintr == 0,
+		 "a writer (FAL) holds the volume-sync lock");
+
+	memset(&c, 0, sizeof(c));
+	c.proc = &waiter;
+	exec_host_interrupt_waits = 1u;     /* NETACP's timer signal is pending */
+	ct_check(b6e_run(&c, 5u, &holder, &holder_lkid) == 1,
+		 "*** the interrupted volume-lock wait COMES BACK: it neither "
+		 "spins nor re-queues in the executive ***");
+	ct_check_eq_u32(exec_host_interrupt_waits, 0u,
+			"the wait really was entered and interrupted");
+	ct_check_eq_u32((unsigned long)c.intr, 1u,
+			"  and it says so, so the ACP service returns -ERESTARTSYS");
+	ct_check_eq_u32(c.lkid, 0u, "  handing back no lock");
+	ct_check_eq_u32((unsigned long)waiter.lock_count, 0u,
+			"*** the waiter holds NO lock afterwards: its abandoned "
+			"request was $DEQd, not left queued ***");
+
+	if (holder_lkid != 0u) {
+		ct_check(vms_lock_acp_vol_release(&holder, holder_lkid) ==
+			 SS__NORMAL, "the writer finishes and releases");
+		holder_lkid = 0u;
+	}
+
+	memset(&c, 0, sizeof(c));
+	c.proc = &third;
+	ct_check(b6e_run(&c, 5u, NULL, NULL) == 1 && c.status == SS__NORMAL &&
+		 c.lkid != 0u && c.intr == 0,
+		 "*** the NEXT writer (LOGINOUT) gets the volume lock at once: "
+		 "no orphan is holding it ***");
+	if (c.done && c.lkid != 0u)
+		(void)vms_lock_acp_vol_release(&third, c.lkid);
+
+	/* --- the ioctl path: a user $ENQW interrupted, then re-entered --- */
+	ct_check(do_enq(&holder, "B6E_USER", LCK_K_EXMODE, 0, &uholder_lkid) ==
+		 SS__NORMAL && uholder_lkid != 0u,
+		 "a holder takes EX on a user resource");
+	memset(&u, 0, sizeof(u));
+	u.proc = &uwaiter;
+	u.args.lkmode = LCK_K_EXMODE;
+	u.args.flags = LCK_M_SYNC;
+	strscpy(u.args.resnam, "B6E_USER", sizeof(u.args.resnam));
+	exec_host_interrupt_waits = 1u;
+	ct_check(run_with_deadline(&u, 5u, &holder, uholder_lkid) == 1 &&
+		 u.rc == -ERESTARTSYS,
+		 "the interrupted user $ENQW comes back -ERESTARTSYS");
+	ct_check_eq_u32((unsigned long)uwaiter.lock_count, 0u,
+			"*** and leaves no request queued: KIF_WAIT_CALL's "
+			"re-entry is the only one ***");
+	(void)do_deq(&holder, uholder_lkid);
+	exec_host_interrupt_waits = 0u;
+
+	vms_lock_cleanup();
+}
+
 /* ev11 (rd vms-ci.6, 2026-10-09 11:12Z): the lab's OVMX node spun CPU 0 with
  * res->lock held (an RCU stall) the moment a local CONVERT queued behind a
  * remote EX. check_deadlock() walked the blocker's owner -- the cluster
@@ -1277,6 +1427,7 @@ int main(void)
 	dlksrch_both_initiate_aborts_once();
 	the_ev6_queue_shape_does_not_spin();
 	a_signal_ends_the_wait_instead_of_spinning();
+	an_interrupted_volume_lock_wait_leaves_no_orphan();
 	the_ev11_remote_contention_does_not_spin_the_deadlock_search();
 	a_local_down_convert_grants_the_waiter();
 	return ct_summary("test_lock_host");

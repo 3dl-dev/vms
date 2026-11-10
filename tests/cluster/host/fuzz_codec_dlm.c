@@ -10,6 +10,8 @@
  * (vms_cluster_codec_cm.c):
  *     vms_dlm_enq_request_parse_body      (ENQ / CONVERT)
  *     vms_dlm_enq_response_parse_body     (GRANT / DENY, +#1194 grant-valblk)
+ *     vms_dlm_enq_response_build_notqueued (the master's DENY, built FROM the
+ *                                          peer's own body, rd vms-1e58)
  *     vms_dlm_dir_hash_parse_body         (directory hash)
  *     vms_dlm_rebuild_parse_body          (join-time rebuild record)
  *     vms_dlm_deq_parse_body              ($DEQ release)
@@ -120,6 +122,51 @@ static void fuzz_body(body_fn fn, void *ctx, uint8_t op, const char *label)
         free(body);
     }
     ct_check(1, label);
+}
+
+
+/*
+ * rd vms-d63: THE RELEASE THAT CARRIES A VALUE BLOCK, fuzzed deep. A peer's
+ * $DEQ marked 1 at body[30] now hands the master its body[36:52]; a frame of
+ * any length and content must never over-read, and the block may come back
+ * ONLY when the frame was marked and long enough to hold it -- never on an
+ * unmarked frame, whose body[36:52] is a stale buffer.
+ */
+static void fuzz_d63_deq_valblk(void)
+{
+    uint8_t scratch[224];
+    int bad = 0;
+
+    for (int i = 0; i < ITERS; i++) {
+        uint32_t n = rand_len(160);
+        struct vms_dlm_deq d;
+        int marked;
+
+        fill_random(scratch, n < sizeof scratch ? n : sizeof scratch);
+        if (n > sizeof scratch) n = sizeof scratch;
+        if (n > DLM_OP_BODY_OFF)
+            scratch[DLM_OP_BODY_OFF] = VMS_DLM_WIREOP_DEQ;
+        if (n > 30u && (rand() & 1))
+            scratch[30] = 1u;                 /* the write mark, half the time */
+        marked = n > 30u && scratch[30] == 1u;
+        uint8_t *body = exact(scratch, n);
+        memset(&d, 0x5a, sizeof d);
+        if (vms_dlm_deq_parse_body(body, n, &d) == VMS_CODEC_OK) {
+            if (marked) {
+                if (n < 52u || d.write_valblk != 1u ||
+                    memcmp(d.valblk, body + 36, 16) != 0)
+                    bad++;
+            } else {
+                static const uint8_t zero[16];
+                if (d.write_valblk != 0u || memcmp(d.valblk, zero, 16) != 0)
+                    bad++;
+            }
+        }
+        free(body);
+    }
+    ct_check(bad == 0, "deq_parse_body (rd vms-d63): 100k with the write mark planted -- "
+                       "a block only from a marked frame long enough to hold it, "
+                       "never from an unmarked one; no over-read/crash");
 }
 
 /* Per-decoder thunks (uniform (body,len,ctx) shape). */
@@ -436,6 +483,49 @@ static void fuzz_dir_reg(void)
     ct_check(outside == 0, "dir_reg_parse_body: every accepted name lies inside its body");
 }
 
+/*
+ * rd vms-1e58 C4: THE MASTER'S DENY IS BUILT FROM THE PEER'S OWN BYTES.
+ * vms_dlm_enq_response_build_notqueued() echoes the received request body
+ * into the answer, so a hostile or truncated body reaches it straight off the
+ * wire (dlm_arm_reply_deny passes in->body, in->len). Drive it with the cat
+ * and op gates cleared most of the time, and check the one property the arm
+ * relies on: it either refuses or writes exactly one CM frame, and on success
+ * the frame really is the NOTQUEUED shape.
+ */
+static void fuzz_notqueued_answer(void)
+{
+    uint8_t scratch[224];
+    uint8_t ans[VMS_CM_FRAME_LEN + 16];
+    int built = 0, shape_ok = 1;
+
+    for (int i = 0; i < ITERS; i++) {
+        uint32_t n = rand_len(160), written = 0;
+        fill_random(scratch, n < sizeof scratch ? n : sizeof scratch);
+        if (n > sizeof scratch) n = sizeof scratch;
+        if ((rand() & 3) && n > DLM_OP_BODY_OFF) {
+            scratch[DLM_OP_BODY_OFF - 1u] = VMS_DLM_CAT_REQUEST;
+            scratch[DLM_OP_BODY_OFF] = VMS_DLM_WIREOP_ENQ;
+            if ((rand() & 1) && n >= 44u)      /* a ROOT request, often */
+                memset(scratch + 36, 0, 8);
+        }
+        uint8_t *body = exact(scratch, n);
+        if (vms_dlm_enq_response_build_notqueued(body, n, ans, VMS_CM_FRAME_LEN,
+                                                 &written) == VMS_CODEC_OK) {
+            const uint8_t *ab = ans + VMS_OFF_SYSAP_BODY;
+            built++;
+            if (written != VMS_CM_FRAME_LEN || ab[8] != 0x82u ||
+                ab[34] != VMS_DLM_REPLY_NOTQUEUED ||
+                ab[32] != 0xb8u || ab[33] != 0x09u)
+                shape_ok = 0;
+        }
+        free(body);                                   /* ASan is the assertion */
+    }
+    ct_check(built > 0, "enq_response_build_notqueued: the fuzz reached the "
+             "build (the gates were cleared)");
+    ct_check(shape_ok, "enq_response_build_notqueued: 100k peer bodies, no "
+             "over-read/crash, and every answer it built is the NOTQUEUED shape");
+}
+
 int main(void)
 {
     struct vms_dlm_enq_request req;
@@ -483,5 +573,12 @@ int main(void)
     fuzz_rb_queue_cells();
     fuzz_frame();
 
+    /* Last, so the shared rand() sequence every earlier fuzz was tuned on
+     * (their REACHED floors) is not shifted. */
+    fuzz_d63_deq_valblk();
+    /* rd vms-1e58: LAST, so the fixed-seed stream every fuzzer above draws
+     * from is exactly what it was (fuzz_rb_rec's reachability depends on it,
+     * rd vms-1e58 follow-up). */
+    fuzz_notqueued_answer();
     return ct_summary("fuzz_codec_dlm");
 }

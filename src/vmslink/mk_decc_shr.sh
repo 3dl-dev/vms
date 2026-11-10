@@ -224,14 +224,13 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # -O2 (vms-e839): at -O0 the port compiler leaves a varargs function's
     # second named argument in the stack word OTS$HOME_ARGS writes the argument
     # count to, so decc$$execl32 & co. would read their arg0 as the count.
-    # vms-1f8: the created task is made a subprocess by the EXECUTIVE before it
-    # runs (KIF_SVC_CREPRC_PCB), reached through libvmssys's transport seam --
-    # kif_transport_linux.c over the EVAX-native callsys trampolines
-    # (arch/alpha/syscall_vms.c), the same two TUs LIBVMSSYS$SHR builds for
-    # alpha. They define no decc$ universal, so the vector is unchanged.
+    # vms-e70f: exec*() creates the subprocess through SYS$CREPRC (crtl_exec.c,
+    # the RMS-backed pass below, bound weak here); this TU no longer reaches the
+    # executive itself.
     LIBVMSSYS_DIR_VF="$(CDPATH= cd "$(dirname "$0")/../libvmssys" && pwd)"
+    # shellcheck disable=SC2086
     "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
-        $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -I"$LIBVMSSYS_DIR_VF" -o "$ALPHA_VFORK_OBJ" \
+        $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -o "$ALPHA_VFORK_OBJ" \
         "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_vfork.c"
     # vms-bc53: the C RTL heap's address space -- mallocng's glue (musl-arch
     # src/malloc/mallocng/glue.h) calls ovmx$vm_expreg/ovmx$vm_deltva, which ask
@@ -338,7 +337,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         # shellcheck disable=SC2086
         # -O2: decc$fgetname is varargs with two named arguments (vms-e839).
         "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
-            -I"$RMS_SRC_DIR" -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
+            -I"$RMS_SRC_DIR" -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" -I"$IMGACT_INC" $ALPHA_MUSL_INC \
             -o "$FD_OBJ" "$RMS_SRC_DIR/crtl_rms_fd.c"
         "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_fd_main \
             || { echo "mk_decc_shr: FAIL crtl_rms_fd.c did not define ovmx_crtl_fd_main" >&2; exit 2; }
@@ -373,6 +372,41 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         "$NM" --defined-only "$TIME_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_time_install \
             || { echo "mk_decc_shr: FAIL crtl_time.c did not define ovmx_crtl_time_install" >&2; exit 2; }
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $TIME_OBJ"
+        # vms-931: the C RTL's signals (src/vmsrms/crtl_signal.c), turned on by
+        # the same install: musl's signal/sigaction/sigprocmask/raise/kill/alarm/
+        # setitimer/pause system calls are served by LIB$SIGNAL + the secondary
+        # exception vector, $SETIMR/$CANTIM ASTs, $HIBER/$WAKE and $FORCEX/
+        # $DELPRC/$SUSPND/$RESUME/$GETJPIW on a VMS PID (LIBVMS$SHR, --use
+        # ALPHA_CRTL_VMS_USE), never rt_sig*/kill/setitimer. No universal of its own.
+        SIG_OBJ="$VENEER_DIR/crtl_signal.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            $ALPHA_MUSL_INC -o "$SIG_OBJ" "$RMS_SRC_DIR/crtl_signal.c"
+        "$NM" --defined-only "$SIG_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_signal_hook \
+            || { echo "mk_decc_shr: FAIL crtl_signal.c did not define ovmx_crtl_signal_hook" >&2; exit 2; }
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $SIG_OBJ"
+        # vms-a66e: the C RTL's terminal and mailbox descriptors (crtl_devfd.c):
+        # stdin/stdout/stderr on a terminal are $QIO on a channel to it, pipe()
+        # is a mailbox pair; the hook above offers every call to it first. Its
+        # system services ($ASSIGN/$QIOW/$CREMBX/$GETDVI/$TRNLNM) are LIBVMS$SHR's
+        # (--use ALPHA_CRTL_VMS_USE below).
+        DEVFD_OBJ="$VENEER_DIR/crtl_devfd.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            -I"$RMS_SRC_DIR" -I"$RMS_INC" $ALPHA_MUSL_INC \
+            -o "$DEVFD_OBJ" "$RMS_SRC_DIR/crtl_devfd.c"
+        for _df in ovmx_crtl_devfd_call ovmx_crtl_devfd_bind_stdio ovmx_crtl_devfd_rundown; do
+            "$NM" --defined-only "$DEVFD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF "$_df" \
+                || { echo "mk_decc_shr: FAIL crtl_devfd.c did not define $_df" >&2; exit 2; }
+        done
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $DEVFD_OBJ"
+        # DEC C getname(): a descriptor's file or device name; new, so at the tail.
+        "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_getname \
+            || { echo "mk_decc_shr: FAIL crtl_rms_fd.c did not define ovmx_crtl_getname" >&2; exit 2; }
+        case ",$VEC,${PASS2_TAIL:-}," in
+            *',decc$getname'[=/]*) echo "mk_decc_shr: FAIL decc\$getname is already in the vector" >&2; exit 2;;
+        esac
+        echo "mk_decc_shr: C RTL terminals and pipes over VMS channels wired (vms-a66e): crtl_devfd.c"
         # vms-4ba3: DEC C fgetname, from the same layer (an RMS stream's
         # resultant spec); new to this pass, so it goes at the vector tail.
         "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF 'decc$fgetname' \
@@ -467,6 +501,42 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
             *',decc$__posix_exit'[=/]*) echo "mk_decc_shr: FAIL decc\$__posix_exit is already in the vector" >&2; exit 2;;
         esac
         PASS2_TAIL="${PASS2_TAIL:-},decc\$__posix_exit/ovmx_crtl_posix_exit=PROCEDURE"
+        # vms-e70f: the DEC C subprocess functions over the executive
+        # (src/vmsrms/crtl_exec.c): exec*() in a vfork context creates the
+        # subprocess with SYS$CREPRC (ovmx_decc_vfork.c calls it weak), wait() and
+        # waitpid() collect its completion from the executive, getpid() is the VMS
+        # PID. decc$wait/decc$waitpid/decc$getpid are rebound IN PLACE (vms-b14);
+        # decc$__vms_waitpid (_VMS_WAIT: the completion code itself) is new at the
+        # tail. The completion notification and termination record are
+        # LIBVMSSYS$SHR's (vms_kif_spawn_notify/getexit_pid, as LIB$SPAWN/NOWAIT
+        # uses them), so this pass also links --use ALPHA_CRTL_SYS_USE.
+        [ -n "${ALPHA_CRTL_SYS_USE:-}" ] && [ -f "$ALPHA_CRTL_SYS_USE" ] \
+            || { echo "mk_decc_shr: FAIL ALPHA_CRTL_SYS_USE (LIBVMSSYS\$SHR, for the subprocess completion) not given or not found" >&2; exit 2; }
+        EXEC_OBJ="$VENEER_DIR/crtl_exec.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            -I"$RMS_INC" -I"$RMS_SRC_DIR" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
+            -o "$EXEC_OBJ" "$RMS_SRC_DIR/crtl_exec.c"
+        for _ex in ovmx_crtl_exec_create ovmx_crtl_exec_replace ovmx_crtl_wait ovmx_crtl_waitpid ovmx_crtl_vms_waitpid ovmx_crtl_getpid ovmx_crtl_exec_context; do
+            "$NM" --defined-only "$EXEC_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF "$_ex" \
+                || { echo "mk_decc_shr: FAIL crtl_exec.c did not define $_ex" >&2; exit 2; }
+        done
+        for _pair in wait:ovmx_crtl_wait waitpid:ovmx_crtl_waitpid getpid:ovmx_crtl_getpid; do
+            _n=${_pair%%:*}; _f=${_pair#*:}
+            case ",$VEC," in
+                *",decc\$$_n=PROCEDURE,"*) ;;
+                *) echo "mk_decc_shr: FAIL decc\$$_n is not a PROCEDURE universal to rebind" >&2; exit 2;;
+            esac
+            VEC=$(printf '%s' ",$VEC," | sed "s/,decc\\\$$_n=PROCEDURE,/,decc\$$_n\/$_f=PROCEDURE,/; s/^,//; s/,\$//")
+        done
+        case ",$VEC,${PASS2_TAIL:-}," in
+            *',decc$__vms_waitpid'[=/]*) echo "mk_decc_shr: FAIL decc\$__vms_waitpid is already in the vector" >&2; exit 2;;
+        esac
+        PASS2_TAIL="${PASS2_TAIL:-},decc\$__vms_waitpid/ovmx_crtl_vms_waitpid=PROCEDURE"
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $EXEC_OBJ"
+        echo "mk_decc_shr: DEC C subprocess functions wired (vms-e70f): exec*() -> SYS\$CREPRC, decc\$wait/waitpid/__vms_waitpid -> the executive's completion, decc\$getpid -> the VMS PID (--use $ALPHA_CRTL_SYS_USE)"
+        # vms-a66e: DEC C getname() (crtl_rms_fd.c), after every earlier tail entry.
+        PASS2_TAIL="${PASS2_TAIL:-},decc\$getname/ovmx_crtl_getname=PROCEDURE"
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $SYS_OBJ"
         echo "mk_decc_shr: DEC C system() wired (vms-65a): decc\$system -> ovmx_crtl_system (LIB\$SPAWN, --use $ALPHA_CRTL_VMS_USE); exit/__posix_exit record \$STATUS (vms-599)"
     fi
@@ -589,6 +659,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # this must name an ALREADY-BUILT LIBVMSRMS$SHR.EXE.
     [ -n "${ALPHA_CRTL_RMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_RMS_USE"
     [ -n "${ALPHA_CRTL_VMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_VMS_USE"
+    [ -n "${ALPHA_CRTL_SYS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_SYS_USE"
     [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
     # shellcheck disable=SC2086
     "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" "$ALPHA_VM_OBJ" "$ALPHA_KIFX_OBJ" "$ALPHA_KIFS_OBJ" "$ALPHA_STAT_OBJ" ${ALPHA_VENEER_OBJ:-}
@@ -1169,6 +1240,78 @@ VEC="$VEC,C\$_EXIT1=GLOBALVALUE:0x0035A009"
 # (vms-dfb, ROUTE-THROUGH): this rung provides the linkable CRTL surface; R2
 # upgrades the file semantics. Append-only -> prior consumers' vector indices are
 # unchanged (GSMATCH LEQUAL-compatible).
+# ---- vms-99f: the C RTL sockets are $QIO on the EXECUTIVE's BGn: channels -----
+# musl's socket()/connect()/send()/recv()/select()/poll()/getaddrinfo()... are raw
+# Linux socket system calls (and musl's resolver sends DNS over Linux UDP).
+# Exported as they were, a VMS-linked program's socket() did host-side Linux
+# networking dressed up as VMS. Every socket/resolver universal DECC$SHR exports
+# is therefore bound to src/vmstcpip/sockets/ovmx_decc_sockets.c, where a socket
+# is a BGn: channel and every operation a $QIO function on it (the function map
+# shared with sys$qio, src/libvms/include/bg_qio_func.h). The descriptor calls a
+# program also makes on a socket -- read/write/readv/writev/close/dup/dup2/fcntl/
+# ioctl/poll/select -- are bound there too: on a socket descriptor they are
+# IO$_READVBLK / IO$_WRITEVBLK / $DASSGN / the IO$_SENSEMODE readiness wait, and
+# on any other descriptor they call musl's own entry point unchanged. No exported
+# entry reaches a Linux socket or a Linux descriptor's I/O for a socket; without
+# /dev/vms socket() fails ENODEV. Design: docs/design-bgsockets-veneer-ovmx.md s8.
+#
+# Existing universals keep their sv# and are rebound IN PLACE (the plain names in
+# DECC_SOCK_PLAIN_REBIND and the decc$ map entries in DECC_SOCK_REBIND); entries
+# no vector had yet are APPENDED at the very end (DECC_SOCK_TAIL).
+# Left on musl ON PURPOSE, each with its reason:
+#   socketpair -- an AF_UNIX pair inside the process (local IPC, no network).
+#   inet_*/hton*/ntoh*/gai_strerror/herror/hstrerror -- pure conversions.
+#   getprotoby*/getprotoent -- musl's static table; getnetby*, gethostent,
+#     getservent & the set/end*ent calls -- musl stubs that touch nothing.
+#   gethostname -- uname(2), the node's own name; no network.
+SOCK_SRC_DIR="$(CDPATH= cd "$(dirname "$0")/../vmstcpip/sockets" && pwd)"
+SOCK_KIF_DIR="$(CDPATH= cd "$(dirname "$0")/../libvmssys" && pwd)"
+SOCK_VMS_INC="$(CDPATH= cd "$(dirname "$0")/../libvms/include" && pwd)"
+SOCK_OBJ_DIR=$(mktemp -d)
+for _s in ovmx_decc_sockets; do
+    "${CC:-cc}" -c -fPIC -ffreestanding -U_FORTIFY_SOURCE -fno-stack-protector \
+        -I"$SOCK_SRC_DIR" -I"$SOCK_KIF_DIR" -I"$SOCK_VMS_INC" \
+        -o "$SOCK_OBJ_DIR/$_s.o" "$SOCK_SRC_DIR/$_s.c"
+done
+# The executive is reached ONLY through libvmssys's transport seam (rd vms-bbde):
+# kif_transport_linux.c + its raw system-call stubs, as LIBVMSSYS$SHR builds them
+# (the alpha branch above links the same seam for vfork's PCB request).
+case "$("${CC:-cc}" -dumpmachine 2>/dev/null)" in
+    x86_64*)  SOCK_ARCH=x86_64;  SOCK_ARCHFLAG="" ;;
+    aarch64*) SOCK_ARCH=aarch64; SOCK_ARCHFLAG="-mno-outline-atomics" ;;
+    *) echo "mk_decc_shr: FAIL no libvmssys transport for $("${CC:-cc}" -dumpmachine) (vms-99f)" >&2; exit 2 ;;
+esac
+# shellcheck disable=SC2086
+"${CC:-cc}" -c -fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -U_FORTIFY_SOURCE $SOCK_ARCHFLAG \
+    -I"$SOCK_KIF_DIR" -o "$SOCK_OBJ_DIR/kif_transport_linux.o" "$SOCK_KIF_DIR/kif_transport_linux.c"
+"${CC:-cc}" -c -fPIC -o "$SOCK_OBJ_DIR/vms_syscall_stubs.o" "$SOCK_KIF_DIR/arch/$SOCK_ARCH/syscall.S"
+SOCK_OBJS="$SOCK_OBJ_DIR/ovmx_decc_sockets.o $SOCK_OBJ_DIR/kif_transport_linux.o $SOCK_OBJ_DIR/vms_syscall_stubs.o"
+DECC_SOCK_REBIND="socket listen send recv setsockopt getsockopt shutdown close getaddrinfo freeaddrinfo getnameinfo getservbyname getservbyport if_nametoindex if_indextoname if_nameindex read write writev dup dup2 fcntl ioctl poll select"
+DECC_SOCK_PLAIN_REBIND="socket close read write writev dup dup2 fcntl ioctl poll"
+for _n in $DECC_SOCK_PLAIN_REBIND; do
+    case ",$VEC," in
+        *",$_n=PROCEDURE,"*) VEC=$(printf '%s' ",$VEC," | sed "s/,$_n=PROCEDURE,/,$_n\/ovmx_decc_$_n=PROCEDURE,/; s/^,//; s/,\$//") ;;
+        *) echo "mk_decc_shr: FAIL plain $_n is not a PROCEDURE universal to rebind (vms-99f)" >&2; exit 2 ;;
+    esac
+done
+# New at the tail: the plain names a tcc/cc-built VMS program references, and the
+# decc$ names decc_crtl_map.txt does not carry.
+DECC_SOCK_TAIL=""
+for _n in connect bind listen accept accept4 send recv sendto recvfrom sendmsg recvmsg \
+          setsockopt getsockopt getsockname getpeername shutdown \
+          getaddrinfo freeaddrinfo getnameinfo gethostbyname gethostbyaddr \
+          getservbyname getservbyport if_nametoindex if_indextoname select readv; do
+    DECC_SOCK_TAIL="$DECC_SOCK_TAIL,$_n/ovmx_decc_$_n=PROCEDURE"
+done
+for _n in connect bind accept sendto recvfrom sendmsg recvmsg getsockname getpeername \
+          gethostbyname gethostbyaddr readv; do
+    DECC_SOCK_TAIL="$DECC_SOCK_TAIL,decc\$$_n/ovmx_decc_$_n=PROCEDURE"
+done
+# Pure musl conversions a sockets program also needs under its plain name.
+for _n in htons ntohs htonl inet_addr inet_aton inet_ntoa gai_strerror; do
+    DECC_SOCK_TAIL="$DECC_SOCK_TAIL,$_n=PROCEDURE"
+done
+
 DECC_MAP="$(CDPATH= cd "$(dirname "$0")" && pwd)/decc_crtl_map.txt"
 if [ -f "$DECC_MAP" ]; then
     LIBC_DEFS="$(mktemp)"
@@ -1176,11 +1319,17 @@ if [ -f "$DECC_MAP" ]; then
     # --defined-only` prints member-header lines (NF==1, "member.o:") we drop and
     # symbol lines "<addr> <type> <name>" whose $NF is the name.
     nm --defined-only "$LIBC" 2>/dev/null | awk 'NF>=2{print $NF}' | sort -u > "$LIBC_DEFS"
-    n_add=0; n_skip=0
+    n_add=0; n_skip=0; n_sock=0
     while read -r nm_name; do
         case "$nm_name" in ''|\#*) continue;; esac
         if grep -qxF "$nm_name" "$LIBC_DEFS"; then
-            VEC="$VEC,decc\$$nm_name/$nm_name=PROCEDURE"
+            # vms-99f: a socket/resolver entry keeps its place in the vector (same
+            # sv#) but is bound to the executive-BGn: C RTL sockets, never musl's
+            # Linux-socket implementation. See the SOCKETS block below.
+            case " $DECC_SOCK_REBIND " in
+                *" $nm_name "*) VEC="$VEC,decc\$$nm_name/ovmx_decc_$nm_name=PROCEDURE"; n_sock=$((n_sock + 1)) ;;
+                *)              VEC="$VEC,decc\$$nm_name/$nm_name=PROCEDURE" ;;
+            esac
             n_add=$((n_add + 1))
         else
             n_skip=$((n_skip + 1))
@@ -1188,6 +1337,10 @@ if [ -f "$DECC_MAP" ]; then
     done < "$DECC_MAP"
     rm -f "$LIBC_DEFS"
     echo "mk_decc_shr: decc\$ CRTL alias vector: exported $n_add, skipped $n_skip (musl-undefined — gap for a later rung, not faked)"
+    # Every name in the rebind list is a musl-defined map entry; one that did not
+    # rebind would be left on musl (or missing), so the count is checked.
+    _want=$(echo $DECC_SOCK_REBIND | wc -w)
+    [ "$n_sock" -eq "$_want" ] || { echo "mk_decc_shr: FAIL only $n_sock of $_want decc\$ socket entries rebound to the BGn: C RTL sockets (vms-99f)" >&2; exit 2; }
 fi
 
 # waitid (vms-707) APPENDED at the very end of the vector -> no prior universal's
@@ -1207,8 +1360,10 @@ VEC="$VEC,waitid=PROCEDURE"
 VEC="$VEC,mlock=PROCEDURE,munlock=PROCEDURE,getrandom=PROCEDURE"
 # vms-db7: the DEC C feature-switch API and reentrancy level (src/vmsrms/crtl_features.c),
 # so a VMS C program that sets its switches (the ipc_benchmark corpus' LIB$INITIALIZE
-# routine) links and runs unchanged. Built -DOVMX_CRTL_NO_RMS_VENEER: this C RTL does
-# not open files through RMS, so it honours no feature and every name is -1/EINVAL.
+# routine) links and runs unchanged. Built -DOVMX_CRTL_NO_RMS_VENEER: every name is
+# -1/EINVAL. The bootstrap pass opens no file through RMS, so it has no feature to
+# honour; the RMS-backed pass below (vms-569) does, and does not honour them yet
+# (the Alpha DECC$SHR builds this file without the macro).
 # Appended at the end of the vector (append-only).
 FEAT_SRC="$(CDPATH= cd "$(dirname "$0")/../vmsrms" && pwd)/crtl_features.c"
 FEAT_INC="$(CDPATH= cd "$(dirname "$0")/../vmsrms/include" && pwd)"
@@ -1218,13 +1373,81 @@ for pair in get_index get_name get_value set_value; do
     VEC="$VEC,decc\$feature_$pair/ovmx_crtl_feature_$pair=PROCEDURE"
 done
 VEC="$VEC,decc\$set_reentrancy/ovmx_crtl_set_reentrancy=PROCEDURE,decc\$get_reentrancy/ovmx_crtl_get_reentrancy=PROCEDURE"
+# vms-99f: the sockets universals new to the vector (see the SOCKETS block).
+for _u in $(printf '%s' "$DECC_SOCK_TAIL" | tr ',' ' '); do
+    case ",$VEC," in *",${_u%%[/=]*}="*|*",${_u%%[/=]*}/"*)
+        echo "mk_decc_shr: FAIL ${_u%%[/=]*} is already a universal; the sockets tail would duplicate it (vms-99f)" >&2; exit 2;;
+    esac
+done
+VEC="$VEC$DECC_SOCK_TAIL"
+
+# ----------------------------------------------------------------------
+# THE RMS-BACKED PASS (rd vms-569), the x86_64 counterpart of the Alpha pass
+# above. Opt-in via CRTL_RMS_USE=<an ALREADY-BUILT LIBVMSRMS$SHR.EXE>,
+# CRTL_VMS_USE=<its LIBVMS$SHR.EXE> and CRTL_SYS_USE=<its LIBVMSSYS$SHR.EXE>,
+# from a prior bootstrap pass (this script without them) -- the same two-stage bootstrap of the mutual DECC$SHR <->
+# LIBVMS*$SHR dependency, and the same rule: every universal keeps its
+# symbol-vector index (IMGACT binds by index, vms-b14), so this pass only ADDS
+# names at the very end.
+#
+# The C RTL layer is the SAME source the Alpha DECC$SHR and the x86_64 static
+# images link: crtl_rms_fd.c (files over RMS; its hook offered every musl
+# system call by the funnel src/crtl-musl-x86_64/src/internal/ovmx_syscall.c),
+# crtl_devfd.c (terminals and pipes over VMS channels), crtl_time.c (the clock
+# and time zone) and crtl_signal.c (signals over conditions, ASTs and process
+# services), with crtl_filespec.c (the DEC C file-spec translation they use).
+# The one difference is how it is turned on: Alpha rebinds decc$main; LINK.EXE's
+# x86_64 crt0 calls main() directly, so the layer's ovmx_crtl_fd_install is a
+# universal of its own, which the image activator calls once the main image is
+# bound, before main() (src/imgact/imgact.c, crtl_image_init).
+#
+# Needs a C RTL archive with the funnel: musl from src/crtl-musl-x86_64/
+# build-musl.sh. Stock musl has no place for the hook, so asking for this pass
+# on one is refused rather than linked into a DECC$SHR whose layer is dead code.
+if [ -n "${CRTL_RMS_USE:-}" ]; then
+    for _u in "$CRTL_RMS_USE" "${CRTL_VMS_USE:-}" "${CRTL_SYS_USE:-}"; do
+        [ -n "$_u" ] && [ -f "$_u" ] || { echo "mk_decc_shr: FAIL the RMS-backed pass needs CRTL_RMS_USE (LIBVMSRMS\$SHR), CRTL_VMS_USE (LIBVMS\$SHR) and CRTL_SYS_USE (LIBVMSSYS\$SHR); got '$_u'" >&2; exit 2; }
+    done
+    nm --defined-only "$LIBC" 2>/dev/null | awk '{print $NF}' | grep -qxF __ovmx_sys_hook \
+        || { echo "mk_decc_shr: FAIL $LIBC has no system-call funnel (__ovmx_sys_hook): the C RTL layer would never be reached -- build musl with src/crtl-musl-x86_64/build-musl.sh" >&2; exit 2; }
+    RMS_SRC_DIR="$(CDPATH= cd "$(dirname "$0")/../vmsrms" && pwd)"
+    CRTLFD_DIR=$(mktemp -d)
+    CRTLFD_OBJS=""
+    for _src in crtl_rms_fd crtl_devfd crtl_time crtl_signal crtl_filespec; do
+        "${CC:-cc}" -c -O2 -fPIC -ffreestanding -fno-stack-protector -U_FORTIFY_SOURCE -w \
+            -DOVMX_CRTLFD_GENERIC_SHR \
+            -I"$RMS_SRC_DIR" -I"$RMS_SRC_DIR/include" \
+            -I"$(CDPATH= cd "$(dirname "$0")/../libvms/include" && pwd)" \
+            -I"$(CDPATH= cd "$(dirname "$0")/../crtl-musl-x86_64/include" && pwd)" \
+            -o "$CRTLFD_DIR/$_src.o" "$RMS_SRC_DIR/$_src.c"
+        CRTLFD_OBJS="$CRTLFD_OBJS $CRTLFD_DIR/$_src.o"
+    done
+    for _want in crtl_rms_fd:ovmx_crtl_fd_install crtl_rms_fd:ovmx_crtl_getname \
+                 crtl_devfd:ovmx_crtl_devfd_bind_stdio crtl_time:ovmx_crtl_time_install \
+                 crtl_signal:ovmx_crtl_signal_hook; do
+        nm --defined-only "$CRTLFD_DIR/${_want%%:*}.o" 2>/dev/null | awk '{print $NF}' | grep -qxF "${_want#*:}" \
+            || { echo "mk_decc_shr: FAIL ${_want%%:*}.c did not define ${_want#*:}" >&2; exit 2; }
+    done
+    case ",$VEC," in
+        *',ovmx_crtl_fd_install'[=/]*|*',decc$getname'[=/]*) echo "mk_decc_shr: FAIL the RMS-backed pass's names are already in the vector" >&2; exit 2;;
+    esac
+    # Appended at the very end: the image activator's C RTL start, and DEC C getname().
+    VEC="$VEC,ovmx_crtl_fd_install=PROCEDURE,decc\$getname/ovmx_crtl_getname=PROCEDURE"
+    # LIBVMSSYS$SHR: fork() makes its child a subprocess through the executive's
+    # creation record (crtl_rms_fd.c crtl_fork: vms_kif_creprc_sync/_pcb).
+    CRTLFD_USE="--use $CRTL_RMS_USE --use $CRTL_VMS_USE --use $CRTL_SYS_USE"
+    echo "mk_decc_shr: C RTL layer wired (vms-569): files over RMS, terminals and pipes over VMS channels, the system clock, signals over VMS -- ovmx_crtl_fd_install is the image activator's C RTL start, fork() makes a subprocess ($CRTLFD_USE)"
+fi
 
 # Whole-archive, strict (NO --allow-undefined): a complete C-RTL shareable must
 # link with zero deferred externals. libc.a first so its strong defs win; the
 # loader-glue object last (it only REFERENCES __libc, which libc.a defines).
+# shellcheck disable=SC2086
 "$LINK_EXE" --shareable \
     --symbol-vector "$VEC" \
-    --gsmatch "$GSMATCH" \
-    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ" "$CRTL_OBJ" "$FEAT_OBJ"
+    --gsmatch "$GSMATCH" ${CRTLFD_USE:-} \
+    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ" "$CRTL_OBJ" "$FEAT_OBJ" $SOCK_OBJS ${CRTLFD_OBJS:-}
+rm -rf "$SOCK_OBJ_DIR"
+if [ -n "${CRTLFD_DIR:-}" ]; then rm -rf "$CRTLFD_DIR"; fi
 
 echo "mk_decc_shr: created $OUT"

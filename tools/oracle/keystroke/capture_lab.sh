@@ -28,8 +28,8 @@ NS="${OVMX_LAB_NS:-ovmx-lab}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 case "$ARCH" in
-  vax)   NODE=vax1;   TAG=vax73;   LOG="/lab/k8s-labs/$POD/logs/vax1.log";        LABEL="OpenVMS VAX V7.3 OPA0:"; PW="${PW:-system}" ;;
-  alpha) NODE=alpha1; TAG=alpha84; LOG="/lab/k8s-labs/$POD/alpha1/logs/alpha1.log"; LABEL="OpenVMS Alpha V8.4 OPA0:"; PW="${PW:-ovmxlab2026}" ;;
+  vax)   NODE=vax1;   TAG=vax73;   LOG="/lab/k8s-labs/$POD/logs/vax1.log";        LABEL="OpenVMS VAX V7.3 OPA0:"; PW="${PW:-${LAB_PW:?set LAB_PW (vms-aa2)}}" ;;
+  alpha) NODE=alpha1; TAG=alpha84; LOG="/lab/k8s-labs/$POD/alpha1/logs/alpha1.log"; LABEL="OpenVMS Alpha V8.4 OPA0:"; PW="${PW:-${LAB_PW:?set LAB_PW (vms-aa2)}}" ;;
   *) echo "arch must be vax|alpha" >&2; exit 2 ;;
 esac
 kx() { kubectl -n "$NS" exec "$POD" -- sh -c "$1"; }

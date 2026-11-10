@@ -145,6 +145,9 @@ extern const uint8_t DNET_ROUTER_HELLO_MCAST[DNET_ADDR_LEN];
 #define DNET_ENGINE_OK        0
 #define DNET_ENGINE_EINVAL  (-1)   /* null / out-of-range argument */
 #define DNET_ENGINE_ENOSPACE (-2)  /* output buffer too small */
+#define DNET_ENGINE_QUEUED    1    /* link_send: held by the peer's flow control;
+                                    * no frame now (dnet_engine_link_poll sends it) */
+#define DNET_ENGINE_EAGAIN  (-3)   /* link_send: transmit queue full, nothing taken */
 
 /*
  * The live routing endnode. Pure state: no socket, no fd, no thread. The
@@ -411,10 +414,22 @@ int dnet_engine_link_accept_data(struct dnet_engine *e, uint16_t local_lla,
                                  uint8_t *frame_out, size_t cap, size_t *len_out,
                                  dnet_tick_t now);
 
-/* Send a data segment on the running link: builds the data frame. */
+/* Send a data segment on the running link. DNET_ENGINE_OK: the data frame is
+ * in frame_out, transmit it. DNET_ENGINE_QUEUED: taken, but the peer's flow
+ * control holds it (no frame; dnet_engine_link_poll sends it later).
+ * DNET_ENGINE_EAGAIN: the link's transmit queue is full, nothing taken --
+ * keep the message and offer it again (rd vms-985). */
 int dnet_engine_link_send(struct dnet_engine *e, const uint8_t *data, size_t len,
                           uint8_t *frame_out, size_t cap, size_t *len_out,
                           dnet_tick_t now);
+
+/* Close the link normally (rd vms-985, dnet_link_close): DNET_ENGINE_OK with
+ * the Disconnect Initiate frame when nothing is outstanding; DNET_ENGINE_QUEUED
+ * when queued data must drain first -- dnet_engine_link_poll then emits the DI
+ * after the last acknowledgement. */
+int dnet_engine_link_close_normal(struct dnet_engine *e, uint16_t reason,
+                                  uint8_t *frame_out, size_t cap, size_t *len_out,
+                                  dnet_tick_t now);
 
 /* Disconnect the link: builds the Disconnect Initiate data frame. */
 int dnet_engine_link_close(struct dnet_engine *e, uint16_t reason,
@@ -441,6 +456,18 @@ int dnet_engine_link_service(struct dnet_engine *e,
 int dnet_engine_link_tick(struct dnet_engine *e, dnet_tick_t now,
                           uint8_t *frame_out, size_t cap, size_t *len_out,
                           int *has_out);
+
+/*
+ * dnet_engine_link_poll - the next frame the RUN link owes the wire at `now`
+ * (dnet_link_poll: a flow-control link service, a retransmission after a NAK
+ * or a timeout, or data the peer's flow control held). Call until *has_out is
+ * 0. *event (may be NULL) is DNET_LINK_EV_DISCONNECT when the retransmit
+ * budget ran out and the link closed (reason DNET_LINK_REASON_UNREACHABLE).
+ * No active link -> EINVAL.
+ */
+int dnet_engine_link_poll(struct dnet_engine *e, dnet_tick_t now,
+                          uint8_t *frame_out, size_t cap, size_t *len_out,
+                          int *has_out, enum dnet_link_event *event);
 
 /*
  * dnet_engine_link_rx - consume a received full NSP data frame at time `now`:

@@ -6,6 +6,8 @@
  * SHOW INTRUSION.
  */
 
+#include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,12 +42,11 @@
 #include "msgdef.h"
 #include "ovmx_status.h"
 #include "vms_kif.h"
+#include "ovmx_subprocess.h"  /* ovmx_creprc_fork: the creation record (rd vms-416d, vms-89bb) */
 #include "lib$routines.h"  /* lib$spawn — the one create+register path SPAWN rides (B0, vms-e9a) */
 #include "clidef.h"        /* CLI$M_NOWAIT — lib$spawn flags */
 #include "imgact_activate.h"
 #include "dcl/dcl_rms.h"    /* rms_file_attr / dcl_rms_attr: ACP image probe (vms-5f0) */
-#include <poll.h>
-#include <sys/socket.h>
 #include "ovmx_cli.h"       /* the CLI callback channel (vms-cded) */
 
 /* STS$M_INHIB_MSG: a condition value whose message has already been
@@ -289,7 +290,7 @@ int cmd_submit(struct dcl_command *cmd)
         if (hsts & 1) held = 1;
     }
 
-    printf("%%SUBMIT-S-SUBMITTED, job %s (queue %s, entry %u) %s\n",
+    dcl_out_printf("%%SUBMIT-S-SUBMITTED, job %s (queue %s, entry %u) %s\n",
            upper_name, queue_name, entry_id, held ? "holding" : "queued");
 
     return SS$_NORMAL;
@@ -380,7 +381,7 @@ int cmd_print(struct dcl_command *cmd)
         if (hsts & 1) held = 1;
     }
 
-    printf("%%PRINT-S-QUEUED, job %s (queue %s, entry %u) %s\n",
+    dcl_out_printf("%%PRINT-S-QUEUED, job %s (queue %s, entry %u) %s\n",
            upper_name, queue_name, entry_id, held ? "holding" : "queued");
 
     return SS$_NORMAL;
@@ -422,7 +423,7 @@ int cmd_show_queue(struct dcl_command *cmd)
                                  qinfo.status == VMSQ_STATUS_STOPPED ? "stopped" :
                                  qinfo.status == VMSQ_STATUS_PAUSED  ? "paused" : "unknown";
 
-        printf("  %s queue %s, %s\n", type_str, qinfo.name, status_str);
+        dcl_out_printf("  %s queue %s, %s\n", type_str, qinfo.name, status_str);
 
         if (show_full || show_all) {
             struct vms_queue_entry entries[64];
@@ -434,7 +435,7 @@ int cmd_show_queue(struct dcl_command *cmd)
                     entries[j].status == VMSQ_ENTRY_EXECUTING ? "Executing" :
                     entries[j].status == VMSQ_ENTRY_HOLDING   ? "Holding" :
                     entries[j].status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
-                printf("    entry %-6u %-20s %-12s %-10s\n",
+                dcl_out_printf("    entry %-6u %-20s %-12s %-10s\n",
                        entries[j].entry_id, entries[j].job_name,
                        entries[j].username, entry_status);
             }
@@ -454,7 +455,7 @@ int cmd_show_queue(struct dcl_command *cmd)
                                      qinfo.status == VMSQ_STATUS_STOPPED ? "stopped" :
                                      qinfo.status == VMSQ_STATUS_PAUSED  ? "paused" : "unknown";
 
-            printf("  %s queue %s, %s\n", type_str, qinfo.name, status_str);
+            dcl_out_printf("  %s queue %s, %s\n", type_str, qinfo.name, status_str);
 
             if (show_full || show_all) {
                 struct vms_queue_entry entries[64];
@@ -466,7 +467,7 @@ int cmd_show_queue(struct dcl_command *cmd)
                         entries[j].status == VMSQ_ENTRY_EXECUTING ? "Executing" :
                         entries[j].status == VMSQ_ENTRY_HOLDING   ? "Holding" :
                         entries[j].status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
-                    printf("    entry %-6u %-20s %-12s %-10s\n",
+                    dcl_out_printf("    entry %-6u %-20s %-12s %-10s\n",
                            entries[j].entry_id, entries[j].job_name,
                            entries[j].username, entry_status);
                 }
@@ -510,14 +511,14 @@ int cmd_set_entry(struct dcl_command *cmd)
             dcl_error("JBC", 2, "NOSUCHENT", "no such entry");
             return sts;
         }
-        printf("%%SET-S-MODIFIED, entry %u set to HOLD\n", entry_id);
+        dcl_out_printf("%%SET-S-MODIFIED, entry %u set to HOLD\n", entry_id);
     } else if (dcl_has_qualifier(cmd, "RELEASE")) {
         sts = vmsq_release_entry(entry_id);
         if (!(sts & 1)) {
             dcl_error("JBC", 2, "NOSUCHENT", "no such entry");
             return sts;
         }
-        printf("%%SET-S-MODIFIED, entry %u released\n", entry_id);
+        dcl_out_printf("%%SET-S-MODIFIED, entry %u released\n", entry_id);
     } else {
         dcl_error("SET", 2, "IVQUAL",
                   "specify /HOLD or /RELEASE with SET ENTRY");
@@ -568,9 +569,9 @@ int cmd_show_entry(struct dcl_command *cmd)
             entry.status == VMSQ_ENTRY_HOLDING   ? "Holding" :
             entry.status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
 
-        printf("  Entry  Jobname         Username     Status\n");
-        printf("  -----  -------         --------     ------\n");
-        printf("  %5u  %-15s %-12s %s\n",
+        dcl_out_printf("  Entry  Jobname         Username     Status\n");
+        dcl_out_printf("  -----  -------         --------     ------\n");
+        dcl_out_printf("  %5u  %-15s %-12s %s\n",
                entry.entry_id, entry.job_name, entry.username, status_str);
 
         /* Show submission time and queue */
@@ -580,7 +581,7 @@ int cmd_show_entry(struct dcl_command *cmd)
             time_t t = (time_t)unix_secs;
             struct tm tm;
             localtime_r(&t, &tm);
-            printf("         Submitted %2d-%s-%04d %02d:%02d on queue %s\n",
+            dcl_out_printf("         Submitted %2d-%s-%04d %02d:%02d on queue %s\n",
                    tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
                    tm.tm_hour, tm.tm_min, entry.queue_name);
         }
@@ -596,8 +597,8 @@ int cmd_show_entry(struct dcl_command *cmd)
             if (count == 0) continue;
 
             if (!found) {
-                printf("  Entry  Jobname         Username     Status\n");
-                printf("  -----  -------         --------     ------\n");
+                dcl_out_printf("  Entry  Jobname         Username     Status\n");
+                dcl_out_printf("  -----  -------         --------     ------\n");
                 found = 1;
             }
 
@@ -607,7 +608,7 @@ int cmd_show_entry(struct dcl_command *cmd)
                     entries[j].status == VMSQ_ENTRY_EXECUTING ? "Executing" :
                     entries[j].status == VMSQ_ENTRY_HOLDING   ? "Holding" :
                     entries[j].status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
-                printf("  %5u  %-15s %-12s %s\n",
+                dcl_out_printf("  %5u  %-15s %-12s %s\n",
                        entries[j].entry_id, entries[j].job_name,
                        entries[j].username, status_str);
                 if (entries[j].submit_time) {
@@ -616,7 +617,7 @@ int cmd_show_entry(struct dcl_command *cmd)
                     time_t t = (time_t)unix_secs;
                     struct tm tm;
                     localtime_r(&t, &tm);
-                    printf("         Submitted %2d-%s-%04d %02d:%02d on queue %s\n",
+                    dcl_out_printf("         Submitted %2d-%s-%04d %02d:%02d on queue %s\n",
                            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
                            tm.tm_hour, tm.tm_min, entries[j].queue_name);
                 }
@@ -624,7 +625,7 @@ int cmd_show_entry(struct dcl_command *cmd)
         }
 
         if (!found) {
-            printf("%%SHOW-I-NOENTRY, no entries found\n");
+            dcl_out_printf("%%SHOW-I-NOENTRY, no entries found\n");
         }
     }
 
@@ -669,21 +670,21 @@ int cmd_set_queue(struct dcl_command *cmd)
             dcl_error("OVMX", 2, "QUESETERR", "failed to stop queue %s", queue_name);
             return sts;
         }
-        printf("%%SET-S-QUEMOD, queue %s stopped\n", queue_name);
+        dcl_out_printf("%%SET-S-QUEMOD, queue %s stopped\n", queue_name);
     } else if (dcl_has_qualifier(cmd, "START")) {
         sts = vmsq_set_queue_status(queue_name, VMSQ_STATUS_STARTED);
         if (!(sts & 1)) {
             dcl_error("OVMX", 2, "QUESETERR", "failed to start queue %s", queue_name);
             return sts;
         }
-        printf("%%SET-S-QUEMOD, queue %s started\n", queue_name);
+        dcl_out_printf("%%SET-S-QUEMOD, queue %s started\n", queue_name);
     } else if (dcl_has_qualifier(cmd, "PAUSE")) {
         sts = vmsq_set_queue_status(queue_name, VMSQ_STATUS_PAUSED);
         if (!(sts & 1)) {
             dcl_error("OVMX", 2, "QUESETERR", "failed to pause queue %s", queue_name);
             return sts;
         }
-        printf("%%SET-S-QUEMOD, queue %s paused\n", queue_name);
+        dcl_out_printf("%%SET-S-QUEMOD, queue %s paused\n", queue_name);
     } else {
         dcl_error("SET", 2, "IVQUAL",
                   "specify /STOP, /START, or /PAUSE with SET QUEUE");
@@ -705,7 +706,7 @@ int cmd_show_intrusion(struct dcl_command *cmd)
     const char *intrusion_path = VMS_MANAGER_DIR "/INTRUSION.DAT";
     FILE *fp = fopen(intrusion_path, "r");
     if (!fp) {
-        printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
+        dcl_out_printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
         return SS$_NORMAL;
     }
 
@@ -737,18 +738,18 @@ int cmd_show_intrusion(struct dcl_command *cmd)
         *count_str++ = '\0';
 
         if (!found) {
-            printf("Intrusion   Type    Count  Expiration          Source\n");
+            dcl_out_printf("Intrusion   Type    Count  Expiration          Source\n");
             found = 1;
         }
 
-        printf("%-11s %-7s %5s  %-19s %s\n",
+        dcl_out_printf("%-11s %-7s %5s  %-19s %s\n",
                type, username, count_str, timestamp, source);
     }
 
     fclose(fp);
 
     if (!found) {
-        printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
+        dcl_out_printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
     }
 
     return SS$_NORMAL;
@@ -810,7 +811,7 @@ static void run_print_condition(uint32_t status, int chained)
         sec[sec_len] = '\0';
         /* A chained message is introduced by '-', not '%'. */
         if (chained && sec[0] == '%') sec[0] = '-';
-        fprintf(stderr, "%s\n", sec);
+        dcl_err_printf("%s\n", sec);
     }
 }
 
@@ -1394,7 +1395,7 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
 
     /* VMS reports the created process's ID, which is the EXECUTIVE's,
      * not a Linux pid $GETJPI could not resolve. */
-    printf("%%RUN-S-PROC_ID, identification of created process is %08X\n",
+    dcl_out_printf("%%RUN-S-PROC_ID, identification of created process is %08X\n",
            pid);
     return SS$_NORMAL;
 }
@@ -1845,14 +1846,68 @@ int dcl_resolve_activatable(struct dcl_context *ctx, const char *vms_spec,
  * fork()+execve() child read the procedure lines. Interactive DCL leaves the
  * terminal on fd 0.
  */
+/* The data-line source dcl_sysinput_setup gathers from: the @procedure's
+ * stream, or (fp NULL) the SYS$INPUT command file DCL reads by RMS (dcl_in.c).
+ * A line comes back with its '\n', as dcl_pf_gets gives it. */
+static int sysin_next(struct dcl_pf *fp, char *line, size_t sz)
+{
+    if (fp)
+        return dcl_pf_gets(line, (int)sz, fp) != NULL;
+    if (dcl_in_get(NULL, line, sz - 1) < 0)
+        return 0;
+    strcat(line, "\n");
+    return 1;
+}
+
+/* the line just read was consumed */
+static void sysin_advance(struct dcl_context *ctx, struct dcl_pf *fp, long *pos)
+{
+    if (!fp)
+        return;
+    ctx->proc_stack[ctx->proc_depth].line_number++;
+    *pos = dcl_pf_tell(fp);
+}
+
+/* the '$' line just read is DCL's next command: put it back */
+static void sysin_putback(struct dcl_pf *fp, long pos, char *line)
+{
+    if (fp) {
+        dcl_pf_seek(fp, pos, SEEK_SET);
+        return;
+    }
+    size_t n = strlen(line);
+    if (n && line[n - 1] == '\n')
+        line[n - 1] = '\0';
+    dcl_in_unget(line);
+}
+
 int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
 {
     si->saved_fd0 = -1;
-    if (!ctx || ctx->proc_depth < 0)
-        return 0;                   /* interactive: SYS$INPUT = terminal */
-    struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
-    if (!fp)
+    if (!ctx)
         return 0;
+    /*
+     * SYS$INPUT A COMMAND FILE, NOT AN @PROCEDURE (rd vms-45f2): a process
+     * whose SYS$INPUT is a VMS file (LIB$SPAWN INPUT=, RUN/DETACHED/INPUT=)
+     * reads its commands from that file by RMS $GET (dcl_in.c), and, as on
+     * VMS, the records after the image's command that do not begin with '$'
+     * are the image's SYS$INPUT. They are $GET from the same stream; the '$'
+     * record that ends them is handed back for DCL's own next read.
+     *
+     * BOOTSTRAP: the records reach the image through the SAME vms-1a9 fd-0
+     * block a procedure's data lines use (dcl_sysinput_install), because an
+     * image's C RTL reads SYS$INPUT from fd 0. The real fix -- DECC$SHR's
+     * stdin reading SYS$INPUT through RMS/$QIO for every image class -- retires
+     * this block (rd vms-07ae).
+     */
+    struct dcl_pf *fp = NULL;
+    int from_ppf = 0;
+    if (ctx->proc_depth >= 0)
+        fp = ctx->proc_stack[ctx->proc_depth].fp;
+    else if (dcl_in_route() == DCL_IN_ROUTE_FILE)
+        from_ppf = 1;
+    if (!fp && !from_ppf)
+        return 0;                   /* interactive: SYS$INPUT = terminal */
 
     /* The block is gathered in MEMORY and delivered on fd 0 by
      * dcl_sysinput_install(): /dev/null for an empty block (the RUN line is
@@ -1867,7 +1922,7 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
     int blk_bad = 0;
 
     char line[DCL_MAX_LINE];
-    long pos = dcl_pf_tell(fp);
+    long pos = fp ? dcl_pf_tell(fp) : 0;
     /* DECK/EOD explicit in-stream data (vms-3983). Normally the input block
      * ends at the first '$'-command line; DECK suspends that so a block may
      * itself contain '$'-lines, ending only at the EOD sentinel. Reference:
@@ -1875,7 +1930,7 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
      * "$EOD"; DECK/DOLLAR=string names a different one. */
     int  deck_mode = 0;
     char deck_term[48] = "EOD";
-    while (dcl_pf_gets(line, sizeof(line), fp)) {
+    while (sysin_next(fp, line, sizeof(line))) {
         const char *p = line;
         while (*p == ' ' || *p == '\t')
             p++;
@@ -1891,8 +1946,7 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
                     (q[tl] == '\0' || q[tl] == '\n' ||
                      q[tl] == ' '  || q[tl] == '\t')) {
                     deck_mode = 0;   /* consume the EOD line, feed nothing */
-                    ctx->proc_stack[ctx->proc_depth].line_number++;
-                    pos = dcl_pf_tell(fp);
+                    sysin_advance(ctx, fp, &pos);
                     continue;
                 }
             }
@@ -1922,13 +1976,12 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
                     }
                 }
                 deck_mode = 1;   /* consume the DECK line, feed nothing */
-                ctx->proc_stack[ctx->proc_depth].line_number++;
-                pos = dcl_pf_tell(fp);
+                sysin_advance(ctx, fp, &pos);
                 continue;
             }
             /* Next DCL command terminates the image's input. Put the stream
              * back at the start of this line so the parent loop reads it. */
-            dcl_pf_seek(fp, pos, SEEK_SET);
+            sysin_putback(fp, pos, line);
             break;
         }
         /* Data line fed to the image's SYS$INPUT. VMS DCL performs apostrophe
@@ -1969,8 +2022,7 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
                 blk_len += sl;
             }
         }
-        ctx->proc_stack[ctx->proc_depth].line_number++;
-        pos = dcl_pf_tell(fp);
+        sysin_advance(ctx, fp, &pos);
     }
     if (blk_bad) {
         free(blk);
@@ -1979,6 +2031,8 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
     }
     int rc = dcl_sysinput_install(si, blk, blk_len);
     free(blk);
+    if (si->saved_fd0 >= 0)
+        dcl_in_substrate(1);     /* SYS$INPUT is the block now (dcl_in.c) */
     if (rc != 0)
         dcl_error("DCL", 4, "SYSINPUT", "cannot provide SYS$INPUT for the image");
     return rc != 0 ? SS$_INSFMEM : 0;
@@ -1991,7 +2045,8 @@ void dcl_sysinput_restore(struct dcl_sysinput *si)
     dup2(si->saved_fd0, 0);
     close(si->saved_fd0);
     si->saved_fd0 = -1;
-    clearerr(stdin);
+    dcl_in_clear_eof();          /* the block's end is not the stream's */
+    dcl_in_substrate(0);
 }
 
 /*
@@ -2044,7 +2099,7 @@ int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
  * LIB$DELETE_SYMBOL in an image run from DCL act on DCL's own tables, as on
  * VMS. dcl_cli_handler answers one request; an in-process image reaches it
  * through lib$$set_cli_handler (registered at session start), a fork()+execve()
- * image over the OVMX$CLI_FD socketpair DCL serves while it waits. The image's
+ * image through the OVMX$CLI_MBX mailboxes DCL serves while it waits. The image's
  * local symbols land at DCL's current command level (LIB$ Manual,
  * LIB$SET_SYMBOL).
  */
@@ -2103,42 +2158,105 @@ void dcl_cli_handler(const struct ovmx_cli_req *rq, struct ovmx_cli_rsp *rs)
 }
 
 /*
- * Wait for the fork()ed image to exit or stop -- the same waitid(WNOWAIT)
- * outcome the caller reads -- answering its CLI callbacks on `fd` meanwhile.
- * The image's end of the socketpair closes when it exits, so poll() wakes at
- * once; a stop (Ctrl-Y) is seen within the poll interval.
+ * THE CLI MAILBOXES (rd vms-6d9; ovmx_cli.h). The REQUEST mailbox is also the
+ * image task's termination mailbox ($CREPRC mbxunt, vms_kif_creprc_pcb_mbx),
+ * so everything DCL waits for while the image runs arrives in that one
+ * mailbox, written by the image (a CLI request) or by the executive (the
+ * termination message; the CTRL/Y message, struct vms_exec_mbxmsg). No
+ * executive -> no mailboxes (`ok` 0): the image's LIB$ CLI calls answer
+ * LIB$_NOCLI and DCL simply waits for the task.
  */
-static void dcl_cli_wait(int fd, pid_t pid, siginfo_t *si)
+struct dcl_cli_mbx {
+    int      ok;
+    uint32_t req_chan, rsp_chan, req_unit;
+    char     req_dev[32], rsp_dev[32];
+};
+
+/* The request mailbox while DCL waits on an image, for the CTRL/Y handler
+ * (dcl_main.c); 0 = none. */
+volatile sig_atomic_t dcl_wait_mbx_chan;
+
+static void dcl_cli_mbx_open(struct dcl_cli_mbx *m)
 {
-    for (;;) {
-        if (fd >= 0) {
-            struct pollfd p = { fd, POLLIN, 0 };
-            int r = poll(&p, 1, 100);
-            if (r > 0 && (p.revents & POLLIN)) {
-                struct ovmx_cli_req rq;
-                ssize_t n = read(fd, &rq, sizeof rq);
-                if (n == (ssize_t)sizeof rq) {
-                    struct ovmx_cli_rsp rs;
-                    struct sigaction ign, old;
-                    dcl_cli_handler(&rq, &rs);
-                    /* An image killed mid-call must not take DCL with it:
-                     * a SIGPIPE raised by this write is discarded. */
-                    memset(&ign, 0, sizeof ign);
-                    ign.sa_handler = SIG_IGN;
-                    sigaction(SIGPIPE, &ign, &old);
-                    (void)write(fd, &rs, sizeof rs);
-                    sigaction(SIGPIPE, &old, NULL);
-                    continue;
-                }
-                if (n == 0)
-                    fd = -1;              /* the image's end is closed */
-            } else if (r > 0) {
-                fd = -1;                  /* POLLHUP / POLLERR */
+    uint32_t rsp_unit = 0;
+    const uint32_t qsz = (uint32_t)sizeof(struct ovmx_cli_req);
+    const uint32_t rsz = (uint32_t)sizeof(struct ovmx_cli_rsp);
+
+    memset(m, 0, sizeof *m);
+    if (!(vms_kif_mbx_create(0, qsz, 4 * qsz, &m->req_chan, &m->req_unit,
+                             m->req_dev, sizeof m->req_dev) & 1))
+        return;
+    if (!(vms_kif_mbx_create(0, rsz, 2 * rsz, &m->rsp_chan, &rsp_unit,
+                             m->rsp_dev, sizeof m->rsp_dev) & 1)) {
+        (void)vms_kif_dassgn(m->req_chan);
+        return;
+    }
+    m->ok = 1;
+}
+
+/* Deassigning DCL's channels deletes the temporary mailboxes once the image
+ * holds none either (its channels go at its rundown). First DCL says it has
+ * stopped serving (rd vms-fe22): an end-of-file (IO$_WRITEOF) in the reply
+ * mailbox ends an image's reply read -- one in flight at a CTRL/Y, or the
+ * first call of an image CONTINUEd after it -- with SS$_ENDOFFILE, which the
+ * RTL answers LIB$_UNECLIERR (and every later call too) instead of waiting
+ * for a reply nobody will write. */
+static void dcl_cli_mbx_close(struct dcl_cli_mbx *m)
+{
+    if (!m->ok)
+        return;
+    dcl_wait_mbx_chan = 0;
+    (void)vms_kif_mbx_write_eof(m->rsp_chan);
+    (void)vms_kif_dassgn(m->req_chan);
+    (void)vms_kif_dassgn(m->rsp_chan);
+    m->ok = 0;
+}
+
+/*
+ * Wait for the fork()ed image to exit or stop -- the same waitid(WNOWAIT)
+ * outcome the caller reads -- answering its CLI callbacks meanwhile. With the
+ * mailboxes, DCL blocks in ONE executive mailbox read until the executive says
+ * the image task was deleted or interrupted by CTRL/Y; then the task's state is
+ * already settled (or settling: the deletion message precedes the zombie by
+ * the task's last instructions in the kernel) and a blocking waitid reads it.
+ * No host descriptor wait, no polling interval.
+ */
+static void dcl_cli_wait(struct dcl_cli_mbx *m, pid_t pid, siginfo_t *si)
+{
+    if (m->ok) {
+        static union {
+            struct ovmx_cli_req    rq;
+            struct vms_exec_mbxmsg em;
+        } msg;
+        dcl_wait_mbx_chan = (sig_atomic_t)m->req_chan;
+        for (;;) {
+            uint32_t len = 0;
+            uint32_t st = vms_kif_mbx_read(m->req_chan, &msg, sizeof msg, &len, 0);
+            if (!(st & 1))
+                break;                    /* the executive is gone: wait below */
+            if (len == (uint32_t)sizeof msg.rq) {
+                struct ovmx_cli_rsp rs;
+                dcl_cli_handler(&msg.rq, &rs);
+                /* A reply the image never reads (it died mid-call) must not
+                 * stall DCL: no resource wait for room. */
+                (void)vms_kif_mbx_write_ex(m->rsp_chan, &rs, sizeof rs, 1);
+                continue;
             }
+            /* The end or interrupt of THIS image task. A message about
+             * another task (an earlier, interrupted image whose mailbox unit
+             * this one reuses) is not this wait's. */
+            if (len == (uint32_t)sizeof msg.em &&
+                (msg.em.msgtyp == VMS_EXEC_MBXMSG_TERM ||
+                 msg.em.msgtyp == VMS_EXEC_MBXMSG_CTRLY) &&
+                msg.em.task_pid == (uint32_t)pid)
+                break;
+            /* anything else is no CLI request: ignored */
         }
+        dcl_wait_mbx_chan = 0;
+    }
+    for (;;) {
         memset(si, 0, sizeof *si);
-        int opts = WEXITED | WSTOPPED | WNOWAIT | (fd >= 0 ? WNOHANG : 0);
-        if (waitid(P_PID, (id_t)pid, si, opts) < 0) {
+        if (waitid(P_PID, (id_t)pid, si, WEXITED | WSTOPPED | WNOWAIT) < 0) {
             if (errno == EINTR)
                 continue;
             return;
@@ -2163,98 +2281,64 @@ static void dcl_cli_wait(int fd, pid_t pid, siginfo_t *si)
  * A distinguished exit CODE cannot fix it: every code is also one a real image
  * may legitimately return, so reading one as "activation failed" would
  * FABRICATE a diagnostic for an image that merely exited with that value
- * (INV-6). So the fact travels out of band, by the POSIX close-on-exec idiom:
- * a CLOEXEC pipe the kernel closes for us on a SUCCESSFUL exec. The parent
- * reading 0 bytes therefore means the image genuinely was entered; a full int
- * means execve() failed and the value IS the errno the failing call set --
- * read, never inferred.
+ * (INV-6). So the fact travels out of band (rd vms-89bb). On VMS the image
+ * activator runs IN the CLI's process, so the activation's failure status is
+ * simply in that process's memory when control returns to DCL. OVMX's image
+ * task is DCL's own VMS process (VMS_CREPRC_PCB_CONTINUE) in a forked task, so
+ * DCL gives it the same thing: one page of the process's memory, mapped SHARED
+ * once per session, that the task and DCL both see -- the activation cell.
+ * DCL clears it before each fork; a task whose execve() failed stores the
+ * errno the failing call set and leaves; an image that WAS entered cannot
+ * touch it (execve() replaced the task's address space). Once the task has
+ * ended, a zero cell means the image genuinely was entered and anything else
+ * IS the errno -- read, never inferred. No pipe, no descriptor, no I/O.
+ *
+ * No cell (the one mapping refused) leaves the exec failure merely
+ * undiagnosed, never MISdiagnosed: dcl_exec_handshake_read then reports "the
+ * image was entered", having no way to learn otherwise.
  * -------------------------------------------------------------------------- */
+static volatile int *dcl_act_cell;
 
-/* Open the handshake. plain pipe() + FD_CLOEXEC rather than pipe2(): the same
- * two lines work on every substrate DCL is built for (Linux glibc/musl and
- * NetBSD-vax) with no feature-test-macro dependency. On failure both ends stay
- * -1 and the path behaves exactly as it did before -- an exec failure is then
- * merely undiagnosed, never MISdiagnosed, because dcl_exec_handshake_read
- * reports "the image was entered" when it has no channel to learn otherwise. */
-static void dcl_exec_handshake_open(int fds[2])
+/* Parent, before the fork: have the activation cell, and clear it. */
+static void dcl_exec_handshake_open(void)
 {
-    if (pipe(fds) != 0) {
-        fds[0] = fds[1] = -1;
-        return;
+    if (!dcl_act_cell) {
+        void *p = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED)
+            return;
+        dcl_act_cell = p;
     }
-    /* CLOEXEC on the WRITE end is the signal itself: a successful execve closes
-     * it for us, and the parent's read then sees end-of-file. */
-    if (fcntl(fds[1], F_SETFD, FD_CLOEXEC) != 0 ||
-        fcntl(fds[0], F_SETFD, FD_CLOEXEC) != 0) {
-        close(fds[0]);
-        close(fds[1]);
-        fds[0] = fds[1] = -1;
-    }
+    *dcl_act_cell = 0;
 }
 
-/* The image task's PCB, from DCL (rd vms-e50): see dcl_cmd.h. */
-int dcl_pcb_hold_open(int fds[2])
+/* The image task's PCB, from DCL (rd vms-e50, vms-89bb): see dcl_cmd.h. DCL
+ * and the forked task meet in the executive's creation record, as $CREPRC's
+ * creator and task do (VMS_IOCTL_CREPRC_SYNC, ovmx_subprocess.h). */
+pid_t dcl_image_fork_mbx(uint32_t kind, uint32_t mbxunt, uint32_t *pcb_status)
 {
-    if (pipe(fds) != 0) {
-        fds[0] = fds[1] = -1;
-        return -1;
-    }
-    (void)fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-    (void)fcntl(fds[1], F_SETFD, FD_CLOEXEC);
-    return 0;
+    /* NEGCTL-ANCHORED (dcl-image-fork-host-pipe) */
+    return ovmx_creprc_fork_mbx(kind, mbxunt, pcb_status, NULL);
 }
 
-/* Child: wait until DCL has made this task its VMS process (or has given up:
- * end-of-file). Nothing here touches the executive. */
-void dcl_pcb_hold_wait(int fds[2])
+pid_t dcl_image_fork(uint32_t kind)
 {
-    char b;
-    ssize_t n;
-    close(fds[1]);
-    do { n = read(fds[0], &b, 1); } while (n < 0 && errno == EINTR);
-    close(fds[0]);
-}
-
-/* Parent: make the held task DCL's own VMS process, then release it. */
-uint32_t dcl_pcb_hold_release(int fds[2], int child_pid)
-{
-    return dcl_pcb_hold_release_kind(fds, child_pid, VMS_CREPRC_PCB_CONTINUE);
-}
-
-/* Parent: make the held task a VMS process of `kind`, then release it. */
-uint32_t dcl_pcb_hold_release_kind(int fds[2], int child_pid, uint32_t kind)
-{
-    uint32_t st = SS$_ABORT;
-    ssize_t n;
-    close(fds[0]);
-    if (child_pid > 0)
-        st = vms_kif_creprc_pcb((uint32_t)child_pid, kind, NULL, 0, 0, NULL);
-    do { n = write(fds[1], "g", 1); } while (n < 0 && errno == EINTR);
-    close(fds[1]);
-    return st;
+    return dcl_image_fork_mbx(kind, 0, NULL);
 }
 
 /* Child side, after a failed execv: record the errno and leave. Never returns. */
-static void dcl_exec_handshake_fail(int wfd, int err)
+static void dcl_exec_handshake_fail(int err)
 {
-    if (wfd >= 0) {
-        ssize_t n;
-        do { n = write(wfd, &err, sizeof err); } while (n < 0 && errno == EINTR);
-        (void)n;
-    }
+    if (dcl_act_cell)
+        *dcl_act_cell = err;
     _exit(1);
 }
 
-/* Parent side: 0 = the image was entered; otherwise the child's exec errno. */
-static int dcl_exec_handshake_read(int rfd)
+/* Parent side, once the task has ended: 0 = the image was entered; otherwise
+ * the child's exec errno. */
+static int dcl_exec_handshake_read(void)
 {
-    int err = 0;
-    ssize_t n;
-
-    if (rfd < 0)
-        return 0;
-    do { n = read(rfd, &err, sizeof err); } while (n < 0 && errno == EINTR);
-    return (n == (ssize_t)sizeof err) ? err : 0;
+    return dcl_act_cell ? *dcl_act_cell : 0;
 }
 
 /*
@@ -2269,26 +2353,26 @@ static uint32_t dcl_report_actimage(const char *display_name,
                                     const char *linux_path, int err)
 {
     dcl_error("DCL", 0, "ACTIMAGE", "error activating image %s", display_name);
-    fprintf(stderr, "-CLI-E-IMGNAME, image file %s\n", linux_path);
+    dcl_err_printf("-CLI-E-IMGNAME, image file %s\n", linux_path);
 
     switch (err) {
     case ENOENT:
-        fprintf(stderr, "-RMS-E-FNF, file not found\n");
+        dcl_err_printf("-RMS-E-FNF, file not found\n");
         /* The image file itself being PRESENT means what the substrate could
          * not open is the activator the image names, not the image. Saying
          * "file not found" about a file that exists would be false, so name
          * the real condition -- from an access() probe, not a guess. */
         if (access(linux_path, F_OK) == 0)
-            fprintf(stderr, "-DCL-I-ACTIVATOR, the image is present; the "
+            dcl_err_printf("-DCL-I-ACTIVATOR, the image is present; the "
                             "activator it names could not be opened\n");
         return SS$_NOSUCHFILE;
     case EACCES:
     case EPERM:
-        fprintf(stderr, "-RMS-E-PRV, insufficient privilege or file "
+        dcl_err_printf("-RMS-E-PRV, insufficient privilege or file "
                         "protection violation\n");
         return SS$_NOPRIV;
     default:
-        fprintf(stderr, "-SYSTEM-F-ABORT, abort (%s)\n", strerror(err));
+        dcl_err_printf("-SYSTEM-F-ABORT, abort (%s)\n", strerror(err));
         return SS$_ABORT;
     }
 }
@@ -2379,37 +2463,33 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         }
     }
 
-    /* The CLI callback channel the image's LIB$*_SYMBOL calls reach DCL by
-     * (vms-cded). No channel (socketpair failed) only means no callback. */
-    int cli_sv[2] = { -1, -1 };
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, cli_sv) != 0)
-        cli_sv[0] = cli_sv[1] = -1;
+    /* The CLI mailboxes the image's LIB$*_SYMBOL / LIB$DO_COMMAND calls reach
+     * DCL by, the request one also the image task's termination mailbox
+     * (vms-cded, rd vms-6d9). None (no executive) means no callback. */
+    struct dcl_cli_mbx cli;
+    dcl_cli_mbx_open(&cli);
 
     /* The exec handshake (vms-06c): whether the image was ENTERED at all. */
-    int exec_pipe[2] = { -1, -1 };
-    dcl_exec_handshake_open(exec_pipe);
+    dcl_exec_handshake_open();
 
-    int pcb_hold[2];
-    if (dcl_pcb_hold_open(pcb_hold) != 0) {
-        if (exec_pipe[0] >= 0) { close(exec_pipe[0]); close(exec_pipe[1]); }
-        if (cli_sv[0] >= 0) close(cli_sv[0]);
-        if (cli_sv[1] >= 0) close(cli_sv[1]);
-        dcl_error("DCL", 4, "CREPRC", "cannot activate %s", display_name);
-        return SS$_INSFMEM;
-    }
-
-    pid_t pid = fork();
-    if (pid != 0)
-        (void)dcl_pcb_hold_release(pcb_hold, (int)pid);
+    /* The task is DCL's own VMS process before it runs a single instruction
+     * of its own (dcl_image_fork, rd vms-e50 / vms-89bb), its PCB naming the
+     * request mailbox as its termination mailbox (rd vms-6d9). A refused PCB
+     * means no termination message will come for the task, so DCL does not
+     * wait for one. */
+    uint32_t pcb_st = SS$_ABORT;
+    pid_t pid = dcl_image_fork_mbx(VMS_CREPRC_PCB_CONTINUE, cli.ok ? cli.req_unit : 0,
+                                   &pcb_st);
+    if (pid > 0 && !(pcb_st & 1))
+        dcl_cli_mbx_close(&cli);
     if (pid == 0) {
         /* Child */
-        if (cli_sv[1] >= 0) {
-            int cfd = dup(cli_sv[1]);          /* dup: no FD_CLOEXEC */
-            if (cfd >= 0) {
-                char nb[16];
-                snprintf(nb, sizeof nb, "%d", cfd);
-                setenv(OVMX_CLI_FD_ENV, nb, 1);
-            }
+        if (cli.ok) {
+            char spec[sizeof cli.req_dev + sizeof cli.rsp_dev + 2];
+            snprintf(spec, sizeof spec, "%s,%s", cli.req_dev, cli.rsp_dev);
+            setenv(OVMX_CLI_MBX_ENV, spec, 1);
+        } else {
+            unsetenv(OVMX_CLI_MBX_ENV);
         }
         /*
          * IMAGE ACTIVATION CONTINUES THIS PROCESS (vms-4d7; rd vms-e50). On
@@ -2423,9 +2503,6 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
          * This is ONLY for image activation. SPAWN / RUN/DETACHED / $CREPRC
          * create genuinely new VMS processes ($CREPRC makes their PCBs).
          */
-        dcl_pcb_hold_wait(pcb_hold);
-        if (exec_pipe[0] >= 0)
-            close(exec_pipe[0]);
         execv(linux_path, argv);
         {
             int exec_err = errno;
@@ -2470,7 +2547,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
             /* execve() failed: the image was NEVER entered. Hand the real
              * errno to DCL through the handshake and leave -- an exit code
              * alone cannot carry this (vms-06c, dcl_exec_handshake_open). */
-            dcl_exec_handshake_fail(exec_pipe[1], exec_err);
+            dcl_exec_handshake_fail(exec_err);
         }
     } else if (pid > 0) {
         /*
@@ -2494,22 +2571,13 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         dcl_running_child = (sig_atomic_t)pid;
 
         siginfo_t si;
-        if (cli_sv[1] >= 0)
-            close(cli_sv[1]);
-        /* Our copy of the write end must go now, or the handshake read below
-         * would never see end-of-file on a successful exec. */
-        if (exec_pipe[1] >= 0)
-            close(exec_pipe[1]);
-        dcl_cli_wait(cli_sv[0], pid, &si);
-        if (cli_sv[0] >= 0)
-            close(cli_sv[0]);
+        dcl_cli_wait(&cli, pid, &si);
+        dcl_cli_mbx_close(&cli);
 
         if (si.si_code == CLD_STOPPED || si.si_code == CLD_TRAPPED) {
             /* Child stopped by Ctrl-Y — save for CONTINUE (do NOT reap it). */
             dcl_running_child = 0;
-            if (exec_pipe[0] >= 0)
-                close(exec_pipe[0]);
-            printf("\nInterrupt\n");
+            dcl_out_printf("\nInterrupt\n");
             ctx->interrupted_pid = pid;
             return SS$_ABORT;
         }
@@ -2521,9 +2589,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
          * %X00000001" claim that the POSIX-outcome branch below would make
          * about an image that never ran.
          */
-        int exec_err = dcl_exec_handshake_read(exec_pipe[0]);
-        if (exec_pipe[0] >= 0)
-            close(exec_pipe[0]);
+        int exec_err = dcl_exec_handshake_read();
         if (exec_err != 0) {
             int st_discard = 0;
             while (waitpid(pid, &st_discard, 0) < 0 && errno == EINTR)
@@ -2582,10 +2648,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
             return SS$_ABORT;
         }
     } else {
-        if (cli_sv[0] >= 0) close(cli_sv[0]);
-        if (cli_sv[1] >= 0) close(cli_sv[1]);
-        if (exec_pipe[0] >= 0) close(exec_pipe[0]);
-        if (exec_pipe[1] >= 0) close(exec_pipe[1]);
+        dcl_cli_mbx_close(&cli);
         dcl_error("DCL", 4, "CREPRC", "cannot create process");
         return SS$_ABORT;
     }
@@ -2799,28 +2862,22 @@ int cmd_run(struct dcl_command *cmd)
  * SPAWN                    — interactive DCL subprocess
  * SPAWN cmd                — execute single DCL command in subprocess
  * SPAWN /NOWAIT cmd        — run DCL subprocess in background
- * SPAWN /OUTPUT=file cmd   — redirect subprocess stdout to file
+ * SPAWN /OUTPUT=file cmd   — the subprocess's SYS$OUTPUT is that file
+ * SPAWN /INPUT=file [cmd]   — its SYS$INPUT is that file (after cmd, if any)
  */
-/*
- * Create an exclusive scratch SYS$INPUT file, filling `buf` and returning an
- * open write fd (or -1). Uses only DECC$SHR-exported universals (getpid /
- * snprintf / open) -- NOT mkstemp(), which the VMS-native link does not export
- * as a bare universal (only the decorated decc$mkstemp), so a bare mkstemp()
- * would be an unresolved external in every native-linked consumer (vms-e9a).
- * O_CREAT|O_EXCL with a retry gives the same collision safety mkstemp gave.
- */
-static int dcl_spawn_open_scratch(char *buf, size_t bufsz)
+/* A SPAWN /INPUT or /OUTPUT value as the subprocess must be handed it: a bare
+ * device (NL:, OPA0:, MBA3:) as given, a file named in full from this
+ * process's defaults (rd vms-691d). */
+static void spawn_stream_spec(struct dcl_context *ctx, const char *v,
+                              char *out, size_t outsz)
 {
-    static unsigned seq = 0;
-    for (int tries = 0; tries < 4096; tries++) {
-        snprintf(buf, bufsz, "/tmp/ovmx_dclspawn_%d_%u", (int)getpid(), seq++);
-        int fd = open(buf, O_CREAT | O_EXCL | O_WRONLY, 0600);
-        if (fd >= 0)
-            return fd;
-        if (errno != EEXIST)
-            return -1;
+    size_t n = strlen(v);
+    if (n > 1 && v[n - 1] == ':' && strchr(v, ':') == v + n - 1) {
+        snprintf(out, outsz, "%s", v);
+        return;
     }
-    return -1;
+    if (dcl_rms_effective_spec(ctx, v, out, outsz) != 0 || !out[0])
+        snprintf(out, outsz, "%s", v);
 }
 
 int cmd_spawn(struct dcl_command *cmd)
@@ -2830,6 +2887,7 @@ int cmd_spawn(struct dcl_command *cmd)
     /* Check qualifiers */
     int nowait = dcl_has_qualifier(cmd, "NOWAIT");
     const char *output_file = dcl_qualifier_value(cmd, "OUTPUT");
+    const char *input_file  = dcl_qualifier_value(cmd, "INPUT");
     const char *proc_name_q = dcl_qualifier_value(cmd, "PROCESS");
 
     /* Build command text from params if any */
@@ -2902,40 +2960,37 @@ int cmd_spawn(struct dcl_command *cmd)
      * fork/exec to fall back to), so SPAWN reports the failure rather than
      * running an invisible subprocess (INV-6 / Rule 9, design §3d).
      *
-     * The command runs as the subprocess's SYS$INPUT ($CREPRC execs with no
-     * argv; VMS LIB$SPAWN likewise feeds a command string to the CLI as its
-     * input). SPAWN writes it to a scratch file it OWNS, so it can reclaim the
-     * file after its own attached wait -- and asks lib$spawn only to CREATE
-     * (CLI$M_NOWAIT), doing the waiting itself where Ctrl-Y/attach live.
+     * The command string goes to lib$spawn AS the command string: lib$spawn
+     * hands it to the subprocess's CLI through a temporary mailbox (rd
+     * vms-003b) -- no scratch file, no host path (rd vms-691d retired the
+     * /tmp command file this used to write with open(2)). SPAWN asks lib$spawn
+     * only to CREATE (CLI$M_NOWAIT), doing the waiting itself where Ctrl-Y /
+     * attach live.
+     *
+     * /INPUT and /OUTPUT (rd vms-691d) name the subprocess's SYS$INPUT and
+     * SYS$OUTPUT -- its process-permanent files, which $CREPRC gives it by
+     * name (DCL Dictionary, SPAWN; observed on OpenVMS VAX V7.3,
+     * tests/lab/captures/vms-691d-type-spawn-20261102). A file is named in
+     * full here, defaulted from THIS process's default directory, so the
+     * subprocess opens the file the user meant; a bare device (NL:, OPA0:)
+     * passes as given.
      */
-    char cmd_tmp[256] = "";
-    int  have_tmp   = 0;
-    struct dsc$descriptor_s in_d;
-    const struct dsc$descriptor_s *in_arg = NULL;
+    struct dsc$descriptor_s cmd_d;
+    const struct dsc$descriptor_s *cmd_arg = NULL;
     if (has_command) {
-        int tfd = dcl_spawn_open_scratch(cmd_tmp, sizeof(cmd_tmp));
-        if (tfd < 0) {
-            dcl_error("DCL", 4, "CREPRC", "cannot create process");
-            return SS$_INSFMEM;
-        }
-        have_tmp = 1;
-        char line[DCL_MAX_LINE + 2];
-        int wl = snprintf(line, sizeof(line), "%s\n", command_text);
-        int wrc = dcl_write_all(tfd, line, (size_t)wl);
-        close(tfd);
-        if (wrc != 0) {
-            /* The scratch file could not take the command (rd vms-f47: tmpfs
-             * refuses writes below 4 MB of available memory): a subprocess
-             * given a truncated command would run the wrong thing. */
-            unlink(cmd_tmp);
-            dcl_error("DCL", 4, "CREPRC", "cannot create process: no room for its command");
-            return SS$_INSFMEM;
-        }
-        in_d   = dsc_from_str(cmd_tmp);
-        in_arg = &in_d;
+        cmd_d   = dsc_from_str(command_text);
+        cmd_arg = &cmd_d;
     }
 
-    struct dsc$descriptor_s out_d = dsc_from_str(output_file);
+    char in_spec[1024] = "", out_spec[1024] = "";
+    if (input_file && *input_file)
+        spawn_stream_spec(spawn_ctx, input_file, in_spec, sizeof(in_spec));
+    if (output_file && *output_file)
+        spawn_stream_spec(spawn_ctx, output_file, out_spec, sizeof(out_spec));
+    struct dsc$descriptor_s in_d = dsc_from_str(in_spec);
+    const struct dsc$descriptor_s *in_arg =
+        in_d.dsc$a_pointer ? &in_d : NULL;
+    struct dsc$descriptor_s out_d = dsc_from_str(out_spec);
     const struct dsc$descriptor_s *out_arg =
         out_d.dsc$a_pointer ? &out_d : NULL;
 
@@ -2955,7 +3010,7 @@ int cmd_spawn(struct dcl_command *cmd)
         strncpy(final_name, proc_name_q, sizeof(final_name) - 1);
         final_name[sizeof(final_name) - 1] = '\0';
         struct dsc$descriptor_s prc_d = dsc_from_str(final_name);
-        cst = lib$spawn(NULL, in_arg, out_arg, &flags, &prc_d, &vms_pid, NULL,
+        cst = lib$spawn(cmd_arg, in_arg, out_arg, &flags, &prc_d, &vms_pid, NULL,
                         NULL, NULL, NULL, NULL, NULL, NULL);
     } else {
         for (int n = 1; n <= 65535; n++) {
@@ -2964,7 +3019,7 @@ int cmd_spawn(struct dcl_command *cmd)
             strncpy(final_name, nm, sizeof(final_name) - 1);
             final_name[sizeof(final_name) - 1] = '\0';
             struct dsc$descriptor_s prc_d = dsc_from_str(final_name);
-            cst = lib$spawn(NULL, in_arg, out_arg, &flags, &prc_d, &vms_pid,
+            cst = lib$spawn(cmd_arg, in_arg, out_arg, &flags, &prc_d, &vms_pid,
                             NULL, NULL, NULL, NULL, NULL, NULL, NULL);
             if (cst & 1)
                 break;                     /* created + named base_N */
@@ -2974,7 +3029,24 @@ int cmd_spawn(struct dcl_command *cmd)
     }
 
     if (!(cst & 1)) {
-        if (have_tmp) unlink(cmd_tmp);
+        /* An input file that is not there is RMS's own status, reported as
+         * itself and left in $STATUS -- VAX V7.3: SPAWN/INPUT=NOSUCH.COM SHOW
+         * TIME -> "%RMS-E-FNF, file not found", $STATUS %X00018292, and no
+         * process (rd vms-691d). */
+        if (((cst >> 16) & 0x0FFF) == 1 /* RMS */) {
+            char txt[256];
+            uint16_t tl = 0;
+            struct dsc$descriptor_s md;
+            md.dsc$w_length = (uint16_t)(sizeof txt - 1);
+            md.dsc$b_dtype = DSC$K_DTYPE_T;
+            md.dsc$b_class = DSC$K_CLASS_S;
+            md.dsc$a_pointer = txt;
+            if ((sys$getmsg(cst, &tl, &md, 0x0F, NULL) & 1) && tl > 0) {
+                txt[tl] = '\0';
+                dcl_err_printf("%s\n", txt);
+                return (int)cst;
+            }
+        }
         /* lib$spawn propagated $CREPRC's authentic status (no executive,
          * name clash it could not resolve, or a lost child). Report honestly
          * -- SPAWN created nothing (INV-6). */
@@ -2988,7 +3060,7 @@ int cmd_spawn(struct dcl_command *cmd)
          * OpenVMS VAX V7.3 (cited above). The scratch SYS$INPUT is left for
          * the unwaited subprocess to consume (its reclamation is B1's
          * exit-notification job, as in lib$spawn/NOWAIT). */
-        printf("%%DCL-S-SPAWNED, process %s spawned\n", final_name);
+        dcl_out_printf("%%DCL-S-SPAWNED, process %s spawned\n", final_name);
         return SS$_NORMAL;
     }
 
@@ -3011,9 +3083,8 @@ int cmd_spawn(struct dcl_command *cmd)
                errno == EINTR)
             ;
         dcl_running_child = 0;
-        if (have_tmp) unlink(cmd_tmp);
         if (WIFSTOPPED(wstatus)) {
-            printf("\nInterrupt\n");
+            dcl_out_printf("\nInterrupt\n");
             spawn_ctx->interrupted_pid = (pid_t)pinfo.linux_pid;
             return SS$_ABORT;
         }
@@ -3024,7 +3095,6 @@ int cmd_spawn(struct dcl_command *cmd)
 
     /* The executive no longer resolves the pid: a fast subprocess already ran
      * to completion between creation and this read. It genuinely ran. */
-    if (have_tmp) unlink(cmd_tmp);
     return SS$_NORMAL;
 }
 
@@ -3192,27 +3262,13 @@ int cmd_pipe(struct dcl_command *cmd)
         }
 
         /* Each segment is a SUBPROCESS of this DCL, as PIPE's are on VMS
-         * (rd vms-1f8): DCL makes its PCB while it waits, before it runs. */
-        int pcb_hold[2];
-        if (dcl_pcb_hold_open(pcb_hold) != 0) {
-            dcl_error("DCL", 4, "CREPRC", "cannot create process");
-            for (int j = 0; j < nseg - 1; j++) {
-                close(pipefds[j][0]);
-                close(pipefds[j][1]);
-            }
-            for (int j = 0; j < i; j++)
-                waitpid(pids[j], NULL, 0);
-            return SS$_INSFMEM;
-        }
-        pid_t pid = fork();
-        /* The segment is released whether or not its PCB was made, exactly as
-         * an activated image is (dcl_pcb_hold_release): with no executive (a
-         * host DCL) there is none to make, and the segment's own service calls
-         * then fail honestly. vms-2a5 decides what a task without a PCB may do
-         * once self-registration is gone. */
-        if (pid != 0)
-            (void)dcl_pcb_hold_release_kind(pcb_hold, (int)pid,
-                                            VMS_CREPRC_PCB_SUBPROCESS);
+         * (rd vms-1f8): DCL makes its PCB while it waits, before it runs.
+         * The segment is released whether or not its PCB was made, exactly as
+         * an activated image is (dcl_image_fork): with no executive (a host
+         * DCL) there is none to make, and the segment's own service calls then
+         * fail honestly. vms-2a5 decides what a task without a PCB may do once
+         * self-registration is gone. */
+        pid_t pid = dcl_image_fork(VMS_CREPRC_PCB_SUBPROCESS);
         if (pid < 0) {
             dcl_error("DCL", 4, "CREPRC", "cannot create process");
             /* Clean up */
@@ -3245,10 +3301,9 @@ int cmd_pipe(struct dcl_command *cmd)
                 close(pipefds[j][1]);
             }
 
-            /* A VMS process once DCL has made its PCB; then exec vmsdcl -c. */
-            dcl_pcb_hold_wait(pcb_hold);
+            /* A VMS process (DCL made its PCB before releasing it); exec vmsdcl -c. */
             execl(dcl_exe, "vmsdcl", "-c", segments[i], (char *)NULL);
-            fprintf(stderr, "%%DCL-E-CREPRC, cannot execute - %s\n", dcl_exe);
+            dcl_err_printf("%%DCL-E-CREPRC, cannot execute - %s\n", dcl_exe);
             _exit(127);
         }
 
@@ -3469,7 +3524,7 @@ int cmd_logout(struct dcl_command *cmd)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    printf("  %-12s logged out at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+    dcl_out_printf("  %-12s logged out at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
            upper_user, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
@@ -3505,7 +3560,7 @@ int cmd_continue(struct dcl_command *cmd)
     struct dcl_context *ctx = dcl_get_context();
 
     if (ctx->interrupted_pid <= 0) {
-        printf("%%DCL-I-NOINTER, no interrupted image to continue\n");
+        dcl_out_printf("%%DCL-I-NOINTER, no interrupted image to continue\n");
         return SS$_NORMAL;
     }
 
@@ -3513,7 +3568,7 @@ int cmd_continue(struct dcl_command *cmd)
 
     /* Send SIGCONT to resume the stopped child */
     if (kill(pid, SIGCONT) != 0) {
-        printf("%%DCL-W-NOPROC, process %d no longer exists\n", (int)pid);
+        dcl_out_printf("%%DCL-W-NOPROC, process %d no longer exists\n", (int)pid);
         ctx->interrupted_pid = 0;
         return SS$_NONEXPR;
     }
@@ -3526,7 +3581,7 @@ int cmd_continue(struct dcl_command *cmd)
 
     if (result > 0 && WIFSTOPPED(wstatus)) {
         /* Child was stopped again (another Ctrl-Y during CONTINUE) */
-        printf("\nInterrupt\n");
+        dcl_out_printf("\nInterrupt\n");
         /* Still interrupted — keep interrupted_pid */
     } else {
         /* Child exited or was signaled */

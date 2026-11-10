@@ -1,0 +1,8 @@
+capture: /home/baron/projects/vms/.worktrees/cluster-5fa-r3/tests/lab/captures/vms-5fa-shared-volume-r3-20261102/ci6evac-235551; EVAC.DAT from vax1.log dump, 75 records
+S1 PASS: EVAC5FA on $2$DUA2: (MSCP-served) and VAX1$DUA16386: (OVMXE)
+S2 PASS: F11B$vEVAC5FA mastered on VAX1, Lock Count 2, master copy of lock 01000E3A on system 00010003
+S3 FAIL: EVAC.DAT runs VAX1:75: not alternating (want >= 4 runs, >= 2 per node)
+S4 FAIL: EVAC.DAT does not end with >= 2 OVMXE records after a VAX1 run
+S5 PASS: no %ANALDISK-W/-E/-F; $STATUS %X00000001
+S6 PASS: 0 bugcheck/quorum lines; VAX2 Q=2 V=2; EVAC.DAT seq 1..75 contiguous
+VERDICT: FAIL (criteria S3,S4)

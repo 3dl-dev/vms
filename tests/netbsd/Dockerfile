@@ -104,7 +104,7 @@ COPY src/kernel-core/vms_eflag.c src/kernel-core/exec_kbackend.h src/kernel-core
 # P4-A: the remaining five shared facility sources (rd vms-f8a) -- SAME sources
 # the Linux vms.ko and the per-PR crosscompile.sh gate build; no NetBSD copy of
 # any facility's logic exists.
-COPY src/kernel-core/vms_ast.c src/kernel-core/vms_access.c src/kernel-core/vms_mbx.c src/kernel-core/vms_prot.h src/kernel-core/vms_proctab.c src/kernel-core/vms_lock.c /netbsd/guest-src/kernel-core/
+COPY src/kernel-core/vms_ast.c src/kernel-core/vms_access.c src/kernel-core/vms_systime.c src/kernel-core/vms_mbx.c src/kernel-core/vms_prot.h src/kernel-core/vms_proctab.c src/kernel-core/vms_lock.c /netbsd/guest-src/kernel-core/
 # Logical-name facility source (rd vms-72da) -- the SAME shared source the Linux
 # vms.ko and the per-PR crosscompile.sh gate build; listed in the Makefile SRCS.
 COPY src/kernel-core/vms_lnm.c /netbsd/guest-src/kernel-core/vms_lnm.c
@@ -117,6 +117,7 @@ COPY src/kernel-core/vms_devtab_fullnam.h /netbsd/guest-src/kernel-core/vms_devt
 COPY src/kernel-netbsd/vms_devtab_nb.h /netbsd/guest-src/kmod/vms_devtab_nb.h
 COPY src/kernel-core/vms_tt.c /netbsd/guest-src/kernel-core/vms_tt.c
 COPY src/kernel-core/vms_tt.h /netbsd/guest-src/kernel-core/vms_tt.h
+COPY src/kernel-core/vms_tt_oper.h /netbsd/guest-src/kernel-core/vms_tt_oper.h
 COPY src/kernel-netbsd/vms_tt_nb.h /netbsd/guest-src/kmod/vms_tt_nb.h
 COPY src/kernel-netbsd/vms_tt_netbsd.c /netbsd/guest-src/kmod/vms_tt_netbsd.c
 COPY src/kernel-core/exec_hash.h src/kernel-core/exec_rbtree.h /netbsd/guest-src/kernel-core/
@@ -142,7 +143,7 @@ COPY src/vmsfs/include/vmsfs/ods2.h /netbsd/guest-src/vmsfs/include/vmsfs/ods2.h
 # NetBSD half of the cluster seam (exec_kbackend.h families SS14..SS18). vms_pe.c
 # is in src/kernel-netbsd/Makefile's SRCS from its first commit, so the in-guest
 # module build needs it and its kernel-core headers staged. ---
-COPY src/kernel-core/vms_pe.c src/kernel-core/vms_pe.h src/kernel-core/vms_scs.h src/kernel-core/vms_cnxman.h src/kernel-core/vms_dlm_scs.h src/kernel-core/vms_dlm_quorum.h src/kernel-core/vms_dlm_proxy.h src/kernel-core/vms_rms_lockname.h src/kernel-core/vms_cluster.h src/kernel-core/vms_cluster_snapshot.h /netbsd/guest-src/kernel-core/
+COPY src/kernel-core/vms_pe.c src/kernel-core/vms_pe.h src/kernel-core/vms_scs.h src/kernel-core/vms_cnxman.h src/kernel-core/vms_dlm_scs.h src/kernel-core/vms_dlm_quorum.h src/kernel-core/vms_dlm_proxy.h src/kernel-core/vms_rms_lockname.h src/kernel-core/vms_f11b_ser.h src/kernel-core/vms_cluster.h src/kernel-core/vms_cluster_snapshot.h /netbsd/guest-src/kernel-core/
 # --- FC-P3.6: the CLUB/CSB model + the CSB ten-state ladder, and the
 # RECNXINTERVAL/TIMVCFAIL reconnect loop. Both are in SRCS from their first
 # commit for the same reason vms_pe.c is, so the in-guest module build needs
@@ -209,7 +210,7 @@ COPY src/kernel-core/vms_mscp_cl_io_fsm.c src/kernel-core/vms_mscp_cl_io_fsm.h /
 COPY src/kernel-core/vms_mscp_cl_conn_fsm.c src/kernel-core/vms_mscp_cl_conn_fsm.h src/kernel-core/vms_mscp_cl.c src/kernel-core/vms_mscp_cl.h /netbsd/guest-src/kernel-core/
 # rd vms-1ee: the lock manager's WIRE ARM -- the binding that joins the lock
 # engine's requester/master seams to the connection manager's cat-0x02 traffic.
-COPY src/kernel-core/vms_cluster_codec_dlm.c src/kernel-core/vms_cluster_codec_dlm.h src/kernel-core/vms_dlm_scs_fsm.c src/kernel-core/vms_dlm_scs_fsm.h src/kernel-core/vms_dlm_rm_fsm.c src/kernel-core/vms_dlm_rm_fsm.h src/kernel-core/vms_dlm_scs.c src/kernel-core/vms_dlm_master.h src/kernel-core/vms_dlm_adopt.h /netbsd/guest-src/kernel-core/
+COPY src/kernel-core/vms_cluster_codec_dlm.c src/kernel-core/vms_cluster_codec_dlm.h src/kernel-core/vms_dlm_scs_fsm.c src/kernel-core/vms_dlm_scs_fsm.h src/kernel-core/vms_dlm_rm_fsm.c src/kernel-core/vms_dlm_rm_fsm.h src/kernel-core/vms_dlm_scs.c src/kernel-core/vms_dlm_master.h src/kernel-core/vms_dlm_master_wire.h src/kernel-core/vms_dlm_adopt.h /netbsd/guest-src/kernel-core/
 COPY src/kernel-netbsd/vms_lan_netbsd.c /netbsd/guest-src/kmod/vms_lan_netbsd.c
 # FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
 # seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under

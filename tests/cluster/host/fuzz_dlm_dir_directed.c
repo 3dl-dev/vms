@@ -185,5 +185,127 @@ int main(void)
 			"fuzz-b4d: an undirected name with no entry is never answered you-master-it");
 	ct_check_eq_u32(recorded_undirected, 0u,
 			"fuzz-b4d: an undirected lookup records nothing");
+
+	/*
+	 * rd vms-966e: THE LOOKUP THE VECTOR DIRECTS AT THE REQUESTER ITSELF --
+	 * a real VAX's op-0x01 that arrives mid-transition under the vector the
+	 * join replaced. Random bodies and random table state, directed =
+	 * VMS_DLM_DIR_AT_REQUESTER: answered YOU only from an entry naming the
+	 * requester, never recorded, and every other table state answered
+	 * exactly as an undirected lookup is.
+	 */
+	{
+		uint32_t at_you = 0, at_refused = 0, at_viol = 0, at_rec = 0;
+		uint32_t else_you = 0;
+
+		srand(0x966e);
+		(void)vms_dlm_dir_init(&g_dir, g_store, DIR_CAP);
+		for (i = 0; i < FZ_ITERS; i++) {
+			struct vms_dlm_res_ident id;
+			const struct vms_dlm_dir_entry *e;
+			vms_csid_t requester, master = 0u, before = 0u;
+			uint32_t n, used_before, written = 0;
+			enum vms_dlm_dir_outcome o;
+			int had, k, dv;
+			uint8_t *b;
+
+			if (i % 1024 == 0)
+				(void)vms_dlm_dir_init(&g_dir, g_store, DIR_CAP);
+			n = (rand() % 8 == 0) ? fz_len(VMS_CM_BODY_LEN + 8u) :
+						VMS_CM_BODY_LEN;
+			if (n > sizeof(scratch))
+				n = sizeof(scratch);
+			if (rand() % 4 != 0 && n <= VMS_CM_BODY_LEN) {
+				memcpy(scratch, g_seed, n);
+				for (k = rand() % 4; k > 0 && n != 0u; k--)
+					scratch[rand() % n] ^=
+						(uint8_t)(1 + rand() % 255);
+			} else {
+				fz_fill(scratch, n);
+			}
+			b = fz_exact(scratch, n);
+			if (b == NULL)
+				continue;
+			if (vms_dlm_res_ident_parse_body(b, n, &id) !=
+			    VMS_CODEC_OK) {
+				/* An unparsable body never reaches the table;
+				 * the table must still refuse a NULL identity. */
+				if (vms_dlm_dir_lookup_directed(&g_dir, NULL,
+						pick_csid(), CSID_SELF,
+						VMS_DLM_DIR_AT_REQUESTER,
+						&master) !=
+				    VMS_DLM_DIR_ANSWER_NONE)
+					at_viol++;
+				free(b);
+				continue;
+			}
+			requester = pick_csid();
+			/* r3/r5: the vector names the requester; r10: a third
+			 * member. The table's answer must not depend on which. */
+			dv = (rand() & 1) ? VMS_DLM_DIR_AT_REQUESTER :
+					    VMS_DLM_DIR_ELSEWHERE;
+			switch (rand() % 4) {
+			case 0: break;
+			case 1: if (requester != 0u)
+					(void)vms_dlm_dir_register(&g_dir, &id,
+								   requester);
+				break;
+			case 2: (void)vms_dlm_dir_register(&g_dir, &id,
+							   pick_csid());
+				break;
+			default: (void)vms_dlm_dir_claim_self(&g_dir, &id,
+							      CSID_SELF);
+				break;
+			}
+			e = vms_dlm_dir_find(&g_dir, &id);
+			had = e != NULL;
+			before = had ? e->master : 0u;
+			used_before = g_dir.used;
+
+			o = vms_dlm_dir_lookup_directed(&g_dir, &id, requester,
+							CSID_SELF, dv, &master);
+			if (g_dir.used != used_before)
+				at_rec++;
+			if (requester != 0u && had && before == requester) {
+				if (o != VMS_DLM_DIR_ANSWER_YOU ||
+				    master != requester)
+					at_viol++;
+				else if (dv == VMS_DLM_DIR_ELSEWHERE)
+					else_you++;
+				else
+					at_you++;
+			} else if (o == VMS_DLM_DIR_ANSWER_YOU) {
+				at_viol++;
+			} else if (o == VMS_DLM_DIR_ANSWER_NONE) {
+				at_refused++;
+			}
+			if (o == VMS_DLM_DIR_ANSWER_YOU) {
+				memset(tx, 0, sizeof(tx));
+				(void)vms_dlm_dir_answer_build(b, n,
+					VMS_DLM_DIR_YOU_MASTER,
+					(uint32_t)master, tx,
+					(uint32_t)sizeof(tx), &written);
+			}
+			free(b);
+		}
+		printf("  at-requester: YOU %u, elsewhere: YOU %u, refused %u\n",
+		       at_you, else_you, at_refused);
+		ct_check(at_you > 0u,
+			 "fuzz-966e: an entry naming the requester is answered "
+			 "you-master-it when the requester is its own directory");
+		ct_check(else_you > 0u,
+			 "fuzz-966e-r10: an entry naming the requester is "
+			 "answered you-master-it when the vector names a THIRD "
+			 "member");
+		ct_check(at_refused > 0u,
+			 "fuzz-966e: at-requester lookups with no such entry "
+			 "really occur");
+		ct_check_eq_u32(at_viol, 0u,
+				"fuzz-966e: at the requester, you-master-it "
+				"comes ONLY from an entry naming it");
+		ct_check_eq_u32(at_rec, 0u,
+				"fuzz-966e: an at-requester lookup records "
+				"nothing");
+	}
 	return ct_summary("fuzz_dlm_dir_directed");
 }

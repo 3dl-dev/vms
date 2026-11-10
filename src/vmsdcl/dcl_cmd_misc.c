@@ -6,6 +6,8 @@
  * MOUNT, DISMOUNT, EDIT, ATTACH, CONVERT, INSTALL, LINK, PHONE, PRODUCT
  */
 
+#include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +48,7 @@
 #include "dcl/help.h"
 #include "dcl/dcl_rms.h"     /* dcl_rms_read_* -- the HELP ACP read seam (vms-4ac) */
 #include "rms_textfile.h"    /* rms_textfile_* -- RMS text I/O over the Files-11 ACP (vms-274) */
+#include "../vmstcpip/services/tcpip_qio.h"   /* tcpip_qiow: one $QIOW on a BGn: channel (SHOW INTERFACE, vms-99f) */
 #include "../vmstcpip/mgmt/tcpip_service_db.h" /* TCPIP {SET,SHOW,ENABLE,DISABLE,DELETE} SERVICE engine (#878, vms-71b) */
 #include "ssdef.h"
 #include "climsgdef.h"
@@ -56,11 +59,14 @@
 #include "opcdef.h"
 #include "ovmx_accounting.h"
 #include "starlet.h"
+#include "iodef.h"       /* IO$_SENSEMODE / IO$K_BG_SENSE_IFLIST (SHOW INTERFACE, vms-99f) */
+#include "descrip.h"
 #include "ovmx_identity.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/device.h"
 #include "ovmx_layout.h"
 #include "vms_kif.h"
+#include "ovmx_status.h"    /* vms_status_string: TELNET-E-NOCONN secondary */
 
 /* TELNET / FTP client engines (vms-dbb) -- the SAME header the QEMU proof
  * (tests/qemu/test_syssvc_tcpip_client.c) drives, so the shipped verb and the
@@ -138,8 +144,8 @@ static void diff_emit(struct diff_out *o, const char *s)
     if (o->w) {
         dcl_rms_write_record(o->w, s, strlen(s));
     } else {
-        fputs(s, stdout);            /* SYS$OUTPUT, as every DCL verb writes it */
-        fputc('\n', stdout);
+        dcl_out_fputs(s);            /* SYS$OUTPUT, as every DCL verb writes it */
+        dcl_out_putc('\n');
     }
 }
 
@@ -260,7 +266,7 @@ static void diff_openin(struct dcl_context *ctx, const char *param, uint32_t rst
                                  char *, size_t);
     char full[1100];
     dcl_message_spec(ctx, param, NULL, full, sizeof full);
-    fflush(stdout);   /* the message follows whatever SYS$OUTPUT already has */
+    dcl_out_flush();   /* the message follows whatever SYS$OUTPUT already has */
     dcl_error("DIFF", 4, "OPENIN", "error opening %s as input", full);
     /* the reason, on its own line, as RMS words it */
     char txt[256];
@@ -273,7 +279,7 @@ static void diff_openin(struct dcl_context *ctx, const char *param, uint32_t rst
     if (sys$getmsg(rst ? rst : RMS$_FNF, &tl, &md, 15, NULL) & 1) {
         txt[tl] = '\0';
         if (txt[0] == '%') txt[0] = '-';
-        fprintf(stderr, "%s\n", txt);
+        dcl_err_printf("%s\n", txt);
     }
 }
 
@@ -378,7 +384,7 @@ int cmd_differences(struct dcl_command *cmd)
             else if (tl && strncmp(t, "BLANK_LINES", tl) == 0) { full = "BLANK_LINES"; ign_blank = 1; }
             else {
                 dcl_error("CLI", 0, "IVKEYW", "unrecognized keyword - check validity and spelling");
-                fprintf(stderr, " \\%s\\\n", t);
+                dcl_err_printf(" \\%s\\\n", t);
                 return 0x00038060u | 0x10000000u;
             }
             size_t il = strlen(ignlist);
@@ -401,7 +407,7 @@ int cmd_differences(struct dcl_command *cmd)
             return DIFF_ST_OPENIN;
         }
         if (!diff_resolve(ctx, cmd->params[0], 1, fb.spec, sizeof fb.spec)) {
-            fflush(stdout);
+            dcl_out_flush();
             dcl_error("DIF", 4, "NOLOWVER", "no lower version of file %s found", fa.spec);
             return DIFF_ST_NOLOWVER;
         }
@@ -787,8 +793,8 @@ int cmd_dump(struct dcl_command *cmd)
         vms_name[i] = (char)toupper((unsigned char)bn[i]);
     vms_name[i] = '\0';
 
-    printf("\nDump of file SYS$DISK:[]%s;1\n\n", vms_name);
-    printf("File ID (0,0,0)  End of file block 0  Offset 0\n\n");
+    dcl_out_printf("\nDump of file SYS$DISK:[]%s;1\n\n", vms_name);
+    dcl_out_printf("File ID (0,0,0)  End of file block 0  Offset 0\n\n");
 
     uint64_t offset = 0;
     long block = 0;
@@ -802,40 +808,40 @@ int cmd_dump(struct dcl_command *cmd)
             if (offset > 0 && offset % 512 == 0) {
                 block++;
                 if (max_blocks > 0 && block >= max_blocks) break;
-                printf("\nVirtual block number %ld (00000%02lX), 512 (0200) bytes\n\n",
+                dcl_out_printf("\nVirtual block number %ld (00000%02lX), 512 (0200) bytes\n\n",
                        block + 1, block * 512);
             } else if (in_block_start) {
-                printf("Virtual block number 1 (00000000), 512 (0200) bytes\n\n");
+                dcl_out_printf("Virtual block number 1 (00000000), 512 (0200) bytes\n\n");
                 in_block_start = 0;
             }
         }
 
         /* Print offset (VMS style: relative to start of current block) */
         long block_offset = (long)(offset % 512);
-        printf("%08lX ", block_offset);
+        dcl_out_printf("%08lX ", block_offset);
 
         /* Hex bytes (4 groups of 4, space between) */
         for (size_t j = 0; j < 16; j++) {
-            if (j > 0 && j % 4 == 0) printf(" ");
+            if (j > 0 && j % 4 == 0) dcl_out_printf(" ");
             if (j < n)
-                printf("%02X", buf[j]);
+                dcl_out_printf("%02X", buf[j]);
             else
-                printf("  ");
+                dcl_out_printf("  ");
         }
 
-        printf("  ");
+        dcl_out_printf("  ");
 
         /* ASCII */
         for (size_t j = 0; j < n; j++) {
-            printf("%c", isprint(buf[j]) ? buf[j] : '.');
+            dcl_out_printf("%c", isprint(buf[j]) ? buf[j] : '.');
         }
-        printf("\n");
+        dcl_out_printf("\n");
 
         offset += n;
     }
 
     free(data);
-    printf("\n");
+    dcl_out_printf("\n");
 
     return SS$_NORMAL;
 }
@@ -965,15 +971,7 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
         return srt;
 
     uint32_t status = SS$_NORMAL;
-    int pcb_hold[2];
-    if (dcl_pcb_hold_open(pcb_hold) != 0) {
-        dcl_error("DCL", 4, "CREPRC", "cannot create process for %s", facility);
-        dcl_sysinput_restore(&si);
-        return SS$_INSFMEM;
-    }
-    pid_t pid = fork();
-    if (pid != 0)
-        (void)dcl_pcb_hold_release(pcb_hold, (int)pid);
+    pid_t pid = dcl_image_fork(VMS_CREPRC_PCB_CONTINUE);
     if (pid == 0) {
         /* A SYS$SYSTEM utility (MAIL, SYSGEN, INSTALL, ...) is an image the
          * CLI runs IN ITS OWN PROCESS on VMS: DCL makes this task its own VMS
@@ -981,12 +979,11 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
          * exactly as RUN's fork path does (dcl_activate_image, rd vms-e50).
          * Without it the image auto-registers a fresh PCB with no user name,
          * and MAIL -- which asks the executive whose mailbox to open -- exits
-         * at once. */
-        dcl_pcb_hold_wait(pcb_hold);
+         * at once. dcl_image_fork made it so before releasing this task. */
         if (bin)
             execv(bin, argv);
         execvp(exe_name, argv);
-        fprintf(stderr, "%%%s-F-NOIMG, cannot execute %s\n", facility, exe_name);
+        dcl_err_printf("%%%s-F-NOIMG, cannot execute %s\n", facility, exe_name);
         _exit(1);
     } else if (pid > 0) {
         extern volatile sig_atomic_t dcl_running_child;
@@ -995,7 +992,7 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
         waitpid(pid, &wstatus, WUNTRACED);
         dcl_running_child = 0;
         if (WIFSTOPPED(wstatus)) {
-            printf("\nInterrupt\n");
+            dcl_out_printf("\nInterrupt\n");
             ctx->interrupted_pid = pid;
             status = SS$_ABORT;
         } else if (WIFEXITED(wstatus)) {
@@ -1226,7 +1223,7 @@ int cmd_reply(struct dcl_command *cmd)
         if (cls && cls[0]) {
             strncpy(detail, cls, sizeof(detail) - 1);
         }
-        printf("%%OPCOM-I-OPRENA, operator %s enabled for %s class messages\n",
+        dcl_out_printf("%%OPCOM-I-OPRENA, operator %s enabled for %s class messages\n",
                username, detail);
 
         msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_ENABLE;
@@ -1238,7 +1235,7 @@ int cmd_reply(struct dcl_command *cmd)
         sys$sndopr(&desc, 0);
 
     } else if (dcl_has_qualifier(cmd, "DISABLE")) {
-        printf("%%OPCOM-I-OPRDIS, operator %s disabled\n", username);
+        dcl_out_printf("%%OPCOM-I-OPRDIS, operator %s disabled\n", username);
 
         msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_DISABLE;
         OPC$SET_TARGET(msgbuf.hdr, OPC$M_NM_CENTRL);
@@ -1253,7 +1250,7 @@ int cmd_reply(struct dcl_command *cmd)
         const char *to_val = dcl_qualifier_value(cmd, "TO");
         const char *reply_text = (cmd->param_count >= 1) ? cmd->params[0] : "";
 
-        printf("%%OPCOM-I-REPLY, reply sent to request %s: %s\n",
+        dcl_out_printf("%%OPCOM-I-REPLY, reply sent to request %s: %s\n",
                to_val ? to_val : "?", reply_text);
 
         msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_REPLY;
@@ -1331,7 +1328,7 @@ int cmd_reply(struct dcl_command *cmd)
             dcl_error("SYSTEM", 0, "NONEXPR", "nonexistent process");
             return SS$_NONEXPR;
         }
-        fprintf(stderr, "User %s has been notified on %s.\n", whoU, node);
+        dcl_err_printf("User %s has been notified on %s.\n", whoU, node);
     } else {
         dcl_error("DCL", 2, "SYNTAX",
                   "REPLY requires /ENABLE, /DISABLE, or /TO qualifier");
@@ -1386,7 +1383,7 @@ int cmd_request(struct dcl_command *cmd)
         return (int)status;
     }
 
-    printf("%%OPCOM-I-RQSTPEND, request sent to operator: %s\n", msg_text);
+    dcl_out_printf("%%OPCOM-I-RQSTPEND, request sent to operator: %s\n", msg_text);
     return SS$_NORMAL;
 }
 
@@ -1419,20 +1416,20 @@ int cmd_accounting(struct dcl_command *cmd)
     time_t last_login = 0;
     int found = (ovmx_accounting_get_lastlogin(username, &last_login) == 0);
 
-    printf("\n  OVMX Accounting for user %s\n", username);
-    printf("  %s\n\n", "----------------------------------------");
+    dcl_out_printf("\n  OVMX Accounting for user %s\n", username);
+    dcl_out_printf("  %s\n\n", "----------------------------------------");
 
     if (found && last_login > 0) {
         struct tm tm;
         localtime_r(&last_login, &tm);
-        printf("  Last interactive login: %02d-%s-%04d %02d:%02d:%02d\n",
+        dcl_out_printf("  Last interactive login: %02d-%s-%04d %02d:%02d:%02d\n",
                tm.tm_mday, months[tm.tm_mon], 1900 + tm.tm_year,
                tm.tm_hour, tm.tm_min, tm.tm_sec);
     } else {
-        printf("  Last interactive login: (no previous login recorded)\n");
+        dcl_out_printf("  Last interactive login: (no previous login recorded)\n");
     }
 
-    printf("\n");
+    dcl_out_printf("\n");
     return SS$_NORMAL;
 }
 
@@ -1861,10 +1858,10 @@ int cmd_help(struct dcl_command *cmd)
     }
     if (prompting) {
         help_set_reader(dcl_tt_read_line);
-        help_interactive(lib, path, npath, stdin, stdout);
+        help_interactive(lib, path, npath, stdin, dcl_out_stream());
         help_set_reader(NULL);
     } else {
-        status = help_render(lib, path, npath, stdout);
+        status = help_render(lib, path, npath, dcl_out_stream());
     }
 
     help_close(lib);
@@ -1980,7 +1977,7 @@ int cmd_recall(struct dcl_command *cmd)
 
     if (dcl_has_qualifier(cmd, "ALL")) {
         for (int k = 1; k <= dcl_recall_count; k++)
-            printf("%3d %s\n", k, dcl_recall_ring[dcl_recall_count - k]);
+            dcl_out_printf("%3d %s\n", k, dcl_recall_ring[dcl_recall_count - k]);
         return SS$_NORMAL;
     }
 
@@ -2047,26 +2044,101 @@ static const char *tcpip_map_interface(const char *linux_name,
 }
 
 /*
- * Build a mapping table of Linux interface names → VMS device names.
- * Scans /sys/class/net/ to enumerate interfaces.
+ * Build a mapping table of substrate interface names -> VMS device names, from
+ * the EXECUTIVE'S interface list (rd vms-99f): $ASSIGN a BGn: channel, create
+ * its socket (IO$_SETMODE), and ask the executive for the interfaces of the
+ * network stack that socket lives in (IO$_SENSEMODE interface list,
+ * IO$K_BG_SENSE_IFLIST) -- the TCP/IP Services way, never /sys/class/net, a host
+ * socket or SIOCGIF* from this process. Each entry carries the executive's live
+ * values (flags, MTU, IPv4 address/mask, link-layer address). Returns the count;
+ * *status gets the VMS status (SS$_NOSUCHDEV with no executive -- no listing).
  */
-#define TCPIP_MAX_IFACES 32
+#define TCPIP_MAX_IFACES VMS_BG_IFLIST_MAX
 
 struct tcpip_ifmap {
     char linux_name[IFNAMSIZ];
     char vms_name[16];
+    struct vms_bg_ifent ent;
 };
 
-static int tcpip_build_ifmap(struct tcpip_ifmap *map, int max_entries)
+static int tcpip_ifent_cmp(const void *a, const void *b)
+{
+    return strcmp(((const struct vms_bg_ifent *)a)->name,
+                  ((const struct vms_bg_ifent *)b)->name);
+}
+
+static int tcpip_build_ifmap(struct tcpip_ifmap *map, int max_entries,
+                             uint32_t *status)
+{
+    struct vms_bg_ifent ents[VMS_BG_IFLIST_MAX];
+    uint16_t chan = 0;
+    uint32_t count = 0, st;
+
+    static const char devname[] = "TCPIP$DEVICE:";
+    struct dsc$descriptor_s dev;
+    struct _iosb iosb;
+
+    memset(ents, 0, sizeof(ents));
+    dev.dsc$w_length  = (uint16_t)(sizeof(devname) - 1);
+    dev.dsc$b_dtype   = DSC$K_DTYPE_T;
+    dev.dsc$b_class   = DSC$K_CLASS_S;
+    dev.dsc$a_pointer = (char *)devname;
+    st = sys$assign(&dev, &chan, 0, NULL);                 /* $ASSIGN TCPIP$DEVICE: */
+    if (st & 1) {
+        memset(&iosb, 0, sizeof(iosb));
+        uint32_t st2 = tcpip_qiow(chan, IO$_SETMODE, &iosb, NULL, 0, 0);
+        if (st2 & 1) {
+            memset(&iosb, 0, sizeof(iosb));
+            st2 = tcpip_qiow(chan, IO$_SENSEMODE, &iosb, ents,
+                             (uint32_t)sizeof(ents), IO$K_BG_SENSE_IFLIST);
+            if (st2 & 1)
+                count = iosb.iosb$w_bcnt;
+        }
+        (void)sys$dassgn(chan);
+        st = st2;
+    }
+    if (status) *status = st;
+    if (!(st & 1))
+        return 0;
+
+    /* Sort for stable ordering (the VMS unit numbers follow it) */
+    qsort(ents, (size_t)count, sizeof(ents[0]), tcpip_ifent_cmp);
+
+    /* Map names */
+    int se_idx = 0, ew_idx = 0, tn_idx = 0, xx_idx = 0;
+    int n = (count < (uint32_t)max_entries) ? (int)count : max_entries;
+    for (int i = 0; i < n; i++) {
+        ents[i].name[sizeof(ents[i].name) - 1] = '\0';
+        map[i].ent = ents[i];
+        strncpy(map[i].linux_name, ents[i].name, IFNAMSIZ - 1);
+        map[i].linux_name[IFNAMSIZ - 1] = '\0';
+        const char *vn = tcpip_map_interface(ents[i].name,
+                                              &se_idx, &ew_idx,
+                                              &tn_idx, &xx_idx);
+        strncpy(map[i].vms_name, vn, sizeof(map[i].vms_name) - 1);
+        map[i].vms_name[sizeof(map[i].vms_name) - 1] = '\0';
+    }
+    return n;
+}
+
+/*
+ * SHOW ROUTE's name map (UNCHANGED by rd vms-99f, which moved only SHOW/SET
+ * INTERFACE onto the executive's list): SHOW ROUTE still reads the substrate's
+ * /proc/net/route and maps its interface names by a /sys/class/net scan --
+ * Linux-substrate introspection, disclosed in the dcl-tcpip-verb register row.
+ * Moving the routing table into the executive is a separate follow-on.
+ */
+#define TCPIP_ROUTE_MAX_IFACES 32
+
+static int tcpip_build_route_ifmap(struct tcpip_ifmap *map, int max_entries)
 {
     DIR *d = opendir("/sys/class/net");
     if (!d) return 0;
 
-    /* First pass: collect interface names */
-    char names[TCPIP_MAX_IFACES][IFNAMSIZ];
+    char names[TCPIP_ROUTE_MAX_IFACES][IFNAMSIZ];
     int count = 0;
     struct dirent *ent;
-    while ((ent = readdir(d)) != NULL && count < TCPIP_MAX_IFACES) {
+    while ((ent = readdir(d)) != NULL && count < TCPIP_ROUTE_MAX_IFACES) {
         if (ent->d_name[0] == '.') continue;
         strncpy(names[count], ent->d_name, IFNAMSIZ - 1);
         names[count][IFNAMSIZ - 1] = '\0';
@@ -2074,17 +2146,15 @@ static int tcpip_build_ifmap(struct tcpip_ifmap *map, int max_entries)
     }
     closedir(d);
 
-    /* Sort for stable ordering */
     qsort(names, (size_t)count, IFNAMSIZ, (int(*)(const void *, const void *))strcmp);
 
-    /* Map names */
     int se_idx = 0, ew_idx = 0, tn_idx = 0, xx_idx = 0;
     int n = (count < max_entries) ? count : max_entries;
     for (int i = 0; i < n; i++) {
+        memset(&map[i].ent, 0, sizeof(map[i].ent));
         strncpy(map[i].linux_name, names[i], IFNAMSIZ - 1);
         map[i].linux_name[IFNAMSIZ - 1] = '\0';
-        const char *vn = tcpip_map_interface(names[i],
-                                              &se_idx, &ew_idx,
+        const char *vn = tcpip_map_interface(names[i], &se_idx, &ew_idx,
                                               &tn_idx, &xx_idx);
         strncpy(map[i].vms_name, vn, sizeof(map[i].vms_name) - 1);
         map[i].vms_name[sizeof(map[i].vms_name) - 1] = '\0';
@@ -2122,86 +2192,58 @@ static const char *tcpip_lookup_linux_name(const struct tcpip_ifmap *map,
 
 /*
  * TCPIP SHOW INTERFACE [/FULL] - Display network interfaces with VMS names.
+ * Every value is the executive's (tcpip_build_ifmap above); with no executive
+ * the command fails honestly (%TCPIP-E-NOEXEC, SS$_NOSUCHDEV) -- it never falls
+ * back to listing the host's interfaces.
  */
 static int cmd_tcpip_show_interface(struct dcl_command *cmd)
 {
     struct tcpip_ifmap ifmap[TCPIP_MAX_IFACES];
-    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES);
+    uint32_t st = 0;
+    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES, &st);
 
     int full = dcl_has_qualifier(cmd, "FULL");
 
-    printf("\n");
-    printf("%-12s%-17s%-17s%-7s%s\n",
+    if (st == SS$_NOSUCHDEV) {
+        dcl_out_printf("%%TCPIP-E-NOEXEC, executive absent -- the interface list cannot be read\n");
+        return SS$_NOSUCHDEV;
+    }
+    if (!(st & 1)) {
+        dcl_out_printf("%%TCPIP-E-IFLIST, cannot read the interface list from the executive (status %u)\n",
+               (unsigned)st);
+        return (int)st;
+    }
+
+    dcl_out_printf("\n");
+    dcl_out_printf("%-12s%-17s%-17s%-7s%s\n",
            "Interface", "IP Address", "Network Mask", "MTU", "State");
 
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        printf("%%TCPIP-E-SOCKERR, cannot open socket\n");
-        return SS$_BADPARAM;
-    }
-
     for (int i = 0; i < ifcount; i++) {
-        struct ifreq ifr;
-        memset(&ifr, 0, sizeof(ifr));
-        strncpy(ifr.ifr_name, ifmap[i].linux_name, IFNAMSIZ - 1);
+        const struct vms_bg_ifent *e = &ifmap[i].ent;
+        struct in_addr a;
 
-        /* IP address */
+        /* IP address / netmask: "*" when the interface has no IPv4 address */
         char ip_str[INET_ADDRSTRLEN] = "*";
-        if (ioctl(sock, SIOCGIFADDR, &ifr) == 0) {
-            struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
-            inet_ntop(AF_INET, &addr->sin_addr, ip_str, sizeof(ip_str));
-        }
-
-        /* Netmask */
         char mask_str[INET_ADDRSTRLEN] = "*";
-#if defined(__linux__)
-        /* SIOCGIFNETMASK returns the mask in the ifr_netmask union member on
-         * Linux. NetBSD's struct ifreq has no ifr_netmask; the OVMX TCP/IP
-         * engine is the Linux substrate (vms-67f, AF_INET). On netbsd-vax the
-         * netmask readout is not wired here -- shown honestly as "*" rather
-         * than fabricated. */
-        if (ioctl(sock, SIOCGIFNETMASK, &ifr) == 0) {
-            struct sockaddr_in *mask = (struct sockaddr_in *)&ifr.ifr_netmask;
-            inet_ntop(AF_INET, &mask->sin_addr, mask_str, sizeof(mask_str));
-        }
-#endif
-
-        /* MTU */
-        int mtu = 0;
-        if (ioctl(sock, SIOCGIFMTU, &ifr) == 0) {
-            mtu = ifr.ifr_mtu;
+        if (e->addr != 0) {
+            a.s_addr = e->addr;
+            inet_ntop(AF_INET, &a, ip_str, sizeof(ip_str));
+            a.s_addr = e->mask;
+            inet_ntop(AF_INET, &a, mask_str, sizeof(mask_str));
         }
 
-        /* Flags (up/down) */
-        const char *state = "Down";
-        if (ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
-            if (ifr.ifr_flags & IFF_UP)
-                state = "Up";
-        }
+        dcl_out_printf("%-12s%-17s%-17s%-7d%s\n",
+               ifmap[i].vms_name, ip_str, mask_str, (int)e->mtu,
+               (e->flags & IFF_UP) ? "Up" : "Down");
 
-        printf("%-12s%-17s%-17s%-7d%s\n",
-               ifmap[i].vms_name, ip_str, mask_str, mtu, state);
-
-#if defined(__linux__)
-        /* SIOCGIFHWADDR + ifr_hwaddr are Linux-only (NetBSD reads the link-layer
-         * address via getifaddrs/AF_LINK, not an ifreq ioctl). The Linux
-         * substrate is the OVMX TCP/IP engine (vms-67f); on netbsd-vax the
-         * /FULL hardware-address line is simply omitted -- honest, not faked. */
-        if (full) {
-            /* Show hardware address */
-            if (ioctl(sock, SIOCGIFHWADDR, &ifr) == 0) {
-                unsigned char *hw = (unsigned char *)ifr.ifr_hwaddr.sa_data;
-                printf("             Hardware address: %02X-%02X-%02X-%02X-%02X-%02X\n",
-                       hw[0], hw[1], hw[2], hw[3], hw[4], hw[5]);
-            }
+        if (full && e->hwlen == 6) {
+            dcl_out_printf("             Hardware address: %02X-%02X-%02X-%02X-%02X-%02X\n",
+                   e->hwaddr[0], e->hwaddr[1], e->hwaddr[2],
+                   e->hwaddr[3], e->hwaddr[4], e->hwaddr[5]);
         }
-#else
-        (void)full;
-#endif
     }
 
-    close(sock);
-    printf("\n");
+    dcl_out_printf("\n");
     return SS$_NORMAL;
 }
 
@@ -2212,17 +2254,17 @@ static int cmd_tcpip_show_route(struct dcl_command *cmd)
 {
     (void)cmd;
 
-    struct tcpip_ifmap ifmap[TCPIP_MAX_IFACES];
-    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES);
+    struct tcpip_ifmap ifmap[TCPIP_ROUTE_MAX_IFACES];
+    int ifcount = tcpip_build_route_ifmap(ifmap, TCPIP_ROUTE_MAX_IFACES);
 
     FILE *fp = fopen("/proc/net/route", "r");
     if (!fp) {
-        printf("%%TCPIP-E-NOROUTE, cannot read routing table\n");
+        dcl_out_printf("%%TCPIP-E-NOROUTE, cannot read routing table\n");
         return SS$_BADPARAM;
     }
 
-    printf("\n");
-    printf("%-17s%-17s%-17s%s\n",
+    dcl_out_printf("\n");
+    dcl_out_printf("%-17s%-17s%-17s%s\n",
            "Destination", "Gateway", "Mask", "Interface");
 
     char line[256];
@@ -2277,11 +2319,11 @@ static int cmd_tcpip_show_route(struct dcl_command *cmd)
         /* VMS interface name */
         const char *vms_iface = tcpip_lookup_vms_name(ifmap, ifcount, iface);
 
-        printf("%-17s%-17s%-17s%s\n", dest_str, gw_str, mask_str, vms_iface);
+        dcl_out_printf("%-17s%-17s%-17s%s\n", dest_str, gw_str, mask_str, vms_iface);
     }
 
     fclose(fp);
-    printf("\n");
+    dcl_out_printf("\n");
     return SS$_NORMAL;
 }
 
@@ -2325,7 +2367,7 @@ static int tcpip_print_hosts_from_file(const char *path,
         if (sscanf(p, "%127s %255s", addr, hostname) >= 2) {
             if (count < TCPIP_MAX_HOST_ENTRIES &&
                 !tcpip_host_already_shown(shown, count, addr, hostname)) {
-                printf("%-16s%s\n", addr, hostname);
+                dcl_out_printf("%-16s%s\n", addr, hostname);
                 strncpy(shown[count].addr, addr, sizeof(shown[count].addr) - 1);
                 strncpy(shown[count].name, hostname, sizeof(shown[count].name) - 1);
                 count++;
@@ -2361,7 +2403,7 @@ static int tcpip_print_hosts_from_vms_store(struct tcpip_host_entry *shown,
         if (sscanf(p, "%127s %255s", addr, hostname) >= 2) {
             if (count < TCPIP_MAX_HOST_ENTRIES &&
                 !tcpip_host_already_shown(shown, count, addr, hostname)) {
-                printf("%-16s%s\n", addr, hostname);
+                dcl_out_printf("%-16s%s\n", addr, hostname);
                 strncpy(shown[count].addr, addr, sizeof(shown[count].addr) - 1);
                 strncpy(shown[count].name, hostname, sizeof(shown[count].name) - 1);
                 count++;
@@ -2375,8 +2417,8 @@ static int tcpip_print_hosts_from_vms_store(struct tcpip_host_entry *shown,
 static int cmd_tcpip_show_host(struct dcl_command *cmd)
 {
     (void)cmd;
-    printf("\n");
-    printf("%-16s%s\n", "Host address", "Host name");
+    dcl_out_printf("\n");
+    dcl_out_printf("%-16s%s\n", "Host address", "Host name");
 
     struct tcpip_host_entry *shown = calloc(TCPIP_MAX_HOST_ENTRIES,
                                              sizeof(struct tcpip_host_entry));
@@ -2387,7 +2429,7 @@ static int cmd_tcpip_show_host(struct dcl_command *cmd)
         free(shown);
     }
 
-    printf("\n");
+    dcl_out_printf("\n");
     return SS$_NORMAL;
 }
 
@@ -2397,7 +2439,7 @@ static int cmd_tcpip_show_host(struct dcl_command *cmd)
 static int cmd_tcpip_show_version(struct dcl_command *cmd)
 {
     (void)cmd;
-    printf("OVMX TCP/IP Services %s\n", ovmx_product_version());
+    dcl_out_printf("OVMX TCP/IP Services %s\n", ovmx_product_version());
     return SS$_NORMAL;
 }
 
@@ -2457,12 +2499,12 @@ static int cmd_tcpip_set_host(struct dcl_command *cmd)
     if (!host_db_ok) {
         /* The VMS host database could not be written (no executive / no mounted
          * ACP volume). Report it honestly rather than claim the host was added. */
-        printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$HOST.DAT not updated "
+        dcl_out_printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$HOST.DAT not updated "
                "(host \"%s\" not persisted to the VMS host database)\n", hostname);
         return SS$_ABORT;
     }
 
-    printf("%%TCPIP-I-INFO, host \"%s\" added\n", hostname);
+    dcl_out_printf("%%TCPIP-I-INFO, host \"%s\" added\n", hostname);
     return SS$_NORMAL;
 }
 
@@ -2521,11 +2563,11 @@ static int cmd_tcpip_set_name_service(struct dcl_command *cmd)
     }
 
     if (!ns_db_ok) {
-        printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$NAMESERVICE.DAT not "
+        dcl_out_printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$NAMESERVICE.DAT not "
                "recorded (name service not persisted to the VMS database)\n");
         return SS$_ABORT;
     }
-    printf("%%TCPIP-I-INFO, name service configured\n");
+    dcl_out_printf("%%TCPIP-I-INFO, name service configured\n");
     return SS$_NORMAL;
 }
 
@@ -2564,10 +2606,15 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
 
     /* Map VMS device name to Linux interface */
     struct tcpip_ifmap ifmap[TCPIP_MAX_IFACES];
-    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES);
+    uint32_t ifst = 0;
+    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES, &ifst);
     const char *linux_if = tcpip_lookup_linux_name(ifmap, ifcount, ifname);
 
-    if (!linux_if) {
+    /* No executive: the interface list (and so the device name) cannot be
+     * resolved, and nothing can be applied -- say so, then persist as before. */
+    if (ifst == SS$_NOSUCHDEV) {
+        dcl_out_printf("%%TCPIP-W-NOSUCHDEV, the executive is not present -- the interface cannot be configured\n");
+    } else if (!linux_if) {
         dcl_error("TCPIP", 2, "NOSUCHDEV",
                   "unknown interface - \\%s\\", ifname);
         return SS$_BADPARAM;
@@ -2578,7 +2625,7 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
      * executive performs it as the kernel; no OVMX process holds the
      * substrate's CAP_NET_ADMIN. Each request is the substrate's own
      * struct ifreq. Without the privilege the setting is only persisted. */
-    {
+    if (linux_if) {
         struct ifreq ifr;
         int err = 0;
         uint32_t st;
@@ -2591,15 +2638,15 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
         st = vms_kif_netcfg(VMS_NETCFG_SET_IFADDR, &ifr, &err);
         if (st == SS$_NOPRIV) {
             /* As VMS: %SYSTEM-E-NOPRIV, and nothing is recorded (rd vms-ec6). */
-            printf("%%SYSTEM-E-NOPRIV, insufficient privilege or object protection violation\n");
+            dcl_out_printf("%%SYSTEM-E-NOPRIV, insufficient privilege or object protection violation\n");
             return SS$_NOPRIV;
         } else if (st == SS$_NOSUCHDEV) {
-            printf("%%TCPIP-W-NOSUCHDEV, the executive is not present -- the interface cannot be configured\n");
+            dcl_out_printf("%%TCPIP-W-NOSUCHDEV, the executive is not present -- the interface cannot be configured\n");
         } else if (st == SS$_UNSUPPORTED) {
-            printf("%%TCPIP-W-NOTAPPLIED, interface address not applied (not supported on this system)\n");
+            dcl_out_printf("%%TCPIP-W-NOTAPPLIED, interface address not applied (not supported on this system)\n");
         } else {
             if (!(st & 1))
-                printf("%%TCPIP-W-IOERR, failed to set address: %s\n", strerror(err));
+                dcl_out_printf("%%TCPIP-W-IOERR, failed to set address: %s\n", strerror(err));
 
             /* Netmask: ifr_netmask is the same union slot as ifr_addr. */
             if (netmask) {
@@ -2608,7 +2655,7 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
                 mask->sin_family = AF_INET;
                 inet_pton(AF_INET, netmask, &mask->sin_addr);
                 if (!(vms_kif_netcfg(VMS_NETCFG_SET_IFNETMASK, &ifr, &err) & 1))
-                    printf("%%TCPIP-W-IOERR, failed to set netmask: %s\n", strerror(err));
+                    dcl_out_printf("%%TCPIP-W-IOERR, failed to set netmask: %s\n", strerror(err));
             }
 
             /* Bring the interface UP (idempotent). An address without IFF_UP does
@@ -2622,7 +2669,7 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
             if (vms_kif_netcfg(VMS_NETCFG_GET_IFFLAGS, &ifr, &err) & 1) {
                 ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
                 if (!(vms_kif_netcfg(VMS_NETCFG_SET_IFFLAGS, &ifr, &err) & 1))
-                    printf("%%TCPIP-W-IOERR, failed to bring interface up: %s\n",
+                    dcl_out_printf("%%TCPIP-W-IOERR, failed to bring interface up: %s\n",
                            strerror(err));
             }
         }
@@ -2653,15 +2700,15 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
         uint32_t lst = tcpip_cfg_define_system(TCPIP_LNM_INET_HOSTADDR, host_ip);
         if (!(lst & 1)) {
             if (lst == SS$_NOSUCHDEV)
-                printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$INET_HOSTADDR "
+                dcl_out_printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$INET_HOSTADDR "
                        "not recorded (address applied to the interface only)\n");
             else
-                printf("%%TCPIP-W-LNMERR, could not record TCPIP$INET_HOSTADDR "
+                dcl_out_printf("%%TCPIP-W-LNMERR, could not record TCPIP$INET_HOSTADDR "
                        "(status %u)\n", lst);
         }
     }
 
-    printf("%%TCPIP-I-INFO, interface configured\n");
+    dcl_out_printf("%%TCPIP-I-INFO, interface configured\n");
     return SS$_NORMAL;
 }
 
@@ -2683,21 +2730,21 @@ static int cmd_tcpip_show_configuration(struct dcl_command *cmd)
     char val[256];
     int any_noexec = 0;
 
-    printf("\n");
-    printf("%-16s%s\n", "Item", "Value");
+    dcl_out_printf("\n");
+    dcl_out_printf("%-16s%s\n", "Item", "Value");
     for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); i++) {
         uint32_t st = tcpip_cfg_translate_system(items[i].lnm, val, sizeof(val));
         if (st & 1)
-            printf("%-16s%s\n", items[i].label, val);
+            dcl_out_printf("%-16s%s\n", items[i].label, val);
         else if (st == SS$_NOSUCHDEV)
             any_noexec = 1;
         else
-            printf("%-16s%s\n", items[i].label, "(not configured)");
+            dcl_out_printf("%-16s%s\n", items[i].label, "(not configured)");
     }
     if (any_noexec)
-        printf("%%TCPIP-W-UNAVAIL, TCP/IP Services executive is not running -- "
+        dcl_out_printf("%%TCPIP-W-UNAVAIL, TCP/IP Services executive is not running -- "
                "the TCPIP$ SYSTEM logicals cannot be read\n");
-    printf("\n");
+    dcl_out_printf("\n");
     return SS$_NORMAL;
 }
 
@@ -2778,16 +2825,16 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
                 /* As VMS: refused outright -- %SYSTEM-E-NOPRIV, nothing applied
                  * and nothing recorded (real VAX V7.3, rd vms-ec6: a refused
                  * SET ROUTE leaves no TCPIP$ROUTE record). */
-                printf("%%SYSTEM-E-NOPRIV, insufficient privilege or object protection violation\n");
+                dcl_out_printf("%%SYSTEM-E-NOPRIV, insufficient privilege or object protection violation\n");
                 return SS$_NOPRIV;
             } else if (st == SS$_NOSUCHDEV) {
                 why = "no executive";
-                printf("%%TCPIP-W-NOSUCHDEV, the executive is not present -- the route cannot be applied\n");
+                dcl_out_printf("%%TCPIP-W-NOSUCHDEV, the executive is not present -- the route cannot be applied\n");
             } else {
                 why = "not supported on this system";
             }
         } else {
-            printf("%%TCPIP-E-ROUTEERR, could not add route: %s\n", strerror(err));
+            dcl_out_printf("%%TCPIP-E-ROUTEERR, could not add route: %s\n", strerror(err));
             privileged = 0;            /* report as not applied, below */
             apply_failed = 1;
             why = strerror(err);
@@ -2818,21 +2865,21 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
      * "recorded" when the ACP write did not land or was skipped by /REAPPLY). */
     if (applied) {
         if (rt_recorded)
-            printf("%%TCPIP-I-INFO, route added; recorded in TCPIP$ROUTE.DAT (reapplied at boot)\n");
+            dcl_out_printf("%%TCPIP-I-INFO, route added; recorded in TCPIP$ROUTE.DAT (reapplied at boot)\n");
         else
-            printf("%%TCPIP-I-INFO, route added\n");
+            dcl_out_printf("%%TCPIP-I-INFO, route added\n");
         return SS$_NORMAL;
     }
     if (!privileged) {
         if (rt_recorded)
-            printf("%%TCPIP-W-NOTAPPLIED, route recorded in TCPIP$ROUTE.DAT "
+            dcl_out_printf("%%TCPIP-W-NOTAPPLIED, route recorded in TCPIP$ROUTE.DAT "
                    "(reapplied at boot) but not applied to the live routing table "
                    "now (%s)\n", why);
         else if (reapply)
-            printf("%%TCPIP-W-NOTAPPLIED, route not applied (%s); "
+            dcl_out_printf("%%TCPIP-W-NOTAPPLIED, route not applied (%s); "
                    "not recorded (/REAPPLY)\n", why);
         else
-            printf("%%TCPIP-W-NOTAPPLIED, route not applied (%s) and "
+            dcl_out_printf("%%TCPIP-W-NOTAPPLIED, route not applied (%s) and "
                    "not recorded (executive absent -- TCPIP$ROUTE.DAT unreachable)\n", why);
         return apply_failed ? SS$_ABORT : SS$_NOPRIV;
     }
@@ -2902,7 +2949,7 @@ static int tcpip_reapply_interfaces(void)
     }
     rms_textfile_close(tf);
     if (n > 0)
-        printf("%%TCPIP-I-REAPPLY, reapplied %d interface(s) from TCPIP$INTERFACE.DAT\n", n);
+        dcl_out_printf("%%TCPIP-I-REAPPLY, reapplied %d interface(s) from TCPIP$INTERFACE.DAT\n", n);
     return n;
 }
 
@@ -2934,7 +2981,7 @@ static int tcpip_reapply_routes(void)
     }
     rms_textfile_close(tf);
     if (n > 0)
-        printf("%%TCPIP-I-REAPPLY, reapplied %d route(s) from TCPIP$ROUTE.DAT\n", n);
+        dcl_out_printf("%%TCPIP-I-REAPPLY, reapplied %d route(s) from TCPIP$ROUTE.DAT\n", n);
     return n;
 }
 
@@ -2964,7 +3011,7 @@ static int tcpip_reapply_nameservice(void)
     tcpip_reapply_add_qual(&sc, "SERVER", server);
     if (domain[0] != '\0') tcpip_reapply_add_qual(&sc, "DOMAIN", domain);
     (void)cmd_tcpip_set_name_service(&sc);
-    printf("%%TCPIP-I-REAPPLY, reapplied name service from TCPIP$NAMESERVICE.DAT (server %s)\n", server);
+    dcl_out_printf("%%TCPIP-I-REAPPLY, reapplied name service from TCPIP$NAMESERVICE.DAT (server %s)\n", server);
     return 1;
 }
 
@@ -2997,18 +3044,18 @@ static int tcpip_svcdb_report(int rc, const char *name)
     case TCPIP_SVCDB_OK:
         return SS$_NORMAL;
     case TCPIP_SVCDB_ENOEXEC:
-        printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$SERVICE.DAT not updated "
+        dcl_out_printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$SERVICE.DAT not updated "
                "(service \"%s\" not persisted to the VMS service database)\n", name);
         return SS$_ABORT;
     case TCPIP_SVCDB_EFULL:
-        printf("%%TCPIP-E-TOOMANY, service database is full (max %d services)\n",
+        dcl_out_printf("%%TCPIP-E-TOOMANY, service database is full (max %d services)\n",
                TCPIP_SVCDB_MAX);
         return SS$_ABORT;
     case TCPIP_SVCDB_ENOSUCH:
-        printf("%%TCPIP-W-NOSUCHSER, service \"%s\" is not defined\n", name);
+        dcl_out_printf("%%TCPIP-W-NOSUCHSER, service \"%s\" is not defined\n", name);
         return SS$_ABORT;
     default:
-        printf("%%TCPIP-E-BADPARAM, invalid service parameters\n");
+        dcl_out_printf("%%TCPIP-E-BADPARAM, invalid service parameters\n");
         return SS$_BADPARAM;
     }
 }
@@ -3056,7 +3103,7 @@ static int cmd_tcpip_set_service(struct dcl_command *cmd)
     int rc = tcpip_svcdb_set(name, (uint16_t)port, user, image, NULL, enable_flag);
     int st = tcpip_svcdb_report(rc, name);
     if (rc == TCPIP_SVCDB_OK)
-        printf("%%TCPIP-I-INFO, service \"%s\" defined (effective at next TCPIP$INETD start)\n",
+        dcl_out_printf("%%TCPIP-I-INFO, service \"%s\" defined (effective at next TCPIP$INETD start)\n",
                name);
     return st;
 }
@@ -3077,7 +3124,7 @@ static int cmd_tcpip_enable_service(struct dcl_command *cmd, int on)
     int rc = tcpip_svcdb_enable(name, on);
     int st = tcpip_svcdb_report(rc, name);
     if (rc == TCPIP_SVCDB_OK)
-        printf("%%TCPIP-I-INFO, service \"%s\" %s (effective at next TCPIP$INETD start)\n",
+        dcl_out_printf("%%TCPIP-I-INFO, service \"%s\" %s (effective at next TCPIP$INETD start)\n",
                name, on ? "enabled" : "disabled");
     return st;
 }
@@ -3097,7 +3144,7 @@ static int cmd_tcpip_delete_service(struct dcl_command *cmd)
     int rc = tcpip_svcdb_delete(name);
     int st = tcpip_svcdb_report(rc, name);
     if (rc == TCPIP_SVCDB_OK)
-        printf("%%TCPIP-I-INFO, service \"%s\" deleted\n", name);
+        dcl_out_printf("%%TCPIP-I-INFO, service \"%s\" deleted\n", name);
     return st;
 }
 
@@ -3113,12 +3160,12 @@ static int cmd_tcpip_show_service(struct dcl_command *cmd)
     int n = tcpip_svcdb_load(recs, TCPIP_SVCDB_MAX);
     int shown = 0;
 
-    printf("\n  Service         Port   State     Run-as            Image\n");
-    printf("  --------------- ------ --------- ----------------- --------------------------\n");
+    dcl_out_printf("\n  Service         Port   State     Run-as            Image\n");
+    dcl_out_printf("  --------------- ------ --------- ----------------- --------------------------\n");
     for (int i = 0; i < n; i++) {
         if (filter && strcasecmp(recs[i].name, filter) != 0)
             continue;
-        printf("  %-15s %5u  %-8s  %-16s  %s\n",
+        dcl_out_printf("  %-15s %5u  %-8s  %-16s  %s\n",
                recs[i].name, (unsigned)recs[i].port,
                recs[i].enabled ? "Enabled" : "Disabled",
                recs[i].user[0] ? recs[i].user : "-",
@@ -3127,11 +3174,11 @@ static int cmd_tcpip_show_service(struct dcl_command *cmd)
     }
     if (shown == 0) {
         if (filter)
-            printf("  %%TCPIP-W-NOSUCHSER, service \"%s\" is not defined\n", filter);
+            dcl_out_printf("  %%TCPIP-W-NOSUCHSER, service \"%s\" is not defined\n", filter);
         else
-            printf("  (no services defined in %s)\n", TCPIP_SVCDB_SPEC);
+            dcl_out_printf("  (no services defined in %s)\n", TCPIP_SVCDB_SPEC);
     }
-    printf("\n");
+    dcl_out_printf("\n");
     return SS$_NORMAL;
 }
 
@@ -3518,7 +3565,7 @@ int cmd_mount(struct dcl_command *cmd)
         return mst;
     }
 
-    printf("%%MOUNT-I-MOUNTED, %s mounted on _%s\n", label, dev_name);
+    dcl_out_printf("%%MOUNT-I-MOUNTED, %s mounted on _%s\n", label, dev_name);
     return SS$_NORMAL;
 }
 
@@ -3617,7 +3664,7 @@ int cmd_dismount(struct dcl_command *cmd)
         lnm_delete(mgr, LNM_SYSTEM_TABLE, log_name, LNM_MODE_EXEC);
     }
 
-    printf("%%DISMOUNT-I-DISMOUNTED, _%s dismounted\n", dev_name);
+    dcl_out_printf("%%DISMOUNT-I-DISMOUNTED, _%s dismounted\n", dev_name);
     return SS$_NORMAL;
 }
 
@@ -3686,7 +3733,7 @@ int cmd_attach(struct dcl_command *cmd)
         waitpid(target, &wstatus, WUNTRACED);
         dcl_running_child = 0;
         if (WIFSTOPPED(wstatus)) {
-            printf("\nInterrupt\n");
+            dcl_out_printf("\nInterrupt\n");
             ctx->interrupted_pid = target;
             return SS$_ABORT;
         }
@@ -3710,7 +3757,7 @@ int cmd_attach(struct dcl_command *cmd)
             waitpid(pid, &wstatus, WUNTRACED);
             dcl_running_child = 0;
             if (WIFSTOPPED(wstatus)) {
-                printf("\nInterrupt\n");
+                dcl_out_printf("\nInterrupt\n");
                 /* Keep interrupted_pid */
             } else {
                 ctx->interrupted_pid = 0;
@@ -3735,7 +3782,7 @@ int cmd_attach(struct dcl_command *cmd)
         waitpid(pid, &wstatus, WUNTRACED);
         dcl_running_child = 0;
         if (WIFSTOPPED(wstatus)) {
-            printf("\nInterrupt\n");
+            dcl_out_printf("\nInterrupt\n");
         } else {
             ctx->interrupted_pid = 0;
         }
@@ -3893,8 +3940,8 @@ int cmd_install(struct dcl_command *cmd)
  *   LINK[/EXECUTABLE[=spec]] [/NOINFORMATIONALS] file[/qual][,file...] ...
  *
  * The verb's argument tail goes to SYS$SYSTEM:LINK.EXE exactly as typed; the
- * linker reads the VMS command syntax itself (src/vmslink/vms_cli.c), as OpenVMS
- * LINK reads its own command line. (This was a wrapper around the host `cc`; it
+ * linker obtains it from the CLI and parses it with CLI$DCL_PARSE against its
+ * LINK command table (src/vmslink/link_cli.c, rd vms-3cb1). (This was a wrapper around the host `cc`; it
  * wrote an image no OVMX activator could run.) The qualifier table in
  * dcl_builtin.c keeps DCL's %DCL-W-IVQUAL for anything LINK.EXE does not know.
  */
@@ -3926,7 +3973,23 @@ int cmd_link(struct dcl_command *cmd)
         dcl_error("LINK", 2, "NOFILES", "no input files specified");
         return SS$_BADPARAM;
     }
-    return dcl_exec_utility("LINK.EXE", "LINK", argv, argc);
+    /* LINK.EXE takes its command from the CLI (rd vms-3cb1): the raw tail is
+     * recorded in the executive CLI context, which the image's PCB inherits and
+     * LIB$GET_FOREIGN reads back, as for a foreign command. With no executive
+     * (host tooling) the same tail travels in VMS_FOREIGN_CMD, LIB$GET_FOREIGN's
+     * no-executive channel. The words stay in the activation vector for the
+     * OpenVMX/Alpha image, whose C RTL hands them to main(). The context is
+     * cleared once the image is done so no later image reads a stale line. */
+    uint32_t cli_st = vms_kif_setcli(1, cmd->raw_tail);
+    int have_exec = (cli_st & 1);
+    if (!have_exec)
+        setenv("VMS_FOREIGN_CMD", cmd->raw_tail, 1);
+    int st = dcl_exec_utility("LINK.EXE", "LINK", argv, argc);
+    if (have_exec)
+        (void)vms_kif_setcli(0, "");
+    else
+        unsetenv("VMS_FOREIGN_CMD");
+    return st;
 }
 
 /* ================================================================== */
@@ -4085,11 +4148,11 @@ int cmd_product(struct dcl_command *cmd)
  * (CLAUDE.md Rule 9 / INV-6). Command grammar is from the public VSI OpenVMS
  * TCP/IP Services documentation; the wire is IETF-standard (Rule 8).
  *
- * SCOPE (vms-dbb): loopback / a reachable-peer client. FTP is single-transfer
- * (/GET, /PUT), passive-mode; TELNET is a half-duplex line client (a blocking
- * $QIO recv precludes a concurrent reader -- full-duplex AST-driven I/O and an
- * interactive FTP> shell are later increments). Host names need the BIND
- * resolver (a later phase), so a host argument must be a dotted-quad literal.
+ * SCOPE (vms-dbb, vms-d0c4): proven against real servers outside the VM over
+ * the NIC (tests/qemu/test_tcpip_external_boot_e2e.sh). FTP is single-transfer
+ * (/GET, /PUT), passive-mode, binary -- an interactive FTP> shell is a later
+ * increment; TELNET is full duplex (below). Host names need the BIND resolver
+ * (a later phase), so a host argument must be a dotted-quad literal.
  */
 
 /* Parse an unsigned decimal port (1..65535); 0 = empty/invalid. */
@@ -4219,15 +4282,126 @@ static int tcpip_tool_resolve(const char *facility, const char *host,
     return 0;
 }
 
+/*
+ * TELNET is FULL-DUPLEX, as the VMS TELNET client is: whatever the server sends
+ * is shown as it arrives, while the user types. One loop serves both
+ * devices through VMS system services only (rd vms-a6b): the connection is
+ * $ASSIGNed TCPIP$DEVICE: and read with $QIOW IO$_READVBLK|IO$M_NOW (takes what
+ * has arrived, SS$_ENDOFFILE when nothing), the terminal is read with $QIOW
+ * IO$_READVBLK and a zero TRM$_TIMEOUT (dcl_tt_getc), and when both are quiet
+ * the loop waits on a $SETIMR timer event flag ($WAITFR). No poll(), select()
+ * or read() on a Linux fd appears anywhere on this path.
+ *
+ * Modes (RFC 857/858 as a VMS TELNET client does them): a server that WILL
+ * ECHO puts the session in CHARACTER mode -- each key goes out as typed and the
+ * server echoes it; otherwise LINE mode -- the terminal driver echoes and edits
+ * the line, which goes out at RETURN. A RETURN is sent as CR LF (RFC 854
+ * end-of-line). The escape character CTRL/] gives a "TELNET> " prompt: QUIT,
+ * EXIT or CLOSE ends the session, anything else resumes it. A session also ends
+ * when the server closes the connection.
+ */
+#define TELNET_ESCAPE 0x1D              /* CTRL/] */
+
+#define TELNET_TICK_EFN 40u             /* local event flag the idle timer sets */
+#define TELNET_TICK_100NS 200000        /* 20 ms idle wait, as a delta time */
+
+struct telnet_sess {
+    struct tcpip_conn conn;             /* $ASSIGNed TCPIP$DEVICE: channel */
+    struct tcpip_telnet_state tn;
+    unsigned char out[TCPIP_XFER_MAX];
+    uint32_t olen;
+};
+
+static uint32_t telnet_xsend(struct telnet_sess *ts, const unsigned char *b, uint32_t n)
+{
+    return tcpip_send_all(&ts->conn, b, n);
+}
+
+/* Queue user bytes for the server: 0xFF doubled (RFC 854), RETURN as CR LF. */
+static uint32_t telnet_put(struct telnet_sess *ts, const char *b, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)b[i];
+        if (ts->olen + 2 > sizeof ts->out) {
+            uint32_t st = telnet_xsend(ts, ts->out, ts->olen);
+            ts->olen = 0;
+            if (!(st & 1))
+                return st;
+        }
+        if (c == '\r' || c == '\n') {
+            ts->out[ts->olen++] = '\r';
+            ts->out[ts->olen++] = '\n';
+            continue;
+        }
+        if (c == TN_IAC)
+            ts->out[ts->olen++] = TN_IAC;
+        ts->out[ts->olen++] = c;
+    }
+    return SS$_NORMAL;
+}
+
+static uint32_t telnet_flush(struct telnet_sess *ts)
+{
+    uint32_t st = SS$_NORMAL;
+    if (ts->olen)
+        st = telnet_xsend(ts, ts->out, ts->olen);
+    ts->olen = 0;
+    return st;
+}
+
+/* One read from the server: show its data, answer its negotiation. Returns 1
+ * when data arrived, 2 when nothing has, 0 when the server closed the
+ * connection, -1 on an error. */
+static int telnet_from_server(struct telnet_sess *ts)
+{
+    unsigned char in[TCPIP_XFER_MAX];
+    unsigned char data[TCPIP_XFER_MAX];
+    unsigned char reply[96];
+    uint32_t got = 0, off = 0;
+    uint32_t st = tcpip_recv_now(&ts->conn, in, sizeof in, &got);
+
+    if (st == SS$_ENDOFFILE)
+        return 2;
+    if (!(st & 1))
+        return -1;
+    if (got == 0)
+        return 0;
+    while (off < got) {
+        uint32_t dl = 0, rl = 0;
+        off += tcpip_telnet_filter(&ts->tn, in + off, got - off, data, sizeof data,
+                                   &dl, reply, sizeof reply, &rl);
+        if (dl)
+            dcl_out_write(data, dl);
+        if (rl && !(telnet_xsend(ts, reply, rl) & 1))
+            return -1;
+    }
+    dcl_out_flush();
+    return 1;
+}
+
+/* CTRL/] -- the local command prompt. Returns 1 to end the session. */
+static int telnet_escape(void)
+{
+    char cmdl[64];
+    size_t i = 0;
+    int n = dcl_tt_read("\r\nTELNET> ", 10, cmdl, sizeof cmdl, 0, 0, NULL);
+    if (n < 0)
+        return n == DCL_TT_EOF;         /* CTRL/Z at the prompt: exit */
+    while (cmdl[i] == ' ' || cmdl[i] == '\t')
+        i++;
+    return tcpip_tool_iprefix(cmdl + i, "QUIT") || tcpip_tool_iprefix(cmdl + i, "EXIT") ||
+           tcpip_tool_iprefix(cmdl + i, "CLOSE");
+}
+
 int cmd_telnet(struct dcl_command *cmd)
 {
-    struct tcpip_conn conn;
+    struct telnet_sess *ts;
     uint32_t addr_be = 0;
     uint16_t port = 23;
-    char buf[1024];
-    char line[1024];
-    uint32_t got = 0;
     uint32_t st;
+    int pending, closed_by = 0;
+    uint64_t tick = (uint64_t)(-(int64_t)TELNET_TICK_100NS);
 
     if (cmd->param_count < 1) {
         dcl_error("TELNET", 2, "NOHOST", "missing host - supply an address to connect to");
@@ -4243,39 +4417,221 @@ int cmd_telnet(struct dcl_command *cmd)
         }
     }
 
-    printf("%%TELNET-I-TRYING, trying %s port %u ...\n", cmd->params[0], (unsigned)port);
-    st = tcpip_connect(&conn, addr_be, port);
+    /* the session is keyboard and screen: it needs the terminal. SYS$INPUT that
+     * is a file or pipe has no terminal channel to read keys from. */
+    pending = dcl_tt_getc(1);
+    if (pending == -2) {
+        dcl_error("TELNET", 2, "NOTERM",
+                  "TELNET needs an interactive terminal - SYS$INPUT is not one");
+        return SS$_NOSUCHDEV;
+    }
+
+    ts = calloc(1, sizeof *ts);
+    if (!ts) {
+        dcl_error("TELNET", 2, "INSFMEM", "insufficient memory");
+        return SS$_INSFMEM;
+    }
+    tcpip_telnet_init(&ts->tn);
+
+    dcl_out_printf("%%TELNET-I-TRYING, trying %s port %u ...\n", cmd->params[0], (unsigned)port);
+    dcl_out_flush();
+    st = tcpip_connect(&ts->conn, addr_be, port);
     if (!(st & 1)) {
-        if (st == SS$_NOSUCHDEV)
+        if (st == SS$_NOSUCHDEV) {
             dcl_error("TELNET", 2, "NONET",
                       "TCP/IP Services (BGn: executive device) is not available");
-        else
+        } else {
+            char sec[256];
             dcl_error("TELNET", 2, "NOCONN",
                       "cannot connect to %s port %u", cmd->params[0], (unsigned)port);
+            if (vms_status_string(st, sec, sizeof sec) > 0 && sec[0] == '%') {
+                sec[0] = '-';
+                dcl_err_printf("%s\n", sec);
+            }
+        }
+        free(ts);
         return st;
     }
-    printf("Connected to %s.\n", cmd->params[0]);
+    dcl_out_printf("Connected to %s.\n", cmd->params[0]);
+    dcl_out_printf("%%TELNET-I-ESCAPE, escape character is ^]\n");
+    dcl_out_flush();
 
-    /* Initial server banner, telnet option negotiation stripped. */
-    st = tcpip_telnet_recv(&conn, buf, sizeof(buf) - 1, &got);
-    if ((st & 1) && got) { fwrite(buf, 1, got, stdout); fflush(stdout); }
+    /* a key already typed is kept, not lost to the probe */
+    if (pending < 0)
+        pending = -1;
 
-    /* Half-duplex line loop over SYS$INPUT. */
-    while (fgets(line, sizeof(line), stdin)) {
-        if (tcpip_tool_iprefix(line, "quit") || tcpip_tool_iprefix(line, "exit"))
+    for (;;) {
+        int k = telnet_from_server(ts);
+        int busy = k == 1;
+
+        if (k == 0 || k < 0) {
+            closed_by = k == 0 ? 1 : 2;
             break;
-        st = tcpip_telnet_send(&conn, line, (uint32_t)strlen(line));
-        if (!(st & 1)) break;
-        got = 0;
-        st = tcpip_telnet_recv(&conn, buf, sizeof(buf) - 1, &got);
-        if (!(st & 1) || got == 0) break;
-        fwrite(buf, 1, got, stdout);
-        fflush(stdout);
+        }
+
+        {
+            int c, quit = 0;
+            /* everything typed since the last pass, at once */
+            while ((c = pending >= 0 ? pending : dcl_tt_getc(1)) >= 0) {
+                pending = -1;
+                busy = 1;
+                if (c == TELNET_ESCAPE) {
+                    if (!(telnet_flush(ts) & 1) || telnet_escape()) {
+                        quit = 1;
+                        break;
+                    }
+                    continue;
+                }
+                if (tcpip_telnet_remote_echo(&ts->tn)) {
+                    char ch = (char)c;
+                    if (!(telnet_put(ts, &ch, 1) & 1)) { quit = 1; break; }
+                } else {
+                    /* LINE mode: the terminal driver echoes and edits the
+                     * rest of the line; the key just read starts it. */
+                    char first[2] = { (char)c, 0 };
+                    char line[1024];
+                    int n;
+                    if (c == '\r' || c == '\n') {
+                        n = 0;
+                        line[0] = '\0';
+                        dcl_out_fputs("\r\n");
+                    } else {
+                        n = dcl_tt_read_ini("", 0, first, line, sizeof line, NULL);
+                        dcl_out_fputs("\r\n");
+                    }
+                    dcl_out_flush();
+                    if (n == DCL_TT_EOF || n == DCL_TT_GONE) { quit = 1; break; }
+                    if (n < 0)
+                        continue;
+                    if (!(telnet_put(ts, line, (size_t)n) & 1) || !(telnet_put(ts, "\r", 1) & 1)) {
+                        quit = 1;
+                        break;
+                    }
+                }
+            }
+            if (c == -2)
+                quit = 1;               /* the terminal is gone */
+            if (!(telnet_flush(ts) & 1))
+                quit = 1;
+            if (quit)
+                break;
+        }
+
+        if (!busy) {
+            /* both devices are quiet: wait on a timer event flag */
+            sys$clref(TELNET_TICK_EFN);
+            if (sys$setimr(TELNET_TICK_EFN, &tick, NULL, 0, 0) & 1)
+                sys$waitfr(TELNET_TICK_EFN);
+        }
     }
 
-    tcpip_close(&conn);
-    printf("%%TELNET-I-SESSEND, connection to %s closed\n", cmd->params[0]);
+    tcpip_close(&ts->conn);
+    free(ts);
+    if (closed_by == 2)
+        dcl_error("TELNET", 2, "LINKLOST", "connection to %s lost", cmd->params[0]);
+    dcl_out_printf("%%TELNET-I-SESSEND, connection to %s closed%s\n", cmd->params[0],
+           closed_by == 1 ? " by the remote host" : "");
     return SS$_NORMAL;
+}
+
+/*
+ * The local side of an FTP transfer goes through RMS over the Files-11 ACP, as
+ * every DCL file command does (dcl_rms.h) -- never fopen() on a substrate path,
+ * which reaches no file on the booted system. A binary (TYPE I) RETR is stored
+ * the way VMS TCP/IP Services FTP stores an image transfer: fixed-length
+ * 512-byte records, the last one padded with zeros. A STOR sends the file's
+ * records back to back. Both stream, so the size is not bounded by memory.
+ */
+#define FTP_REC 512u
+
+struct ftp_local {
+    struct dcl_rms_writer *w;           /* RETR into a file */
+    struct dcl_rms_reader *r;           /* STOR from a file */
+    unsigned char rec[FTP_REC];         /* RETR: the record being filled */
+    uint32_t fill;
+    char *pend;                         /* STOR: record bytes not yet sent */
+    uint32_t plen, ppos;
+    int eof;
+    uint32_t err;                       /* the RMS/SS status that stopped it */
+};
+
+static uint32_t ftp_sink_rms(void *arg, const unsigned char *buf, uint32_t len)
+{
+    struct ftp_local *l = (struct ftp_local *)arg;
+    while (len > 0) {
+        uint32_t take = FTP_REC - l->fill;
+        if (take > len)
+            take = len;
+        memcpy(l->rec + l->fill, buf, take);
+        l->fill += take;
+        buf += take;
+        len -= take;
+        if (l->fill == FTP_REC) {
+            if (dcl_rms_write_record(l->w, (const char *)l->rec, FTP_REC) != 0) {
+                l->err = dcl_rms_write_status(l->w, NULL);
+                return SS$_ABORT;
+            }
+            l->fill = 0;
+        }
+    }
+    return SS$_NORMAL;
+}
+
+static uint32_t ftp_sink_stdout(void *arg, const unsigned char *buf, uint32_t len)
+{
+    (void)arg;
+    return dcl_out_write(buf, len) == len ? SS$_NORMAL : SS$_ABORT;
+}
+
+static uint32_t ftp_source_rms(void *arg, unsigned char *buf, uint32_t cap, uint32_t *got)
+{
+    struct ftp_local *l = (struct ftp_local *)arg;
+    uint32_t n = 0;
+
+    while (n < cap) {
+        if (l->ppos >= l->plen) {
+            int eof = 0;
+            int len;
+            if (l->eof)
+                break;
+            len = dcl_rms_read_record(l->r, l->pend, 65535, &eof);
+            if (len < 0) {
+                l->eof = 1;
+                if (!eof) {
+                    l->err = SS$_ABORT;
+                    return SS$_ABORT;   /* a hard read error, not end-of-file */
+                }
+                break;
+            }
+            l->plen = (uint32_t)len;
+            l->ppos = 0;
+            continue;
+        }
+        {
+            uint32_t take = l->plen - l->ppos;
+            if (take > cap - n)
+                take = cap - n;
+            memcpy(buf + n, l->pend + l->ppos, take);
+            l->ppos += take;
+            n += take;
+        }
+    }
+    *got = n;
+    return SS$_NORMAL;
+}
+
+static void ftp_report(const char *ident, const char *what, const char *name, uint32_t st)
+{
+    char sec[256];
+    if (st == SS$_NOSUCHDEV) {
+        dcl_error("FTP", 2, "NONET", "TCP/IP Services (BGn: executive device) is not available");
+        return;
+    }
+    dcl_error("FTP", 2, ident, "%s of %s failed", what, name);
+    if (st && vms_status_string(st, sec, sizeof sec) > 0 && sec[0] == '%') {
+        sec[0] = '-';
+        dcl_err_printf("%s\n", sec);
+    }
 }
 
 int cmd_ftp(struct dcl_command *cmd)
@@ -4313,71 +4669,72 @@ int cmd_ftp(struct dcl_command *cmd)
     }
 
     if (get && get[0]) {
-        size_t cap = 1u << 20;                 /* 1 MiB transfer cap (increment) */
-        unsigned char *buf = malloc(cap);
-        uint32_t glen = 0;
-        uint32_t st;
-        const char *out;
+        struct ftp_local l;
+        const char *out = dcl_qualifier_value(cmd, "OUTPUT");
+        uint32_t total = 0, st, rst = 0;
 
-        if (!buf) { dcl_error("FTP", 2, "INSFMEM", "insufficient memory"); return SS$_BADPARAM; }
-        st = tcpip_ftp_get(addr_be, port, user, pass, get, buf, (uint32_t)cap, &glen);
-        if (!(st & 1)) {
-            free(buf);
-            if (st == SS$_NOSUCHDEV)
-                dcl_error("FTP", 2, "NONET", "TCP/IP Services (BGn: executive device) is not available");
-            else
-                dcl_error("FTP", 2, "GETERR", "RETR of %s failed", get);
-            return st;
-        }
-        out = dcl_qualifier_value(cmd, "OUTPUT");
+        memset(&l, 0, sizeof l);
         if (out && out[0]) {
-            char lpath[PATH_MAX];
-            FILE *f;
-            dcl_resolve_path(ctx, out, lpath, sizeof(lpath));
-            f = fopen(lpath, "wb");
-            if (!f) { free(buf); dcl_error("FTP", 2, "OPENOUT", "cannot open output file %s", out); return SS$_BADPARAM; }
-            fwrite(buf, 1, glen, f);
-            fclose(f);
-            printf("%%FTP-S-RETR, %u bytes retrieved to %s\n", (unsigned)glen, out);
+            l.w = dcl_rms_write_create(ctx, out, FAB$C_FIX, 0, FTP_REC, &rst);
+            if (!l.w) {
+                ftp_report("OPENOUT", "create", out, rst);
+                return rst ? (int)rst : SS$_ABORT;
+            }
+            st = tcpip_ftp_retr(addr_be, port, user, pass, get, ftp_sink_rms, &l, &total);
+            if ((st & 1) && l.fill) {                    /* the padded last record */
+                memset(l.rec + l.fill, 0, FTP_REC - l.fill);
+                if (dcl_rms_write_record(l.w, (const char *)l.rec, FTP_REC) != 0) {
+                    l.err = dcl_rms_write_status(l.w, NULL);
+                    st = SS$_ABORT;
+                }
+            }
+            {
+                uint32_t cst = dcl_rms_write_close(l.w);
+                if ((st & 1) && !(cst & 1)) { l.err = cst; st = cst; }
+            }
+            if (!(st & 1)) {
+                ftp_report("GETERR", "RETR", get, l.err ? l.err : st);
+                return st;
+            }
+            dcl_out_printf("%%FTP-S-RETR, %u bytes retrieved to %s\n", (unsigned)total, out);
         } else {
-            fwrite(buf, 1, glen, stdout);
-            printf("\n%%FTP-S-RETR, %u bytes retrieved from %s\n", (unsigned)glen, get);
+            st = tcpip_ftp_retr(addr_be, port, user, pass, get, ftp_sink_stdout, NULL, &total);
+            if (!(st & 1)) {
+                ftp_report("GETERR", "RETR", get, st);
+                return st;
+            }
+            dcl_out_printf("\n%%FTP-S-RETR, %u bytes retrieved from %s\n", (unsigned)total, get);
         }
-        free(buf);
         return SS$_NORMAL;
     }
 
     /* /PUT */
     {
-        char lpath[PATH_MAX];
-        FILE *f;
-        size_t cap = 1u << 20;
-        unsigned char *buf;
-        size_t n;
-        const char *remote;
-        uint32_t st;
+        struct ftp_local l;
+        const char *remote = dcl_qualifier_value(cmd, "REMOTE");
+        uint32_t total = 0, st, rst = 0;
 
-        dcl_resolve_path(ctx, put, lpath, sizeof(lpath));
-        f = fopen(lpath, "rb");
-        if (!f) { dcl_error("FTP", 2, "OPENIN", "cannot open local file %s", put); return SS$_BADPARAM; }
-        buf = malloc(cap);
-        if (!buf) { fclose(f); dcl_error("FTP", 2, "INSFMEM", "insufficient memory"); return SS$_BADPARAM; }
-        n = fread(buf, 1, cap, f);
-        fclose(f);
-
-        remote = dcl_qualifier_value(cmd, "REMOTE");
         if (!remote || !remote[0]) remote = put;
-
-        st = tcpip_ftp_put(addr_be, port, user, pass, remote, buf, (uint32_t)n);
-        free(buf);
+        memset(&l, 0, sizeof l);
+        l.r = dcl_rms_read_open(ctx, put, &rst);
+        if (!l.r) {
+            ftp_report("OPENIN", "open", put, rst);
+            return rst ? (int)rst : SS$_ABORT;
+        }
+        l.pend = malloc(65536);
+        if (!l.pend) {
+            dcl_rms_read_close(l.r);
+            dcl_error("FTP", 2, "INSFMEM", "insufficient memory");
+            return SS$_INSFMEM;
+        }
+        st = tcpip_ftp_stor(addr_be, port, user, pass, remote, ftp_source_rms, &l, &total);
+        dcl_rms_read_close(l.r);
+        free(l.pend);
         if (!(st & 1)) {
-            if (st == SS$_NOSUCHDEV)
-                dcl_error("FTP", 2, "NONET", "TCP/IP Services (BGn: executive device) is not available");
-            else
-                dcl_error("FTP", 2, "PUTERR", "STOR of %s failed", remote);
+            ftp_report("PUTERR", "STOR", remote, l.err ? l.err : st);
             return st;
         }
-        printf("%%FTP-S-STOR, %u bytes stored to %s\n", (unsigned)n, remote);
+        dcl_out_printf("%%FTP-S-STOR, %u bytes stored to %s\n", (unsigned)total, remote);
         return SS$_NORMAL;
     }
 }
@@ -4422,7 +4779,7 @@ int cmd_ping(struct dcl_command *cmd)
         payload[k] = (unsigned char)(0x40u + (k & 0x3fu));
     id = (uint16_t)(getpid() & 0xffffu);
 
-    printf("PING %s: %u data bytes\n", cmd->params[0], (unsigned)sizeof(payload));
+    dcl_out_printf("PING %s: %u data bytes\n", cmd->params[0], (unsigned)sizeof(payload));
 
     for (i = 0; i < count; i++) {
         uint32_t rlen = 0;
@@ -4436,15 +4793,15 @@ int cmd_ping(struct dcl_command *cmd)
         }
         if ((st & 1) && rlen == sizeof(payload) &&
             memcmp(reply, payload, sizeof(payload)) == 0) {
-            printf("%u bytes from %s: icmp_seq=%d\n",
+            dcl_out_printf("%u bytes from %s: icmp_seq=%d\n",
                    (unsigned)rlen, cmd->params[0], i + 1);
             replies++;
         } else {
-            printf("Request timeout for icmp_seq=%d\n", i + 1);
+            dcl_out_printf("Request timeout for icmp_seq=%d\n", i + 1);
         }
     }
 
-    printf("--- %s ping statistics ---\n", cmd->params[0]);
-    printf("%d packets transmitted, %d packets received\n", count, replies);
+    dcl_out_printf("--- %s ping statistics ---\n", cmd->params[0]);
+    dcl_out_printf("%d packets transmitted, %d packets received\n", count, replies);
     return replies > 0 ? SS$_NORMAL : SS$_ABORT;
 }

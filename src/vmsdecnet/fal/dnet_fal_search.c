@@ -96,7 +96,7 @@ struct fal_wfile {
     char rsa[NAM$C_MAXRSS + 1];
 };
 
-int dnet_fal_wopen(const char *spec, uint8_t rfm, uint8_t rat, void **h,
+int dnet_fal_wopen(const char *spec, uint8_t rfm, uint8_t rat, uint8_t fsz, void **h,
                    char *rsa, size_t cap)
 {
     if (!spec || !h || strlen(spec) > DNET_DAP_MAX_SPEC) return -1;
@@ -109,6 +109,7 @@ int dnet_fal_wopen(const char *spec, uint8_t rfm, uint8_t rat, void **h,
     w->fab.fab$b_org = FAB$C_SEQ;
     w->fab.fab$b_rfm = rfm;
     w->fab.fab$b_rat = rat;
+    if (rfm == FAB$C_VFC) w->fab.fab$b_fsz = fsz ? fsz : 2;
     w->fab.fab$b_fac = FAB$M_PUT;
     w->nam = cc$rms_nam;
     w->nam.nam$l_esa = w->esa;
@@ -134,8 +135,20 @@ int dnet_fal_wput(void *h, const uint8_t *rec, size_t len)
 {
     struct fal_wfile *w = h;
     if (!w || len > 0xffff) return -1;
-    w->rab.rab$l_rbf = (char *)rec;
-    w->rab.rab$w_rsz = (uint16_t)len;
+    /* A DAP record of a VFC file is its fixed control area, then the data:
+     * the control goes to RMS in the record header buffer (RAB$L_RHB), so
+     * the file holds the record as the sender's RMS does. */
+    char ctl[256];
+    size_t fsz = 0;
+    if (w->fab.fab$b_rfm == FAB$C_VFC) {
+        fsz = w->fab.fab$b_fsz;
+        memset(ctl, 0, sizeof ctl);
+        memcpy(ctl, rec, len < fsz ? len : fsz);
+        if (fsz > len) fsz = len;
+        w->rab.rab$l_rhb = ctl;
+    }
+    w->rab.rab$l_rbf = (char *)rec + fsz;
+    w->rab.rab$w_rsz = (uint16_t)(len - fsz);
     return (sys$put(&w->rab, 0, 0) & 1) ? 0 : -1;
 }
 
@@ -177,6 +190,7 @@ int dnet_fal_ropen_st(const char *spec, void **h, uint8_t *rfm, uint8_t *rat,
     r->rab.rab$l_fab = &r->fab;
     st = sys$connect(&r->rab, 0, 0);
     if (!(st & 1)) { if (sts) *sts = st; sys$close(&r->fab, 0, 0); free(r); return -1; }
+    if (r->fab.fab$b_rfm == FAB$C_VFC && !r->fab.fab$b_fsz) r->fab.fab$b_fsz = 2;
     if (rfm) *rfm = r->fab.fab$b_rfm;
     if (rat) *rat = r->fab.fab$b_rat;
     *h = r;
@@ -192,12 +206,17 @@ int dnet_fal_rget(void *h, uint8_t *rec, size_t cap, size_t *len)
 {
     struct fal_rfile *r = h;
     if (!r || !rec || !len || cap == 0) return -1;
-    r->rab.rab$l_ubf = (char *)rec;
-    r->rab.rab$w_usz = (uint16_t)(cap > 0xffff ? 0xffff : cap);
+    /* A VFC record goes out as its fixed control area (RMS returns it in
+     * RAB$L_RHB) followed by the data -- the DAP DATA record form. */
+    size_t fsz = (r->fab.fab$b_rfm == FAB$C_VFC) ? r->fab.fab$b_fsz : 0;
+    if (fsz >= cap) return -1;
+    r->rab.rab$l_rhb = fsz ? (char *)rec : NULL;
+    r->rab.rab$l_ubf = (char *)rec + fsz;
+    r->rab.rab$w_usz = (uint16_t)(cap - fsz > 0xffff ? 0xffff : cap - fsz);
     uint32_t st = sys$get(&r->rab, 0, 0);
     if (st == RMS$_EOF) return 0;
     if (!(st & 1)) return -1;
-    *len = r->rab.rab$w_rsz;
+    *len = fsz + r->rab.rab$w_rsz;
     return 1;
 }
 

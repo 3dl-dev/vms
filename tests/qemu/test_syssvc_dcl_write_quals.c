@@ -24,12 +24,18 @@
 #include <stdint.h>
 #include <sys/wait.h>
 
+#include "starlet.h"
 #include "ssdef.h"
+#include "rms/rms.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 #define DCL_PATH "/bin/DCL.EXE"
+/* The procedure lives on the ODS-2 volume, written through RMS: @ reaches a
+ * procedure only through RMS, never a host path (libc-drop vms-20c94). */
+#define RW_UNIT   "VDA0:"
+#define DIR       RW_UNIT "[OVMXDIR]"
 
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
@@ -76,6 +82,38 @@ static int run_dcl(const char *script, char *out, size_t outsz)
     return 0;
 }
 
+/* A text file of variable-length carriage-return records, one $PUT a line. */
+static int put_lines(const char *spec, const char *const *lines)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_org = FAB$C_SEQ;
+    fab.fab$b_rfm = FAB$C_VAR;
+    fab.fab$b_rat = FAB$M_CR;
+    fab.fab$b_fac = FAB$M_PUT;
+    if (!(sys$create(&fab, 0, 0) & 1)) return -1;
+    struct RAB rab = cc$rms_rab;
+    rab.rab$l_fab = &fab;
+    if (!(sys$connect(&rab, 0, 0) & 1)) { sys$close(&fab, 0, 0); return -1; }
+    uint32_t st = RMS$_NORMAL;
+    for (; *lines && (st & 1); lines++) {
+        rab.rab$l_rbf = (char *)*lines;
+        rab.rab$w_rsz = (uint16_t)strlen(*lines);
+        st = sys$put(&rab, 0, 0);
+    }
+    uint32_t cst = sys$close(&fab, 0, 0);
+    return ((st & 1) && (cst & 1)) ? 0 : -1;
+}
+
+static void erase(const char *spec)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    (void)sys$erase(&fab, 0, 0);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -90,21 +128,18 @@ int main(void)
         return 1;
     }
 
-    char dir[] = "/tmp/ovmx_wr_XXXXXX";
-    if (!mkdtemp(dir)) { printf("  FAIL: mkdtemp\n"); return 1; }
-    char path[128];
-    snprintf(path, sizeof path, "%s/T.COM", dir);
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    const char com[] =
-        "$ WRITE/ERROR=ERRL NOCHAN \"x\"\n"
-        "$ WRITE SYS$OUTPUT \"NOT-REACHED\"\n"
-        "$ EXIT\n"
-        "$ ERRL:\n"
-        "$ WRITE SYS$OUTPUT \"at-err\"\n";
-    if (fd < 0 || write(fd, com, sizeof com - 1) != (ssize_t)(sizeof com - 1)) {
-        printf("  FAIL: write T.COM\n"); return 1;
-    }
-    close(fd);
+    CHECK($VMS_STATUS_SUCCESS(vms_kif_acp_mount(RW_UNIT)), "MOUNT " RW_UNIT " (writable)");
+    char tspec[64], tname[32];
+    snprintf(tname, sizeof tname, "WRT%u.COM", (unsigned)getpid() % 100000u);
+    snprintf(tspec, sizeof tspec, DIR "%s", tname);
+    static const char *const com[] = {
+        "$ WRITE/ERROR=ERRL NOCHAN \"x\"",
+        "$ WRITE SYS$OUTPUT \"NOT-REACHED\"",
+        "$ EXIT",
+        "$ ERRL:",
+        "$ WRITE SYS$OUTPUT \"at-err\"",
+        NULL };
+    CHECK(put_lines(tspec, com) == 0, "procedure written through RMS");
 
     static char out1[16384], out2[16384];
     char script[512];
@@ -132,15 +167,14 @@ int main(void)
           "WRITE/UPDATE (not implemented) is %DCL-W-IVQUAL, not silently accepted");
 
     snprintf(script, sizeof script,
-             "DEFINE WRDIR \"%s\"\nSET DEFAULT WRDIR:[000000]\n@T.COM\n", dir);
+             "SET DEFAULT " DIR "\n@%s\n", tname);
     CHECK(run_dcl(script, out2, sizeof out2) == 0, "DCL ran the WRITE /ERROR procedure");
     printf("  ---- /ERROR procedure ----\n%s  ---- end ----\n", out2);
     /* negctl: dcl-write-error-ignored */
     CHECK(strstr(out2, "at-err") != NULL, "WRITE/ERROR=ERRL branched to ERRL when the write failed");
     CHECK(strstr(out2, "NOT-REACHED") == NULL, "control did not fall through past the failed WRITE");
 
-    snprintf(path, sizeof path, "%s/T.COM", dir); unlink(path);
-    rmdir(dir);
+    erase(tspec);
     printf("=== test_syssvc_dcl_write_quals: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

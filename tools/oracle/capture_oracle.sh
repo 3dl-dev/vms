@@ -155,8 +155,8 @@ selftest() {
 # echoes: STS NODE USER PASS
 lab_for_arch() {
     case "$1" in
-        vax)   echo "vaxlab vax1 SYSTEM system" ;;
-        alpha) echo "alphalab alpha1 SYSTEM ovmxlab2026" ;;
+        vax)   echo "vaxlab vax1 SYSTEM ${LAB_PW:?set LAB_PW (ovmx-lab-passwords secret, vms-aa2)}" ;;
+        alpha) echo "alphalab alpha1 SYSTEM ${LAB_PW:?set LAB_PW (ovmx-lab-passwords secret, vms-aa2)}" ;;
         *) die "unknown arch '$1' (use: vax | alpha)" ;;
     esac
 }
@@ -284,6 +284,7 @@ ARCH=""; DESC=""; NORMALIZE=""; COMMANDS=()
 . "$SURF_FILE"
 [ -n "$ARCH" ] && [ "${#COMMANDS[@]}" -gt 0 ] || die "surface '$SURFACE' must set ARCH and COMMANDS"
 
+: "${LAB_PW:?set LAB_PW (ovmx-lab-passwords secret, vms-aa2)}"
 read -r STS NODE USER PASS <<<"$(lab_for_arch "$ARCH")"
 log "surface=$SURFACE arch=$ARCH sts=$STS node=$NODE cmds=${#COMMANDS[@]}"
 

@@ -2629,8 +2629,10 @@ long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg)
     exec_unlock(&vms_device_list_lock);
 
     if (!dev) {
-        memset(&args.info, 0, sizeof(args.info));
-        args.status = SS__NOSUCHDEV;
+        /* a mailbox unit (MBAn:) is the mailbox driver's, not a row here */
+        args.status = vms_mbx_devinfo(devnam, &args.info);
+        if (args.status != SS__NORMAL)
+            memset(&args.info, 0, sizeof(args.info));
     } else {
         args.status = SS__NORMAL;
     }

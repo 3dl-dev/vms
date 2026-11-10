@@ -144,6 +144,9 @@ struct vms_dlm_dir {
 	uint32_t undirected_refused;/* a request for a name the vector directs */
 				   /* ELSEWHERE that only a "you master it"    */
 				   /* could answer: nothing recorded, no answer*/
+	uint32_t answered_at_requester; /* rd vms-966e: YOU from the entry, */
+				   /* the vector placing the directory at  */
+				   /* the requester or at a third member   */
 };
 
 enum vms_dlm_dir_outcome {
@@ -210,7 +213,45 @@ enum vms_dlm_dir_outcome vms_dlm_dir_lookup(struct vms_dlm_dir *d,
  * NONE, records nothing, and counts `undirected_refused`. A real former master
  * answers 0xf7 there (rd vms-e09 R4, 5 specimens in L2); rd vms-657 holds that
  * shape until a held-out set grounds it, so the honest floor is no answer.
+ *
+ * ...EXCEPT ONE CASE, `directed_here` == VMS_DLM_DIR_AT_REQUESTER (rd vms-966e):
+ * the vector names the REQUESTER ITSELF as the directory, and this node's table
+ * holds an entry naming the requester as the master. That is answered YOU from
+ * the entry -- it repeats what this node already told the requester and records
+ * nothing new. MEASURED on the demo (cap-966e r3 4159/4168 then 4821; r5
+ * 3180/3186 then 3859): VAXC looked a name up here under the two-node vector,
+ * was told 0xf9; a third member joined, and at barrier step 0x0a VAXC sent the
+ * SAME lock's op-0x01 here again. The new vector makes VAXC its own directory
+ * for that name, so this node read it as undirected and sent nothing, and VAXC
+ * waited in STARTUP for ever. The requester is the directory and the only
+ * master any table here names is the requester; an EMPTY table (the b4d
+ * specimen) is still refused exactly as above.
+ *
+ * ...AND THE SAME CASE WHEN THE NEW VECTOR NAMES A THIRD MEMBER,
+ * `directed_here` == VMS_DLM_DIR_ELSEWHERE (rd vms-966e r10, on ae84d1fc6,
+ * which carried the AT_REQUESTER fix): c-first-legacy r10 (C,A,B), 3508 VAXC
+ * op-0x01 on F11B$aVAXCSYS<..>, 3514 OVMXA 0xf9; 4178 step 0x0a; 4179 the same
+ * lookup again to OVMXA, and under three members the name's directory is
+ * OVMXB -- VAXC's own op-0x0d rebuild records in that transition go exactly
+ * where this vector sends them (63 to OVMXA, 72 to OVMXB, none astray). So the
+ * vector's choice was never the discriminator. What the three runs share is
+ * the TIMING: the first lookup left VAXC after its join's 01/09 and before its
+ * 01/0a (r3 4159 between 4149/4163, r5 3180 between 3165/3184, r10 3508
+ * between 3492/3516) -- in flight when VAXC's transition began -- and at step
+ * 0x0a VAXC re-sends it, new token, to the node it first asked. That node's
+ * table still holds the entry its own answer recorded (entries a vector no
+ * longer directs go only at transition END, dlm_arm_transition_end), so the
+ * answer is again that entry's: YOU, nothing recorded. An EMPTY table, an entry
+ * naming another master or this node, and a vector this node cannot read
+ * (`directed_here` 0) are all exactly as above.
+ *
+ * WHAT IS NOT CLAIMED: r10 shows VAXC sent no op-0x0d for that name to the new
+ * directory, and it will master it on this answer after the rebuild; whether a
+ * real VMS registers it there afterwards is not on any capture yet (the next
+ * proof run's frames answer it -- tracked in rd).
  */
+#define VMS_DLM_DIR_AT_REQUESTER 2
+#define VMS_DLM_DIR_ELSEWHERE    3
 enum vms_dlm_dir_outcome vms_dlm_dir_lookup_directed(struct vms_dlm_dir *d,
 					const struct vms_dlm_res_ident *id,
 					vms_csid_t requester, vms_csid_t self,

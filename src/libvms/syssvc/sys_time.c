@@ -19,23 +19,28 @@
  * cite vms-5b4, the item that BUILT this register; it is closed and owned none
  * of them. They divide by what their answer depends on:
  *
- *   vms-642  the four that want a system the executive owns -- a system-time
- *            cell two processes can both see, and a timer queue something other
- *            than this image can fire.
+ *   vms-642  the system time, which the executive now keeps (a cell two
+ *            processes both see and $SETIME changes); and vms-2773, its child,
+ *            the timer queue something other than this image must fire.
  *   vms-f90  the three that transform the caller's own arguments and read no
  *            system state, alongside $FAO and the other compute-only services.
  *            Whether OpenVMS answers those in process context is UNPINNED; that
  *            item's outcome is the pin, not a rewrite.
  *
- * OVMX-USERSPACE: sys$gettim (vms-642) -- the substrate kernel's realtime
- *     clock read through libvmssys (vms_substrate_systime, vms-593) in VMS 100ns
- *     ticks; the host clock, not an executive EXE$GQ_ system time cell, so no
- *     system-time base can be set or observed. Never the C RTL's clock_gettime:
- *     DECC$SHR's time()/clock_gettime() are served by $GETUTC (vms-593).
+ * OVMX-PARTIAL: sys$gettim (vms-642) -- exec: the system time, the executive's
+ *     system-time cell (src/kernel-core/vms_systime.c, EXE$GQ_SYSTIME) read
+ *     through libvmssys vms_systime_get; $SETIME in any process moves it.
+ * OVMX-LOCAL: sys$gettim -- the argument check and the store of the quadword
+ *     into the caller's timadr.
+ * OVMX-PARTIAL: sys$setime (vms-642) -- exec: the system-time cell is set or
+ *     recalibrated by the executive, which checks OPER and LOG_IO and refuses a
+ *     delta time; the substrate clock is never changed.
+ * OVMX-LOCAL: sys$setime -- reads the caller's quadword and passes it on.
  * OVMX-PARTIAL: sys$getutc (vms-44a) -- exec: the system TDF is the executive's
  *     SYS$TIMEZONE_DIFFERENTIAL logical, read through $TRNLNM.
- * OVMX-LOCAL: sys$getutc -- the same host clock read, laid out as the
- *     16-byte $UTCDEF structure (abstime, unspecified inaccuracy, TDF word).
+ * OVMX-LOCAL: sys$getutc -- the executive's system time (as sys$gettim),
+ *     laid out as the 16-byte $UTCDEF structure (abstime, unspecified
+ *     inaccuracy, TDF word).
  * OVMX-PARTIAL: sys$binutc (vms-44a) -- exec: the system TDF is the executive's
  *     SYS$TIMEZONE_DIFFERENTIAL logical, read through $TRNLNM.
  * OVMX-LOCAL: sys$binutc -- sys$bintim on the caller's string, then the
@@ -51,13 +56,18 @@
  *     SYS$TIMEZONE_DIFFERENTIAL logical, read through $TRNLNM.
  * OVMX-LOCAL: sys$timcon -- UTC <-> system quadword arithmetic on the
  *     caller's structure; the system TDF is the logical above.
- * OVMX-USERSPACE: sys$gettim_prec (vms-642) -- the same host clock read; the
- *     host clock already has sub-tick resolution, so it never reports
- *     reduced precision.
- * OVMX-USERSPACE: sys$numtim (vms-f90) -- converts the caller's quadword (or
- *     the host clock when timadr is NULL) into the caller's timbuf.
- * OVMX-USERSPACE: sys$asctim (vms-f90) -- formats into the caller's buffer
- *     from the compiled-in months[] table in this file.
+ * OVMX-PARTIAL: sys$gettim_prec (vms-642) -- exec: the system time, as
+ *     sys$gettim (it is sys$gettim).
+ * OVMX-LOCAL: sys$gettim_prec -- the executive's time is kept to the 100 ns
+ *     tick, so it never reports reduced precision.
+ * OVMX-PARTIAL: sys$numtim (vms-f90) -- exec: with timadr NULL, the system
+ *     time, the executive's (as sys$gettim).
+ * OVMX-LOCAL: sys$numtim -- converts the caller's quadword (or that time) into
+ *     the caller's timbuf.
+ * OVMX-PARTIAL: sys$asctim (vms-f90) -- exec: with timadr NULL, the system
+ *     time, the executive's (as sys$gettim).
+ * OVMX-LOCAL: sys$asctim -- formats into the caller's buffer from the
+ *     compiled-in months[] table in this file.
  * OVMX-USERSPACE: sys$bintim (vms-f90) -- parses the caller's string against
  *     that same compiled-in table.
  * OVMX-PARTIAL: sys$schdwk (vms-44a) -- exec: the wake state, which the timer's
@@ -75,11 +85,11 @@
  *     validates the efn (SS$_UNASEFC / SS$_ILLEFC fail the request), and set by
  *     $SETEF at expiry -- as the semantic oracle observed on real VAX V7.3 and
  *     Alpha V8.4 (docs/oracle/semantics/ef/, EF.SETIMR.*).
- * OVMX-LOCAL: sys$setimr -- (vms-642) the timer itself is a POSIX timer recorded
+ * OVMX-LOCAL: sys$setimr -- (vms-2773) the timer itself is a POSIX timer recorded
  *     in the process-local timer_table[] in this file. There is no executive
  *     timer queue, so the request dies with the process and nothing else can
  *     see it.
- * OVMX-USERSPACE: sys$cantim (vms-642) -- cancels entries in that same
+ * OVMX-USERSPACE: sys$cantim (vms-2773) -- cancels entries in that same
  *     process-local table, so the timers it cancels are this process's.
  */
 
@@ -96,7 +106,7 @@
 #include "gen64def.h"   /* struct _generic_64 for sys$bintim's timadr */
 #include "efndef.h"     /* EFN$C_ENF */
 #include "ovmx_utc.h"   /* ovmx_timegm: no C RTL timegm on OpenVMS */
-#include "vms_systime.h" /* vms_substrate_systime: the system clock (vms-593) */
+#include "vms_systime.h" /* vms_systime_get/_set: the executive's system time (vms-642) */
 
 /* The per-request host timers below are POSIX timers (timer_create), which the
  * OpenVMS C RTL does not have, and their expiry runs a handler the kernel
@@ -142,13 +152,25 @@ static int vms_to_unix_time(uint64_t vmstime, struct timespec *ts) {
 /*
  * sys$gettim - Get current system time in VMS format.
  *
- * The system time is vms_substrate_systime's (libvmssys): the one clock every time
- * service here reports. It must not be the C RTL's clock_gettime(), which on
- * OVMX is itself $GETUTC (src/vmsrms/crtl_time.c, vms-593).
+ * The system time is the executive's (libvmssys vms_systime_get, rd vms-642):
+ * the one clock every time service here reports, and the one $SETIME sets.
+ * It must not be the C RTL's clock_gettime(), which on OVMX is itself $GETUTC
+ * (src/vmsrms/crtl_time.c, vms-593), nor the substrate's clock.
  */
 uint32_t sys$gettim(uint64_t *timadr) {
     if (!timadr) return SS$_BADPARAM;
-    return vms_substrate_systime(timadr);
+    return vms_systime_get(timadr);
+}
+
+/*
+ * sys$setime - Set the system time, or with no timadr recalibrate it from the
+ * time-of-year clock (OpenVMS System Services Reference Manual, $SETIME).
+ * The executive decides: OPER and LOG_IO enabled (SS$_NOPRIV), an absolute
+ * time (SS$_IVTIME for a delta), and it changes the system time every
+ * process's $GETTIM reads -- never the substrate's clock.
+ */
+uint32_t sys$setime(const uint64_t *timadr) {
+    return vms_systime_set(timadr);
 }
 
 /*
@@ -173,7 +195,7 @@ uint32_t sys$numtim(uint16_t timbuf[7], const uint64_t *timadr) {
         if (vms_to_unix_time(*timadr, &ts) < 0) return SS$_BADPARAM;
     } else {
         uint64_t now;
-        uint32_t st = vms_substrate_systime(&now);
+        uint32_t st = vms_systime_get(&now);
         if (!(st & 1)) return st;
         if (vms_to_unix_time(now, &ts) < 0) return SS$_BADPARAM;
     }
@@ -207,7 +229,8 @@ uint32_t sys$asctim(uint16_t *timlen, struct dsc$descriptor_s *timbuf,
     };
 
     uint16_t numtim[7];
-    sys$numtim(numtim, timadr);
+    uint32_t nst = sys$numtim(numtim, timadr);   /* NULL timadr: the system time (rd vms-642) */
+    if (!(nst & 1)) return nst;
 
     /* Validate month range to prevent OOB access */
     if (numtim[1] < 1 || numtim[1] > 12) return SS$_BADPARAM;
@@ -330,24 +353,72 @@ struct timer_entry {
 static struct timer_entry timer_table[MAX_TIMERS];
 static pthread_mutex_t timer_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* Signal handler for POSIX timer expiry */
+/*
+ * THE TABLE IS NEVER TOUCHED WITH THE TIMER SIGNAL DELIVERABLE (rd vms-2a84).
+ * The expiry handler runs the request's AST, and an AST may queue a timer --
+ * a timer re-armed from its own AST is the common shape (NETACP's, the
+ * dir_writers suite's). sys$setimr used to arm the host timer while it held
+ * timer_mutex: a timer that expired before the unlock ran its AST right there,
+ * in the same thread, and the AST's sys$setimr waited for the mutex its own
+ * thread held, for ever (the logger of test_syssvc_rms_dir_writers, merge-queue
+ * run 41917160473). So every holder of timer_mutex blocks SIGRTMIN first and
+ * restores it after the unlock: the AST runs once the service has returned,
+ * which is when VMS delivers it. The handler, which runs with SIGRTMIN
+ * blocked, may then take the mutex itself.
+ */
+static void timer_sig_block(sigset_t *old)
+{
+    sigset_t s;
+
+    sigemptyset(&s);
+    sigaddset(&s, SIGRTMIN);
+    sigprocmask(SIG_BLOCK, &s, old);
+}
+
+static void timer_sig_restore(const sigset_t *old)
+{
+    sigprocmask(SIG_SETMASK, old, NULL);
+}
+
+/*
+ * Signal handler for POSIX timer expiry. AN EXPIRED REQUEST IS GONE (rd
+ * vms-2a84): its host timer is deleted here, before the AST runs. It used to be
+ * kept until the process exited, each one holding a signal-queue entry the
+ * substrate charges against a per-user limit, so after ~1,500 expiries $SETIMR
+ * failed SS$_INSFMEM and an AST-re-armed timer simply stopped. A VMS timer
+ * request that has fired holds no quota. The slot is freed first, so the AST
+ * may reuse it.
+ */
 static void timer_signal_handler(int sig, siginfo_t *si, void *uc) {
     (void)sig; (void)uc;
 
     struct timer_entry *te = (struct timer_entry *)si->si_value.sival_ptr;
-    if (!te || !te->active) return;
+    uint32_t efn, astprm;
+    void (*astadr)(uint32_t);
+
+    if (!te) return;
+
+    pthread_mutex_lock(&timer_mutex);
+    if (!te->active) {                  /* cancelled: $CANTIM got there first */
+        pthread_mutex_unlock(&timer_mutex);
+        return;
+    }
+    efn = te->efn;
+    astadr = te->astadr;
+    astprm = te->astprm;
+    timer_delete(te->timerid);
+    te->active = 0;
+    pthread_mutex_unlock(&timer_mutex);
 
     /* Set the event flag */
-    if ((te->efn & 0xFFu) < 128) {
-        sys$setef(te->efn);
+    if ((efn & 0xFFu) < 128) {
+        sys$setef(efn);
     }
 
     /* Call the AST routine */
-    if (te->astadr) {
-        te->astadr(te->astprm);
+    if (astadr) {
+        astadr(astprm);
     }
-
-    te->active = 0;
 }
 
 static pthread_once_t timer_once = PTHREAD_ONCE_INIT;
@@ -603,6 +674,8 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
 
     init_timer_signals();
 
+    sigset_t sig_old;
+    timer_sig_block(&sig_old);         /* its AST runs after the return */
     pthread_mutex_lock(&timer_mutex);
 
     /* Find a free timer slot */
@@ -615,6 +688,7 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
     }
     if (slot < 0) {
         pthread_mutex_unlock(&timer_mutex);
+        timer_sig_restore(&sig_old);
         return SS$_EXQUOTA;
     }
 
@@ -635,6 +709,7 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
     if (timer_create(CLOCK_REALTIME, &sev, &te->timerid) < 0) {
         te->active = 0;
         pthread_mutex_unlock(&timer_mutex);
+        timer_sig_restore(&sig_old);
         return SS$_INSFMEM;
     }
 
@@ -655,8 +730,10 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
         /* Absolute time - convert from VMS to Unix */
         struct timespec abs_ts;
         if (vms_to_unix_time((uint64_t)signed_time, &abs_ts) < 0) {
+            timer_delete(te->timerid);
             te->active = 0;
             pthread_mutex_unlock(&timer_mutex);
+            timer_sig_restore(&sig_old);
             return SS$_BADPARAM;
         }
         its.it_value = abs_ts;
@@ -667,10 +744,12 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
         timer_delete(te->timerid);
         te->active = 0;
         pthread_mutex_unlock(&timer_mutex);
+        timer_sig_restore(&sig_old);
         return SS$_BADPARAM;
     }
 
     pthread_mutex_unlock(&timer_mutex);
+    timer_sig_restore(&sig_old);
     return SS$_NORMAL;
 #endif /* OVMX_HOST_POSIX_TIMERS */
 }
@@ -685,6 +764,8 @@ uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
     (void)acmode;
 
 #if OVMX_HOST_POSIX_TIMERS
+    sigset_t sig_old;
+    timer_sig_block(&sig_old);
     pthread_mutex_lock(&timer_mutex);
     for (int i = 0; i < MAX_TIMERS; i++) {
         if (timer_table[i].active &&
@@ -694,6 +775,7 @@ uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
         }
     }
     pthread_mutex_unlock(&timer_mutex);
+    timer_sig_restore(&sig_old);
 #else
     {
         uint64_t old = vt_block();
@@ -711,8 +793,8 @@ uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
 
 /*
  * sys$gettim_prec - Get the current time at the best precision available.
- * The host's CLOCK_REALTIME is read at nanosecond resolution and reported in
- * VMS 100ns ticks, so the full-precision answer is the only one given.
+ * The executive keeps the system time to the 100 ns tick (rd vms-642), so the
+ * full-precision answer is the only one given.
  */
 uint32_t sys$gettim_prec(uint64_t *timadr)
 {
@@ -863,7 +945,7 @@ uint32_t (sys$getutc)(void *utcadr)
 {
     if (!utcadr) return SS$_BADPARAM;
     uint64_t now;
-    uint32_t st = vms_substrate_systime(&now);
+    uint32_t st = vms_systime_get(&now);
     if (!(st & 1)) return st;
     utc_put(utcadr, now + UTC_EPOCH_OFFSET, utc_system_tdf());
     return SS$_NORMAL;

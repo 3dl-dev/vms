@@ -43,7 +43,7 @@ try:
         res.append(('OVMXA->VAXC', 'FAIL', a.p.after if i == 1 else 'TIMEOUT'))
     else:
         time.sleep(1); a.send('SYSTEM')
-        a.p.expect('Password:', timeout=60); time.sleep(1); a.send('OVMXCLUSTER1')
+        a.p.expect('Password:', timeout=60); time.sleep(1); a.send(os.environ['VAX_PW'])
         j = a.p.expect([r'\$ ', r'%REM-S-END'], timeout=180)
         if j == 1:
             raise RuntimeError('remote login refused: ' + a.p.before.decode('latin1')[-200:])

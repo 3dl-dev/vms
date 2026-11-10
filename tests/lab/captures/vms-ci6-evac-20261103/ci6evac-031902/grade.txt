@@ -1,0 +1,7 @@
+capture: /home/baron/projects/vms/.worktrees/cluster-1e58lab/tests/lab/tools/../captures/vms-ci6-evac-20261103/ci6evac-031902; EVAC.DAT from vax2.log dump, 196 records
+C1 PASS: VAX1 wrote seq 1..136; OVMXE standby held NL behind it
+C2 PASS: STOP EVACVAX1, then SHUTDOWN REMOVE_NODE; VAX2 removed VAX1
+C3 FAIL: OVMXE seq 137 is not later than VAX1 seq 136
+C4 FAIL: probe status %X00000001 (%SYSTEM-S-NORMAL, normal successful completion), not SS$_NOTQUEUED
+C5 PASS: 0 bugcheck/quorum lines; VAX2 Q=2 V=2; EVAC.DAT seq 1..196 contiguous
+VERDICT: FAIL (criteria 3,4)

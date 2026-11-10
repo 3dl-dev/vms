@@ -42,6 +42,7 @@ extern "C" {
 #define PQL$_WSDEFAULT    11   /* Default working set size */
 #define PQL$_WSEXTENT     13   /* Working set extent */
 #define PQL$_WSQUOTA      10   /* Working set quota */
+#define PQL$_LENGTH       15   /* Number of codes (one past the last) */
 
 #ifdef __cplusplus
 }

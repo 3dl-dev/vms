@@ -1,0 +1,505 @@
+$ ! CI6EVAC-BEGIN ci6evac-024102
+$ SET DEFAULT SYS$LOGIN
+$ MACRO EVACWL
+%MACRO-I-GENINFO, Generated INFO: RMS BLOCK NOT LONGWORD ALIGNED;
+%MACRO-I-GENINFO, Generated INFO: RMS BLOCK NOT LONGWORD ALIGNED;
+$ LINK EVACWL
+$ EVACWL :== $SYS$LOGIN:EVACWL.EXE
+$ DIRECTORY/SIZE SYS$LOGIN:EVACWL.EXE
+
+Directory SYS$SYSROOT:[SYSMGR]
+
+EVACWL.EXE;1               8
+
+Total of 1 file, 8 blocks.
+$ INITIALIZE $2$DUA2: EVAC5FA
+$ MOUNT/SYSTEM $2$DUA2: EVAC5FA
+%MOUNT-I-MOUNTED, EVAC5FA mounted on _$2$DUA2: (VAX1)
+$ CREATE/DIRECTORY $2$DUA2:[CI6E11030241]
+$ DEFINE/SYSTEM EVAC$DATA $2$DUA2:[CI6E11030241]
+$ SHOW DEVICE/FULL $2$DUA2:
+
+Disk $2$DUA2: (VAX1), device type RA81, is online, mounted, file-oriented
+    device, shareable, served to cluster via MSCP Server, error logging is
+    enabled.
+
+    Error count                    0    Operations completed                 92
+    Owner process                 ""    Owner UIC                      [SYSTEM]
+    Owner process ID        00000000    Dev Prot            S:RWPL,O:RWPL,G:R,W
+    Reference count                1    Default buffer size                 512
+    Total blocks              891072    Sectors per track                    51
+    Total cylinders             1248    Tracks per cylinder                  14
+    Allocation class               2
+
+    Volume label           "EVAC5FA"    Relative volume number                0
+    Cluster size                   3    Transaction count                     1
+    Free blocks               890928    Maximum files allowed            111384
+    Extend quantity                5    Mount count                           1
+    Mount status              System    Cache name          "_$2$DUA0:XQPCACHE"
+    Extent cache size             64    Maximum blocks in extent cache    89092
+    File ID cache size            64    Blocks currently in extent cache  89094
+    Quota cache size               0    Maximum buffers in FCP cache       1299
+    Volume owner UIC        [SYSTEM]    Vol Prot    S:RWCD,O:RWCD,G:RWCD,W:RWCD
+
+  Volume Status:  ODS-2, subject to mount verification, file high-water marking,
+      write-back caching enabled.
+
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME="F11B$vEVAC5FA     "
+Address of RSB:  879B64C0  GGMODE:       CR  Status: DIRENTR VALID           
+Parent RSB:      00000000  CGMODE:       CR                                  
+Sub-RSB count:          5  FGMODE:       CR                                  
+Lock Count:             2  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      56457624 42313146   F11B$vEV  Valblk: 000D9830 07000003
+ Length   18   20202041 46354341   AC5FA             00020009 00000039
+ Kernel mode   00000000 00002020     ...... 
+ System        00000000 00000000   ........  Seqnum: 00000006
+
+Granted queue (Lock ID / Gr mode / Range):
+ 0D0005F3  NL 00000000-FFFFFFFF         010005ED  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> SHOW LOCK 0D0005F3
+
+Lock id:  0D0005F3   PID:     00000000   Flags:                           
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      879A70C0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      NL   00000000-FFFFFFFF
+
+Resource:      56457624 42313146    F11B$vEV  Status:  MSTCPY                  
+ Length   18   20202041 46354341    AC5FA                                      
+ Kernel mode   00000000 00002020      ......                                   
+ System        00000000 00000000    ........                                   
+
+Master copy of lock 01000E68 on system 00010003
+
+
+Lock id:  070005F4   PID:     00000000   Flags:   VALBLK  CONVERT SYNCSTS 
+Par. id:  010005ED   SUBLCKs:        0            CVTSYS                  
+LKB:      879A7340   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      NL   00000000-FFFFFFFF
+
+Resource:      000B7324 42313146    F11B$s..  Status:  NOQUOTA                 
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  110005F5   PID:     00000000   Flags:   VALBLK  CONVERT SYNCSTS 
+Par. id:  01000004   SUBLCKs:        0            CVTSYS                  
+LKB:      879A9AC0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      NL   00000000-FFFFFFFF
+
+Resource:      042A7324 42313146    F11B$s*.  Status:  NOQUOTA                 
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  010005F6   PID:     00000000   Flags:   CONVERT NOQUEUE SYSTEM  
+Par. id:  00000000   SUBLCKs:        0            NOQUOTA CVTSYS  NODLCKW 
+LKB:      879AB840   BLKAST:  86FADB38            NODLCKB                 
+PRIORTY:      0000                                                        
+
+Granted at      PR   00000000-FFFFFFFF
+
+Resource:      6D632445 48434143    CACHE$cm  Status:  FLOCK                   
+ Length   24   20314B53 44535953    SYSDSK1                                    
+ Kernel mode   00000420 20202020         ...                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  050005F7   PID:     00000000   Flags:   VALBLK  NOQUEUE SYNCSTS 
+Par. id:  00000000   SUBLCKs:        0            SYSTEM  NOQUOTA CVTSYS  
+LKB:      879AB940   BLKAST:  86FECF0A                                    
+PRIORTY:      0000                                                        
+
+Granted at      PR   00000000-FFFFFFFF
+
+Resource:      59536124 42313146    F11B$aSY  Status:  NOQUOTA CACHED          
+ Length   22   20202031 4B534453    SDSK1                                      
+ Kernel mode   00000000 041A2020      ......                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  030005F8   PID:     00000000   Flags:   VALBLK  CONVERT SYNCSTS 
+Par. id:  01000004   SUBLCKs:        0            CVTSYS                  
+LKB:      879ABA40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      NL   00000000-FFFFFFFF
+
+Resource:      041A7324 42313146    F11B$s..  Status:  NOQUOTA                 
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  020005F9   PID:     00000000   Flags:   CONVERT NOQUEUE SYSTEM  
+Par. id:  00000000   SUBLCKs:        0            NOQUOTA CVTSYS  NODLCKW 
+LKB:      879AC340   BLKAST:  86FADB38            NODLCKB                 
+PRIORTY:      0000                                                        
+
+Granted at      PR   00000000-FFFFFFFF
+
+Resource:      6D632445 48434143    CACHE$cm  Status:  FLOCK   CACHED          
+ Length   24   20314B53 44535953    SYSDSK1                                    
+ Kernel mode   0000041A 20202020        ....                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+SDA> SHOW LOCK 010005ED
+
+Lock id:  010005ED   PID:     00000000   Flags:   VALBLK  CONVERT NOQUEUE 
+Par. id:  00000000   SUBLCKs:        5            SYNCSTS NOQUOTA CVTSYS  
+LKB:      879A6940   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      56457624 42313146    F11B$vEV  Status:  NOQUOTA                 
+ Length   18   20202041 46354341    AC5FA                                      
+ Kernel mode   00000000 00002020      ......                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  010005EE   PID:     00000000   Flags:   CONVERT NOQUEUE SYSTEM  
+Par. id:  00000000   SUBLCKs:        0            NOQUOTA CVTSYS  NODLCKW 
+LKB:      879A6BC0   BLKAST:  86FACC5F            NODLCKB                 
+PRIORTY:      0000                                                        
+
+Granted at      PR   00000000-FFFFFFFF
+
+Resource:      41564576 24434356    VCC$vEVA  Status:  FLOCK                   
+ Length   17   20202020 41463543    C5FA                                       
+ Kernel mode   00000000 00000020     .......                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  010005EF   PID:     00000000   Flags:   VALBLK  CONVERT SYNCSTS 
+Par. id:  010005ED   SUBLCKs:        0            CVTSYS                  
+LKB:      879A6C40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      NL   00000000-FFFFFFFF
+
+Resource:      00047324 42313146    F11B$s..  Status:  NOQUOTA                 
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  020005F0   PID:     00000000   Flags:   CONVERT NOQUEUE SYNCSTS 
+Par. id:  00000000   SUBLCKs:        0            NOQUOTA CVTSYS          
+LKB:      879A6CC0   BLKAST:  86FECEC6                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      56456224 42313146    F11B$bEV  Status:  NOQUOTA                 
+ Length   18   20202041 46354341    AC5FA                                      
+ Kernel mode   00000000 00002020      ......                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  0A0005F1   PID:     00000000   Flags:   CONVERT NOQUEUE SYNCSTS 
+Par. id:  010005ED   SUBLCKs:        0            SYSTEM  NOQUOTA CVTSYS  
+LKB:      879A6EC0   BLKAST:  86FECDE4                                    
+PRIORTY:      0000                                                        
+
+Granted at      PR   00000000-FFFFFFFF
+
+Resource:      00026324 42313146    F11B$c..  Status:  NOQUOTA                 
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  020005F2   PID:     00000000   Flags:   VALBLK  CONVERT SYNCSTS 
+Par. id:  010005ED   SUBLCKs:        0            CVTSYS                  
+LKB:      879A6FC0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      NL   00000000-FFFFFFFF
+
+Resource:      000A7324 42313146    F11B$s..  Status:  NOQUOTA                 
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  0D0005F3   PID:     00000000   Flags:                           
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      879A70C0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      NL   00000000-FFFFFFFF
+
+Resource:      56457624 42313146    F11B$vEV  Status:  MSTCPY                  
+ Length   18   20202041 46354341    AC5FA                                      
+ Kernel mode   00000000 00002020      ......                                   
+ System        00000000 00000000    ........                                   
+
+Master copy of lock 01000E68 on system 00010003
+
+
+Lock id:  070005F4   PID:     00000000   Flags:   VALBLK  CONVERT SYNCSTS 
+Par. id:  010005ED   SUBLCKs:        0            CVTSYS                  
+LKB:      879A7340   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      NL   00000000-FFFFFFFF
+
+Resource:      000B7324 42313146    F11B$s..  Status:  NOQUOTA                 
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  110005F5   PID:     00000000   Flags:   VALBLK  CONVERT SYNCSTS 
+Par. id:  01000004   SUBLCKs:        0            CVTSYS                  
+LKB:      879A9AC0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      NL   00000000-FFFFFFFF
+
+Resource:      042A7324 42313146    F11B$s*.  Status:  NOQUOTA                 
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  010005F6   PID:     00000000   Flags:   CONVERT NOQUEUE SYSTEM  
+Par. id:  00000000   SUBLCKs:        0            NOQUOTA CVTSYS  NODLCKW 
+LKB:      879AB840   BLKAST:  86FADB38            NODLCKB                 
+PRIORTY:      0000                                                        
+
+Granted at      PR   00000000-FFFFFFFF
+
+Resource:      6D632445 48434143    CACHE$cm  Status:  FLOCK                   
+ Length   24   20314B53 44535953    SYSDSK1                                    
+ Kernel mode   00000420 20202020         ...                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  060005F7   PID:     00010013   Flags:   VALBLK  SYNCSTS SYSTEM  
+Par. id:  01000004   SUBLCKs:        0            NOQUOTA NODLCKW         
+LKB:      879AB940   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      PW   00000000-FFFFFFFF
+
+Resource:      002A7324 42313146    F11B$s*.  Status:  NOQUOTA CACHED          
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  030005F8   PID:     00000000   Flags:   VALBLK  CONVERT SYNCSTS 
+Par. id:  01000004   SUBLCKs:        0            CVTSYS                  
+LKB:      879ABA40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      NL   00000000-FFFFFFFF
+
+Resource:      041A7324 42313146    F11B$s..  Status:  NOQUOTA                 
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  030005F9   PID:     00010013   Flags:   VALBLK  CONVERT         
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      879AC340   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      PW   00000000-FFFFFFFF
+
+Resource:      54535953 24495444    DTI$SYST  Status:  CACHED                  
+ Length   15   00315841 56244D45    EM$VAX1.                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+SDA> EXIT
+$ SPAWN/NOWAIT/PROCESS=EVW1R1/OUTPUT=SYS$LOGIN:EVW1R1.LOG EVACWL 10
+%DCL-S-SPAWNED, process EVW1R1 spawned
+$ SPAWN/NOWAIT/PROCESS=EVW1R2/OUTPUT=SYS$LOGIN:EVW1R2.LOG EVACWL 10
+%DCL-S-SPAWNED, process EVW1R2 spawned
+$ DIRECTORY/SIZE=ALL $2$DUA2:[CI6E11030241]EVAC.DAT
+
+Directory $2$DUA2:[CI6E11030241]
+
+EVAC.DAT;1                 5/6      
+
+Total of 1 file, 5/6 blocks.
+$ SPAWN/NOWAIT/PROCESS=EVACVAX1/OUTPUT=SYS$LOGIN:VAX1WL.LOG EVACWL
+%DCL-S-SPAWNED, process EVACVAX1 spawned
+$ STOP EVACVAX1
+$ TYPE $2$DUA2:[CI6E11030241]EVAC.DAT
+VAX1             538968604         1 3-NOV-2026 02:44:25.33     
+VAX1             538968604         2 3-NOV-2026 02:44:26.33     
+VAX1             538968604         3 3-NOV-2026 02:44:27.33     
+VAX1             538968604         4 3-NOV-2026 02:44:28.33     
+VAX1             538968604         5 3-NOV-2026 02:44:29.33     
+VAX1             538968604         6 3-NOV-2026 02:44:30.33     
+VAX1             538968604         7 3-NOV-2026 02:44:31.33     
+VAX1             538968604         8 3-NOV-2026 02:44:32.33     
+VAX1             538968604         9 3-NOV-2026 02:44:33.33     
+VAX1             538968604        10 3-NOV-2026 02:44:34.33     
+OVMXE            268435462        11 3-NOV-2026 02:44:30.94     
+OVMXE            268435462        12 3-NOV-2026 02:44:31.95     
+OVMXE            268435462        13 3-NOV-2026 02:44:32.96     
+OVMXE            268435462        14 3-NOV-2026 02:44:33.96     
+OVMXE            268435462        15 3-NOV-2026 02:44:34.97     
+OVMXE            268435462        16 3-NOV-2026 02:44:35.98     
+OVMXE            268435462        17 3-NOV-2026 02:44:36.98     
+OVMXE            268435462        18 3-NOV-2026 02:44:37.99     
+OVMXE            268435462        19 3-NOV-2026 02:44:39.00     
+OVMXE            268435462        20 3-NOV-2026 02:44:40.00     
+VAX1             538968605        21 3-NOV-2026 02:45:23.93     
+VAX1             538968605        22 3-NOV-2026 02:45:24.93     
+VAX1             538968605        23 3-NOV-2026 02:45:25.93     
+VAX1             538968605        24 3-NOV-2026 02:45:26.93     
+VAX1             538968605        25 3-NOV-2026 02:45:27.93     
+VAX1             538968605        26 3-NOV-2026 02:45:28.93     
+VAX1             538968605        27 3-NOV-2026 02:45:29.93     
+VAX1             538968605        28 3-NOV-2026 02:45:30.93     
+VAX1             538968605        29 3-NOV-2026 02:45:31.93     
+VAX1             538968605        30 3-NOV-2026 02:45:32.93     
+OVMXE            268435463        31 3-NOV-2026 02:45:29.54     
+OVMXE            268435463        32 3-NOV-2026 02:45:30.55     
+OVMXE            268435463        33 3-NOV-2026 02:45:31.56     
+OVMXE            268435463        34 3-NOV-2026 02:45:32.56     
+OVMXE            268435463        35 3-NOV-2026 02:45:33.57     
+OVMXE            268435463        36 3-NOV-2026 02:45:34.58     
+OVMXE            268435463        37 3-NOV-2026 02:45:35.59     
+OVMXE            268435463        38 3-NOV-2026 02:45:36.60     
+OVMXE            268435463        39 3-NOV-2026 02:45:37.60     
+OVMXE            268435463        40 3-NOV-2026 02:45:38.61     
+VAX1             538968606        41 3-NOV-2026 02:46:32.61     
+VAX1             538968606        42 3-NOV-2026 02:46:33.61     
+VAX1             538968606        43 3-NOV-2026 02:46:34.61     
+VAX1             538968606        44 3-NOV-2026 02:46:35.61     
+VAX1             538968606        45 3-NOV-2026 02:46:36.61     
+VAX1             538968606        46 3-NOV-2026 02:46:37.61     
+VAX1             538968606        47 3-NOV-2026 02:46:38.61     
+VAX1             538968606        48 3-NOV-2026 02:46:39.61     
+VAX1             538968606        49 3-NOV-2026 02:46:40.61     
+VAX1             538968606        50 3-NOV-2026 02:46:41.61     
+VAX1             538968606        51 3-NOV-2026 02:46:42.61     
+VAX1             538968606        52 3-NOV-2026 02:46:43.61     
+VAX1             538968606        53 3-NOV-2026 02:46:44.61     
+VAX1             538968606        54 3-NOV-2026 02:46:45.61     
+VAX1             538968606        55 3-NOV-2026 02:46:46.61     
+VAX1             538968606        56 3-NOV-2026 02:46:47.61     
+VAX1             538968606        57 3-NOV-2026 02:46:48.61     
+VAX1             538968606        58 3-NOV-2026 02:46:49.61     
+VAX1             538968606        59 3-NOV-2026 02:46:50.61     
+VAX1             538968606        60 3-NOV-2026 02:46:51.61     
+VAX1             538968606        61 3-NOV-2026 02:46:52.61     
+VAX1             538968606        62 3-NOV-2026 02:46:53.61     
+VAX1             538968606        63 3-NOV-2026 02:46:54.61     
+VAX1             538968606        64 3-NOV-2026 02:46:55.61     
+VAX1             538968606        65 3-NOV-2026 02:46:56.61     
+VAX1             538968606        66 3-NOV-2026 02:46:57.61     
+VAX1             538968606        67 3-NOV-2026 02:46:58.61     
+VAX1             538968606        68 3-NOV-2026 02:46:59.61     
+VAX1             538968606        69 3-NOV-2026 02:47:00.61     
+VAX1             538968606        70 3-NOV-2026 02:47:01.61     
+VAX1             538968606        71 3-NOV-2026 02:47:02.61     
+VAX1             538968606        72 3-NOV-2026 02:47:03.61     
+VAX1             538968606        73 3-NOV-2026 02:47:04.61     
+VAX1             538968606        74 3-NOV-2026 02:47:05.61     
+VAX1             538968606        75 3-NOV-2026 02:47:06.61     
+VAX1             538968606        76 3-NOV-2026 02:47:07.61     
+VAX1             538968606        77 3-NOV-2026 02:47:08.61     
+VAX1             538968606        78 3-NOV-2026 02:47:09.61     
+VAX1             538968606        79 3-NOV-2026 02:47:10.61     
+VAX1             538968606        80 3-NOV-2026 02:47:11.61     
+VAX1             538968606        81 3-NOV-2026 02:47:12.61     
+VAX1             538968606        82 3-NOV-2026 02:47:13.61     
+VAX1             538968606        83 3-NOV-2026 02:47:14.61     
+VAX1             538968606        84 3-NOV-2026 02:47:15.61     
+VAX1             538968606        85 3-NOV-2026 02:47:16.61     
+VAX1             538968606        86 3-NOV-2026 02:47:17.61     
+VAX1             538968606        87 3-NOV-2026 02:47:18.61     
+VAX1             538968606        88 3-NOV-2026 02:47:19.61     
+VAX1             538968606        89 3-NOV-2026 02:47:20.61     
+VAX1             538968606        90 3-NOV-2026 02:47:21.61     
+VAX1             538968606        91 3-NOV-2026 02:47:22.61     
+VAX1             538968606        92 3-NOV-2026 02:47:23.61     
+VAX1             538968606        93 3-NOV-2026 02:47:24.61     
+VAX1             538968606        94 3-NOV-2026 02:47:25.61     
+VAX1             538968606        95 3-NOV-2026 02:47:26.61     
+OVMXE            268435464        96 3-NOV-2026 02:47:23.27     
+OVMXE            268435464        97 3-NOV-2026 02:47:24.28     
+OVMXE            268435464        98 3-NOV-2026 02:47:25.28     
+OVMXE            268435464        99 3-NOV-2026 02:47:26.29     
+OVMXE            268435464       100 3-NOV-2026 02:47:27.30     
+OVMXE            268435464       101 3-NOV-2026 02:47:28.30     
+OVMXE            268435464       102 3-NOV-2026 02:47:29.32     
+OVMXE            268435464       103 3-NOV-2026 02:47:30.33     
+OVMXE            268435464       104 3-NOV-2026 02:47:31.34     
+OVMXE            268435464       105 3-NOV-2026 02:47:32.35     
+OVMXE            268435464       106 3-NOV-2026 02:47:33.36     
+OVMXE            268435464       107 3-NOV-2026 02:47:34.37     
+OVMXE            268435464       108 3-NOV-2026 02:47:35.37     
+OVMXE            268435464       109 3-NOV-2026 02:47:36.38     
+OVMXE            268435464       110 3-NOV-2026 02:47:37.39     
+$ ANALYZE/DISK_STRUCTURE $2$DUA2:
+Analyze/Disk_Structure for _$2$DUA2: started on  3-NOV-2026 02:48:57.70
+
+%ANALDISK-I-OPENQUOTA, error opening QUOTA.SYS
+-SYSTEM-W-NOSUCHFILE, no such file
+$ WRITE SYS$OUTPUT "ANALDISK STATUS=",$STATUS
+ANALDISK STATUS=%X00000001
+$ 

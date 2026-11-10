@@ -60,6 +60,8 @@
 #include "exec_kbackend.h"    /* -> lock_shim/exec_kbackend_linux.h -> exec_kbackend_host.h */
 #include "vms_dlm_proxy.h"    /* the requester seam under test */
 #include "vms_rms_lockname.h" /* the RMS file-access lock's name (rd vms-326) */
+#include "vms_dlm_hash.h"     /* rd vms-d63: the sub-resource hash */
+#include "vms_f11b_ser.h"     /* the XQP per-file serialization lock (rd vms-d63) */
 
 #include <pthread.h>
 #include <stdio.h>
@@ -94,6 +96,7 @@ struct fake_master {
 	pthread_cond_t          arrived;
 	int                     posts;
 	struct vms_dlm_proxy_post last;
+	struct vms_dlm_proxy_post hist[16];  /* rd vms-d63: every post, in order */
 	uint32_t                fail_with;   /* nonzero => refuse every post   */
 	int                     saw_zero_lkid;
 };
@@ -116,6 +119,8 @@ static uint32_t fm_post(void *ctx, const struct vms_dlm_proxy_post *p)
 	if (p->req_lkid == 0)
 		m->saw_zero_lkid = 1;
 	m->last = *p;
+	if (m->posts >= 0 && m->posts < 16)
+		m->hist[m->posts] = *p;
 	m->posts++;
 	st = m->fail_with ? m->fail_with : (uint32_t)SS__NORMAL;
 	pthread_cond_broadcast(&m->arrived);
@@ -1089,6 +1094,91 @@ static void c55_no_removal_for_an_unregistered_entry(void)
 
 
 /*
+ * rd vms-8cb5: NO REMOVAL FOR AN ENTRY A STATE TRANSITION DISCARDED.
+ *
+ * The V0.7-15 LOCKMGRERR, replayed on the real engine. A directory node DID
+ * hold this node's entry -- it answered the lookup 0xf9 -- and then a state
+ * transition ran (OVMXB's addition). Phase 1 discards every directory entry
+ * cluster-wide, a real master re-registers its own with op-0x0d, and OVMX sends
+ * none, so the directory holds nothing for the resource afterwards. The vector
+ * still names the SAME directory node, so the rd vms-c55 check passed and the
+ * last $DEQ sent a removal for an entry the VAX no longer had: it answered
+ * cat-0x02 op-0x19 17 ms later and bugchecked (capture frames 1722/1724 lookup
+ * + 0xf9, epoch-4 rebuild, 2741 removal, 2743 op-0x19).
+ */
+static void p8cb5_no_removal_after_a_transition_discarded_the_entry(void)
+{
+	struct vms_proc proc;
+	struct vms_dlm_proxy_post enq;
+	uint32_t lkid = 0, st;
+	int before;
+
+	printf("--- rd vms-8cb5: no removal for an entry a state transition "
+	       "discarded ---\n");
+	configure_remote_directory();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc);
+
+	st = do_enq_computed(&proc, "F11B$s8CB5SYS", LCK_K_EXMODE, &lkid);
+	ct_check(st == SS__NORMAL && lkid != 0,
+		 "$ENQ posts a lookup to the remote directory node");
+	if (!fm_wait_posts(1, &enq)) {
+		ct_check(0, "the lookup was posted");
+		vms_lock_dlm_set_requester_ops(NULL);
+		vms_lock_cleanup();
+		return;
+	}
+	ct_check_eq_u32(vms_lock_dlm_assume_mastery("F11B$s8CB5SYS", 0u, lkid),
+			SS__NORMAL, "the directory answers 0xf9: this node masters it");
+
+	/* OVMXB's addition: the transition's Phase 1. */
+	ct_check_eq_u32(vms_lock_dlm_directory_discarded(), 1u,
+			"the transition forgets the one directory this node told");
+	ct_check_eq_u32(vms_lock_dlm_directory_discarded(), 0u,
+			"... once: a second transition has nothing left to forget");
+
+	pthread_mutex_lock(&fm.lock);
+	before = fm.posts;
+	pthread_mutex_unlock(&fm.lock);
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "the last lock goes");
+	usleep(50 * 1000);
+	pthread_mutex_lock(&fm.lock);
+	ct_check_eq_u32((uint32_t)fm.posts, (uint32_t)before,
+			"*** a resource whose directory entry a transition "
+			"discarded is NOT removed from that directory ***");
+	pthread_mutex_unlock(&fm.lock);
+
+	/* ...and the NEXT mastery, told after the transition, is removed as
+	 * before: the record is forgotten, not the mechanism. */
+	lkid = 0;
+	(void)do_enq_computed(&proc, "F11B$s8CB5SYS", LCK_K_EXMODE, &lkid);
+	if (!fm_wait_posts(before + 1, &enq)) {
+		ct_check(0, "the re-lookup was posted");
+		vms_lock_dlm_set_requester_ops(NULL);
+		vms_lock_cleanup();
+		return;
+	}
+	ct_check_eq_u32(vms_lock_dlm_assume_mastery("F11B$s8CB5SYS", 0u, lkid),
+			SS__NORMAL, "a post-transition lookup is answered 0xf9");
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "the lock goes again");
+	if (!fm_wait_posts(before + 2, &enq)) {
+		ct_check(0, "*** an entry told AFTER the transition is removed ***");
+	} else {
+		ct_check_eq_u32(enq.op, VMS_DLM_POST_DIR_REMOVE,
+				"an entry told AFTER the transition is removed");
+	}
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+}
+
+
+/*
  * ==========================================================================
  * rd vms-326: A COUNTED, BINARY RESOURCE NAME IS ITS OWN RESOURCE.
  *
@@ -1292,7 +1382,7 @@ static void b67a_sublock_goes_to_the_parents_master(void)
 	 * master lock id for RMT9's root, which its SDA printed as the
 	 * sub-lock's "Par. id: 3C000695". */
 	const uint32_t PARENT_MASTER_LKID = 0x3c000695u;
-	struct vms_dlm_proxy_post post;
+	struct vms_dlm_proxy_post post, root_post;
 	struct vms_proc proc;
 	uint32_t root = 0, sub = 0, rootS0 = 0, st;
 
@@ -1313,6 +1403,7 @@ static void b67a_sublock_goes_to_the_parents_master(void)
 	ct_check(st == SS__NORMAL && root != 0,
 		 "the root $ENQ creates a proxy and posts a request");
 	ct_check(fm_wait_posts(1, &post), "the root's request was posted");
+	root_post = post;
 	ct_check_eq_u32(post.dst_csid, CSID_DIRECTORY,
 			"the ROOT's first request goes to the DIRECTORY node");
 	ct_check(post.parent_own_lkid == 0u && post.parent_master_lkid == 0u,
@@ -1324,10 +1415,9 @@ static void b67a_sublock_goes_to_the_parents_master(void)
 	ct_check_eq_u32(st, SS__NORMAL,
 			"the master GRANTS the root and names its own handle");
 
-	/* (2) THE SUB-LOCK. Note what is deliberately NOT done: no hash is
-	 *     learned for the sub NAME. A request addressed to a master needs no
-	 *     directory index, and this executive will never have learned one for
-	 *     a name no directory was ever asked about. */
+	/* (2) THE SUB-LOCK. Nothing is learned for the sub NAME: its hash is
+	 *     COMPUTED (rd vms-d63) from its identity and the root's held value
+	 *     -- the value the tree's master finds the sub-RSB by. */
 	{
 		struct vms_enq_args a;
 
@@ -1340,7 +1430,7 @@ static void b67a_sublock_goes_to_the_parents_master(void)
 		sub = a.lkid;
 	}
 	ct_check(st == SS__NORMAL && sub != 0,
-		 "*** the sub-lock $ENQ is accepted with NO directory hash for "
+		 "*** the sub-lock $ENQ is accepted with no hash LEARNED for "
 		 "its name ***");
 	ct_check(fm_wait_posts(2, &post), "the sub-lock's request was posted");
 	ct_check_eq_u32(post.dst_csid, CSID_MASTER,
@@ -1354,9 +1444,21 @@ static void b67a_sublock_goes_to_the_parents_master(void)
 	ct_check_eq_u32(post.parent_master_lkid, PARENT_MASTER_LKID,
 			"*** body[40:44] is the handle THE PARENT'S MASTER gave "
 			"it -- the pair that parent's own grant carried ***");
-	ct_check_eq_u32(post.dir_hash_known, 0u,
-			"  and NO hash is asserted for a sub name nobody was "
-			"asked about (Rule 8)");
+	{
+		uint32_t want = 0u;
+
+		ct_check(root_post.dir_hash_known &&
+			 vms_dlm_sub_name_hash_proven(root_post.dir_hash,
+						      post.res_group,
+						      post.res_acmode,
+						      (const uint8_t *)"S0", 2u,
+						      &want) == VMS_DLM_HASH_OK,
+			 "  the root carried its value; the sub hash is defined");
+		ct_check(post.dir_hash_known && post.dir_hash == want,
+			 "*** and it carries the SUB's hash, off the root's value "
+			 "(rd vms-d63; the function is VAX2's own on S0 under RMT9, "
+			 "b67a frame 235 -- test_dlm_hash) ***");
+	}
 	ct_check(strcmp(post.resnam, "S0") == 0,
 		 "the posted name is the sub-resource's own");
 	ct_check_eq_u32(post.lkmode, LCK_K_CWMODE,
@@ -1792,6 +1894,387 @@ static void e3ea_refused_then_admitted_after_the_label_is_freed(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * rd vms-d63: THE XQP'S PER-FILE SERIALIZATION LOCK, ON A VOLUME A VAX
+ * MASTERS.
+ *
+ * The lab (tests/lab/captures/vms-5fa-shared-volume-r2-20261102): OVMX
+ * appended to EVAC.DAT and rewrote its header on a volume VAX1 serves and
+ * masters, and never touched F11B$s -- so VAX1's cached header kept its old
+ * EOF and VAX1 wrote over OVMX's records. Driven here through the doors the
+ * ACP uses (vms_lock_acp_file_ser / _release), with the volume's tree mastered
+ * by another node:
+ *   1. the parent: NL on F11B$vEVAC5FA, at (group 0, KERNEL), to the directory;
+ *   2. the file's lock: 'F11B$s' + LE32(12), COUNTED (10 bytes, NULs inside),
+ *      PW with LCK$M_VALBLK, a SUB-lock -- addressed to the tree's MASTER
+ *      with the parent pair, never to the directory;
+ *   3. the master's grant hands out the value block (2,1), and the caller
+ *      gets exactly that;
+ *   4. the release WRITES the block the ACP computed -- (3,1), the header
+ *      counter stepped -- on the $DEQ to the master, marked written; the
+ *      parent's release writes nothing.
+ * ================================================================ */
+#define D63_VRES      "F11B$vEVAC5FA     "   /* 18 bytes, as VAX1's SDA */
+#define D63_FID       12u                    /* EVAC.DAT (12,1,0)       */
+#define D63_V_MASTER  0x00006a01u
+#define D63_S_MASTER  0x00006a02u
+
+struct d63_take {
+	struct vms_proc *proc;
+	uint8_t          vb[16];
+	uint32_t         par;
+	uint32_t         lkid;
+	uint32_t         status;
+	volatile int     done;
+};
+
+static void *d63_take_thread(void *arg)
+{
+	struct d63_take *t = arg;
+
+	t->status = vms_lock_acp_file_ser(t->proc, D63_VRES, 18u, D63_FID,
+					  t->vb, &t->par, &t->lkid);
+	t->done = 1;
+	return NULL;
+}
+
+/* ================================================================
+ * rd vms-d63: THE F11B$s VALUE-BLOCK RULES ARE THE CAPTURED ONES.
+ * Every vector is a real (granted, released) pair off
+ * tests/lab/captures/vms-b20-mscp-read-20261011/mscp-read-write.pcap
+ * (tools/cluster/f11b_ser_valblk_census.py (b) pins the same three).
+ * ================================================================ */
+static void d63_value_block_rules_are_the_captured_ones(void)
+{
+	static const struct {
+		uint32_t gh, gd;      /* granted (header, data) */
+		int hdr, data;        /* what the holder changed */
+		uint32_t rh, rd;      /* released                */
+		const char *what;
+	} v[] = {
+		{ 0, 0, 1, 0, 2, 1, "file 13 created: (0,0) + header -> (2,1)" },
+		{ 2, 1, 1, 0, 3, 1, "file 13 closed: (2,1) + header -> (3,1)" },
+		{ 1, 3, 0, 1, 1, 4, "the MFD takes the entry: (1,3) + data -> (1,4)" },
+		{ 0, 0, 0, 0, 1, 1, "a file only looked at: (0,0) -> (1,1)" },
+		{ 3, 1, 0, 0, 3, 1, "a holder that changed nothing writes back what it got" },
+	};
+	uint8_t name[16];
+	uint32_t i;
+
+	printf("--- rd vms-d63: the F11B$s value-block rules are the captured ones ---\n");
+	for (i = 0; i < sizeof(v) / sizeof(v[0]); i++) {
+		uint8_t vb[16];
+
+		memset(vb, 0xEE, sizeof(vb));
+		vms_f11b_ser_wr32(vb, v[i].gh);
+		vms_f11b_ser_wr32(vb + 4, v[i].gd);
+		vms_f11b_ser_next(vb, v[i].hdr, v[i].data);
+		ct_check(vms_f11b_ser_hdr_seq(vb) == v[i].rh &&
+			 vms_f11b_ser_data_seq(vb) == v[i].rd &&
+			 vb[8] == 0 && vb[15] == 0, v[i].what);
+	}
+	{
+		uint8_t vb[16];
+
+		memset(vb, 0, sizeof(vb));
+		vms_f11b_ser_wr32(vb, 0xffffffffu);
+		vms_f11b_ser_wr32(vb + 4, 7u);
+		vms_f11b_ser_next(vb, 1, 0);
+		ct_check(vms_f11b_ser_hdr_seq(vb) == 1u,
+			 "a wrapping counter never lands on 0, the forgotten-resource value");
+	}
+	ct_check(vms_f11b_ser_name(0x0001042au, name, sizeof(name)) == 10u &&
+		 memcmp(name, "F11B$s\x2a\x04\x01\x00", 10) == 0,
+		 "the name is 'F11B$s' + LE32(num | nmx << 16), as VAX1's SDA "
+		 "shows 'F11B$s*.' Length 10");
+	ct_check(vms_f11b_ser_name(12u, name, 9u) == 0u,
+		 "and a buffer too small for it is refused");
+}
+
+static void d63_file_ser_lock_on_a_vax_mastered_volume(void)
+{
+	static const uint8_t want_name[10] = { 'F', '1', '1', 'B', '$', 's',
+					       12, 0, 0, 0 };
+	static const uint8_t granted[16] = { 2, 0, 0, 0, 1, 0, 0, 0 };
+	static const uint8_t written[16] = { 3, 0, 0, 0, 1, 0, 0, 0 };
+	struct vms_dlm_proxy_post post, sub_post;
+	struct vms_dlm_proxy_grant g;
+	struct d63_take t;
+	struct vms_proc proc;
+	uint8_t vb[16];
+	pthread_t th;
+	int i;
+
+	printf("--- rd vms-d63: the F11B$s lock on a VAX-mastered volume ---\n");
+	configure_remote_directory();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc);
+	/* the value OVMX's own root request carried and VAX1 echoed (r5 frames
+	 * 3493/3494) */
+	(void)vms_lock_dlm_learn_dir_hash(D63_VRES, 18u, 0u, 0u, 0xa0261e5fu);
+
+	memset(&t, 0, sizeof(t));
+	t.proc = &proc;
+	if (pthread_create(&th, NULL, d63_take_thread, &t) != 0) {
+		ct_check(0, "pthread_create");
+		vms_lock_cleanup();
+		return;
+	}
+
+	/* 1. the parent */
+	ct_check(fm_wait_posts(1, &post), "the parent's request was posted");
+	ct_check(post.op == VMS_DLM_POST_ENQ && post.lkmode == LCK_K_NLMODE,
+		 "  an NL $ENQ");
+	ct_check(post.resnam_len == 18u &&
+		 memcmp(post.resnam, D63_VRES, 18u) == 0,
+		 "  on F11B$v + the 12-byte padded label, 18 bytes");
+	ct_check(post.res_group == 0u && post.res_acmode == 0u,
+		 "*** at (UIC group 0, KERNEL mode): the XQP's identity, not the "
+		 "issuing process's ***");
+	ct_check(post.to_directory && post.dst_csid == CSID_DIRECTORY,
+		 "  asked of the label's directory");
+	memset(&g, 0, sizeof(g));
+	g.req_lkid = post.req_lkid;
+	g.master_lkid = D63_V_MASTER;
+	g.master_csid = CSID_MASTER;
+	ct_check_eq_u32(vms_lock_dlm_proxy_grant_recv(&g), SS__NORMAL,
+			"the master grants the parent");
+
+	/* 2. the file's lock */
+	ct_check(fm_wait_posts(2, &sub_post), "the file's lock was posted");
+	ct_check(sub_post.op == VMS_DLM_POST_ENQ &&
+		 sub_post.lkmode == LCK_K_PWMODE &&
+		 (sub_post.flags & LCK_M_VALBLK),
+		 "*** a PW $ENQ with LCK$M_VALBLK ***");
+	ct_check(sub_post.resnam_len == 10u &&
+		 memcmp(sub_post.resnam, want_name, 10u) == 0,
+		 "*** named 'F11B$s' + 0c 00 00 00, COUNTED: 10 bytes with "
+		 "their NULs ***");
+	ct_check(sub_post.res_group == 0u && sub_post.res_acmode == 0u,
+		 "  at (UIC group 0, KERNEL mode)");
+	ct_check(!sub_post.to_directory && sub_post.dst_csid == CSID_MASTER,
+		 "*** a SUB-lock: addressed to the tree's MASTER, not the "
+		 "directory ***");
+	ct_check(sub_post.parent_master_lkid == D63_V_MASTER &&
+		 sub_post.parent_own_lkid == post.req_lkid,
+		 "  naming its parent by the pair (own handle, master's handle)");
+	{
+		uint32_t want = 0u;
+
+		ct_check(vms_dlm_sub_name_hash_proven(0xa0261e5fu, 0u, 0u,
+						      want_name, 10u, &want) ==
+			 VMS_DLM_HASH_OK, "  the proven sub hash is defined here");
+		ct_check(sub_post.dir_hash_known && sub_post.dir_hash == want &&
+			 want != 0u,
+			 "*** and carrying the SUB's hash, off its parent's held value "
+			 "-- the value VAX1 finds its own F11B$s<12> RSB by, never the "
+			 "zero that made it grant a fresh RSB (vms-5fa r5) ***");
+	}
+
+	/* 3. the grant hands out the value block */
+	memset(&g, 0, sizeof(g));
+	g.req_lkid = sub_post.req_lkid;
+	g.master_lkid = D63_S_MASTER;
+	g.master_csid = CSID_MASTER;
+	g.valblk_present = 1u;
+	memcpy(g.valblk, granted, 16);
+	g.valblk_seq = 5u;
+	ct_check_eq_u32(vms_lock_dlm_proxy_grant_recv(&g), SS__NORMAL,
+			"the master grants the file's lock, with its value block");
+	for (i = 0; i < 400 && !t.done; i++)
+		usleep(5 * 1000);
+	ct_check(t.done, "vms_lock_acp_file_ser returned");
+	if (!t.done) {
+		pthread_detach(th);
+		return;
+	}
+	pthread_join(th, NULL);
+	ct_check_eq_u32(t.status, SS__NORMAL, "  SS$_NORMAL");
+	ct_check(memcmp(t.vb, granted, 16) == 0,
+		 "*** the caller holds the MASTER's value block (2,1) ***");
+	ct_check(t.par == post.req_lkid && t.lkid == sub_post.req_lkid,
+		 "  and both handles");
+
+	/* 4. the release writes the ACP's next block */
+	memcpy(vb, t.vb, 16);
+	vms_f11b_ser_next(vb, 1, 0);
+	ct_check(memcmp(vb, written, 16) == 0,
+		 "the ACP's next block after a header write is (3,1)");
+	ct_check_eq_u32(vms_lock_acp_file_ser_release(&proc, t.par, t.lkid, vb),
+			SS__NORMAL, "the release");
+	ct_check(fm_wait_posts(4, NULL), "two releases were posted");
+	pthread_mutex_lock(&fm.lock);
+	post = fm.last;
+	pthread_mutex_unlock(&fm.lock);
+	ct_check(post.op == VMS_DLM_POST_DEQ && post.req_lkid == t.par &&
+		 !post.write_valblk,
+		 "  the parent's NL release writes nothing");
+	pthread_mutex_lock(&fm.lock);
+	sub_post = fm.hist[2];
+	i = fm.posts;
+	pthread_mutex_unlock(&fm.lock);
+	ct_check(i == 4, "  exactly four posts: 2 $ENQ, 2 $DEQ");
+	ct_check(sub_post.op == VMS_DLM_POST_DEQ && sub_post.req_lkid == t.lkid &&
+		 sub_post.master_lkid == D63_S_MASTER &&
+		 sub_post.dst_csid == CSID_MASTER,
+		 "  the file's lock is released FIRST, at its master");
+	ct_check(sub_post.write_valblk == 1u,
+		 "*** and its release is MARKED as writing the value block ***");
+	ct_check(memcmp(sub_post.valblk, written, 16) == 0,
+		 "*** carrying (3,1): the header counter VAX1 will compare with "
+		 "the 2 it cached -- the rd vms-d63 fix ***");
+	ct_check_eq_u32(do_deq(&proc, t.lkid), SS__IVLOCKID,
+			"  the file's lock is gone");
+	ct_check_eq_u32(do_deq(&proc, t.par), SS__IVLOCKID,
+			"  and the parent");
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+}
+
+/* ================================================================
+ * rd vms-623: THE F11B$s LOCK ON THIS NODE'S OWN VOLUME SURVIVES THE CLUSTER
+ * ASSIGNING THIS NODE ITS CSID.
+ *
+ * The cluster web demo's Node A (V0.7-15 preflight on a30f53d81) booted its
+ * own system disk before it joined, with the substrate's placeholder CSID 1.
+ * Every ACP access takes the XQP's F11B$s<fid> sub-lock under the volume's
+ * F11B$v tree (rd vms-d63), which THIS node masters. The engine looked the
+ * SUB's name up in its own lock directory as if it were a root and claimed
+ * it there under CSID 1; when the join assigned 0x00010002 the next lookup
+ * found that entry, took it for another system's mastery with no hash, and
+ * refused the $ENQ SS$_UNSUPPORTED -- IO$_ACCESS failed and IMGACT reported
+ * %IMGACT-F-IMGNOTFND for DCL.EXE. Only ROOT resources are in a directory
+ * (Davis p. 6-29); a sub of a tree mastered here is mastered here.
+ *
+ * The directory here is the smallest faithful stand-in for the arm's
+ * (vms_dlm_scs.c dlm_arm_eng_dir_local_lookup / _claim_self): it records a
+ * claim under the CSID the engine holds at the time, and answers a lookup
+ * with that master, `is_self` only when it equals the CSID held now.
+ * ================================================================ */
+#define E623_VRES   "F11B$vOVMXASYS    "   /* 18 bytes, the demo's label */
+#define E623_FID    11u                    /* the access that failed: SYS0.DIR */
+#define E623_JOINED 0x00010002u            /* Node A's CSID once a member */
+
+struct e623_entry {
+	uint8_t  name[32];
+	uint32_t name_len;
+	uint32_t master;
+};
+static struct e623_entry e623_dir[16];
+static int e623_ndir;
+static int e623_sub_asked;     /* the directory was asked about F11B$s */
+
+static int e623_is_sub_name(const struct vms_dlm_dir_ask *q)
+{
+	return q->name_len >= 6u && memcmp(q->name, "F11B$s", 6) == 0;
+}
+
+static uint32_t e623_lookup(void *ctx, const struct vms_dlm_dir_ask *q,
+			    struct vms_dlm_dir_local *out)
+{
+	int i;
+
+	(void)ctx;
+	if (e623_is_sub_name(q))
+		e623_sub_asked++;
+	memset(out, 0, sizeof(*out));
+	for (i = 0; i < e623_ndir; i++) {
+		if (e623_dir[i].name_len != q->name_len ||
+		    memcmp(e623_dir[i].name, q->name, q->name_len) != 0)
+			continue;
+		out->master_csid = e623_dir[i].master;
+		out->is_self = e623_dir[i].master == vms_lock_dlm_local_csid();
+		return (uint32_t)SS__NORMAL;
+	}
+	return (uint32_t)SS__NORMAL;    /* no entry: master_csid 0 */
+}
+
+static uint32_t e623_claim(void *ctx, const struct vms_dlm_dir_ask *q)
+{
+	int i;
+
+	(void)ctx;
+	if (e623_is_sub_name(q))
+		e623_sub_asked++;
+	for (i = 0; i < e623_ndir; i++)
+		if (e623_dir[i].name_len == q->name_len &&
+		    memcmp(e623_dir[i].name, q->name, q->name_len) == 0)
+			return (uint32_t)SS__NORMAL;
+	if (e623_ndir >= 16 || q->name_len > sizeof(e623_dir[0].name))
+		return (uint32_t)SS__INSFMEM;
+	memcpy(e623_dir[e623_ndir].name, q->name, q->name_len);
+	e623_dir[e623_ndir].name_len = q->name_len;
+	e623_dir[e623_ndir].master = vms_lock_dlm_local_csid();
+	e623_ndir++;
+	return (uint32_t)SS__NORMAL;
+}
+
+static void e623_file_ser_survives_the_csid_assignment(void)
+{
+	struct vms_dlm_requester_ops ops;
+	struct vms_proc proc;
+	uint32_t vol_lkid = 0, par = 0, lk = 0;
+	uint8_t vb[16];
+	int remote = 0;
+
+	printf("--- rd vms-623: the F11B$s lock on this node's own volume, across the CSID assignment ---\n");
+	configure_local_only();             /* this node is the directory */
+	fm_init();
+	fm.fail_with = SS__UNSUPPORTED;     /* nothing may be posted at all */
+	memset(e623_dir, 0, sizeof(e623_dir));
+	e623_ndir = 0;
+	e623_sub_asked = 0;
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_ops_fill(&ops);
+	ops.dir_local_lookup = e623_lookup;
+	ops.dir_claim_self = e623_claim;
+	vms_lock_dlm_set_requester_ops(&ops);
+	vms_lock_dlm_set_local_csid(CSID_LOCAL);   /* the substrate placeholder */
+	proc_init(&proc);
+
+	/* MOUNT: the standing F11B$v lock, mastered here. */
+	ct_check_eq_u32(vms_lock_acp_vol_standing(&proc, E623_VRES, &vol_lkid,
+						  &remote), SS__NORMAL,
+			"MOUNT takes the volume's standing F11B$v lock");
+	ct_check(vol_lkid != 0u && remote == 0, "  mastered on THIS node");
+
+	/* An ACP access before the join. */
+	ct_check_eq_u32(vms_lock_acp_file_ser(&proc, E623_VRES, 18u, E623_FID,
+					      vb, &par, &lk), SS__NORMAL,
+			"an access before the join takes F11B$s<11>");
+	(void)vms_lock_acp_file_ser_release(&proc, par, lk, vb);
+
+	/* The join: the cluster assigns this node its CSID. */
+	vms_lock_dlm_set_local_csid(E623_JOINED);
+
+	/* negctl: dlm-623-sublock-in-own-directory */
+
+	ct_check_eq_u32(vms_lock_acp_file_ser(&proc, E623_VRES, 18u, E623_FID,
+					      vb, &par, &lk), SS__NORMAL,
+			"*** an access after the join takes F11B$s<11> too -- "
+			"never SS$_UNSUPPORTED (the IMGNOTFND DCL.EXE of rd vms-623) ***");
+	(void)vms_lock_acp_file_ser_release(&proc, par, lk, vb);
+	ct_check(e623_sub_asked == 0,
+		 "*** the lock directory is never asked about, or told of, the "
+		 "F11B$s SUB-resource: only roots are in a directory ***");
+	ct_check(fm.posts == 0,
+		 "  and nothing went on the wire: the tree is mastered here");
+
+	(void)vms_lock_acp_vol_release(&proc, vol_lkid);
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+	vms_local_csid = CSID_LOCAL;
+}
+
 int main(void)
 {
 	printf("=== test_lock_proxy (FC-P4.4 proxy LKB, real engine, R1 host unit) ===\n");
@@ -1805,11 +2288,15 @@ int main(void)
 	e09_master_removes_its_directory_entry();
 	e09_no_removal_without_a_remote_entry();
 	c55_no_removal_for_an_unregistered_entry();
+	p8cb5_no_removal_after_a_transition_discarded_the_entry();
 	rms326_counted_binary_names();
 	b67a_sublock_goes_to_the_parents_master();
 	b67a_sublock_refuses_a_parent_with_no_master_handle();
 	rms326_the_executive_takes_the_file_lock();
 	e3ea_nl_grant_wakes_the_standing_lock();
 	e3ea_refused_then_admitted_after_the_label_is_freed();
+	d63_value_block_rules_are_the_captured_ones();
+	d63_file_ser_lock_on_a_vax_mastered_volume();
+	e623_file_ser_survives_the_csid_assignment();
 	return ct_summary("test_lock_proxy");
 }

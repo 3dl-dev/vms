@@ -28,6 +28,8 @@
  *     QUIT leaves without writing.
  */
 
+#include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -93,7 +95,7 @@ static void buf_free(struct edt_buf *b)
 static void show_line(const struct edt_buf *b, int i)
 {
     if (i >= b->n) {
-        printf("[EOB]\n");
+        dcl_out_printf("[EOB]\n");
         return;
     }
     char field[32];
@@ -105,7 +107,7 @@ static void show_line(const struct edt_buf *b, int i)
         for (int j = 4; j > 0 && fr[j] == '0'; j--) fr[j] = '\0';
         k += snprintf(field + k, sizeof field - (size_t)k, ".%s", fr);
     }
-    printf("%-12s%s\n", field, b->l[i].text);
+    dcl_out_printf("%-12s%s\n", field, b->l[i].text);
 }
 
 /* numbers for `count` lines inserted before index `at` */
@@ -898,7 +900,11 @@ static void kp_command_line(struct kp *k)
     int cap = dcl_page_begin(&pg);
     line_cmd(k->b, cmdl, skip(cmdl), skip(cmdl));
     if (cap) {
-        fflush(stdout);
+        dcl_out_flush();
+        /* the sink stops gathering into pg.tmp before it is closed: DCL's
+         * next record (the "$ " after QUIT) must not go to a freed stream
+         * (keystroke EDT.KEYPAD2 Q, rd vms-1b6a) */
+        dcl_out_capture(NULL);
         dup2(pg.save, 1);
         close(pg.save);
         rewind(pg.tmp);
@@ -1389,7 +1395,7 @@ static void insert_mode(struct edt_buf *b)
     if (na) {
         long first, step;
         if (number_run(b, b->cur, na, &first, &step) != 0) {
-            printf("Line number would exceed maximum\n");
+            dcl_out_printf("Line number would exceed maximum\n");
         } else {
             for (int i = 0; i < na; i++)
                 if (buf_insert(b, b->cur + i, first + step * i, acc[i]) != 0) break;
@@ -1419,7 +1425,7 @@ static int write_file_range(struct dcl_context *ctx, const struct edt_buf *b,
     struct dcl_rms_writer *w = dcl_rms_write_create(ctx, spec, FAB$C_VAR,
                                                     FAB$M_CR, 0, &st);
     if (!w) {
-        printf("Error opening output file %s\n", spec);
+        dcl_out_printf("Error opening output file %s\n", spec);
         return -1;
     }
     for (int i = a; i <= z && i < b->n; i++, cnt++)
@@ -1439,7 +1445,7 @@ static int write_file_range(struct dcl_context *ctx, const struct edt_buf *b,
             full[0] = '\0';
         dcl_rms_dir_close(d);
     }
-    printf("%s %d line%s\n", full[0] ? full : spec, cnt, cnt == 1 ? "" : "s");
+    dcl_out_printf("%s %d line%s\n", full[0] ? full : spec, cnt, cnt == 1 ? "" : "s");
     return 0;
 }
 
@@ -1451,7 +1457,7 @@ static int insert_texts(struct edt_buf *b, int at, char **texts, int n)
     long first, step;
     if (n <= 0) return 0;
     if (number_run(b, at, n, &first, &step) != 0) {
-        printf("Line number would exceed maximum\n");
+        dcl_out_printf("Line number would exceed maximum\n");
         return -1;
     }
     for (int i = 0; i < n; i++)
@@ -1471,7 +1477,7 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
             p = skip(p);
             if (*p && *p != ';') {
                 struct range rg = parse_range(b, &p, &nf);
-                if (nf) { printf("String was not found\n"); return; }
+                if (nf) { dcl_out_printf("String was not found\n"); return; }
                 b->cur = rg.a;
                 p = skip(p);
             }
@@ -1488,20 +1494,20 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
         }
         if (kw(&p, "FIND", 1)) {
             struct range rg = parse_range(b, &p, &nf);
-            if (nf) { printf("String was not found\n"); return; }
+            if (nf) { dcl_out_printf("String was not found\n"); return; }
             b->cur = rg.a;
             return;
         }
         if (kw(&p, "DELETE", 1)) {
             struct range rg = parse_range(b, &p, &nf);
-            if (nf) { printf("String was not found\n"); return; }
+            if (nf) { dcl_out_printf("String was not found\n"); return; }
             int a = rg.a, z = rg.b < b->n ? rg.b : b->n - 1, cnt = 0;
             for (int i = z; i >= a && a < b->n; i--) { buf_delete(b, i); cnt++; }
             b->cur = a <= b->n ? a : b->n;
             if (cnt)
-                printf("%d line%s deleted\n", cnt, cnt == 1 ? "" : "s");
+                dcl_out_printf("%d line%s deleted\n", cnt, cnt == 1 ? "" : "s");
             else
-                printf("No lines deleted\n");   /* EDT.LINE3 X2 */
+                dcl_out_printf("No lines deleted\n");   /* EDT.LINE3 X2 */
             show_line(b, b->cur);
             return;
         }
@@ -1509,16 +1515,16 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
             p = skip(p);
             char dl = *p;
             if (!dl || isalnum((unsigned char)dl)) {
-                printf(" ^\nUnrecognized command\n");
+                dcl_out_printf(" ^\nUnrecognized command\n");
                 return;
             }
             const char *o = p + 1, *oe = strchr(o, dl);
-            if (!oe) { printf("Invalid substitute command\n"); return; }
+            if (!oe) { dcl_out_printf("Invalid substitute command\n"); return; }
             const char *nw = oe + 1, *ne = strchr(nw, dl);
             size_t ol = (size_t)(oe - o), nl = ne ? (size_t)(ne - nw) : strlen(nw);
             p = ne ? ne + 1 : nw + nl;
             struct range rg = parse_range(b, &p, &nf);
-            if (nf) { printf("String was not found\n"); return; }
+            if (nf) { dcl_out_printf("String was not found\n"); return; }
             int subs = 0, last = -1;
             for (int i = rg.a; i <= rg.b && i < b->n && ol; i++) {
                 char out[EDT_LINE_MAX];
@@ -1546,9 +1552,9 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
             }
             if (subs) {
                 b->cur = last;
-                printf("%d substitution%s\n", subs, subs == 1 ? "" : "s");
+                dcl_out_printf("%d substitution%s\n", subs, subs == 1 ? "" : "s");
             } else {
-                printf("String was not found\n");
+                dcl_out_printf("String was not found\n");
             }
             return;
         }
@@ -1556,13 +1562,13 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
             /* COPY|MOVE range TO range: "n lines copied|moved" (EDT.LINE3) */
             int moving = (toupper((unsigned char)cmd[0]) == 'M');
             struct range rg = parse_range(b, &p, &nf);
-            if (nf) { printf("String was not found\n"); return; }
+            if (nf) { dcl_out_printf("String was not found\n"); return; }
             const char *q = skip(p);
-            if (!kw(&q, "TO", 2)) { printf("%*s^\nUnrecognized command\n", (int)(q - line) + 1, ""); return; }
+            if (!kw(&q, "TO", 2)) { dcl_out_printf("%*s^\nUnrecognized command\n", (int)(q - line) + 1, ""); return; }
             struct range to = parse_range(b, &q, &nf);
-            if (nf) { printf("String was not found\n"); return; }
+            if (nf) { dcl_out_printf("String was not found\n"); return; }
             int a = rg.a, z = rg.b < b->n ? rg.b : b->n - 1, n = z - a + 1;
-            if (n <= 0) { printf("No lines %s\n", moving ? "moved" : "copied"); return; }
+            if (n <= 0) { dcl_out_printf("No lines %s\n", moving ? "moved" : "copied"); return; }
             char **t = calloc((size_t)n, sizeof *t);
             if (!t) return;
             for (int i = 0; i < n; i++) t[i] = strdup(b->l[a + i].text);
@@ -1574,7 +1580,7 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
             }
             if (insert_texts(b, dest, t, n) == 0) {
                 b->cur = dest;
-                printf("%d line%s %s\n", n, n == 1 ? "" : "s", moving ? "moved" : "copied");
+                dcl_out_printf("%d line%s %s\n", n, n == 1 ? "" : "s", moving ? "moved" : "copied");
             }
             for (int i = 0; i < n; i++) free(t[i]);
             free(t);
@@ -1589,7 +1595,7 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
             q += fl;
             struct range rg = { 0, b->n - 1, 1 };
             if (*skip(q)) rg = parse_range(b, &q, &nf);
-            if (nf) { printf("String was not found\n"); return; }
+            if (nf) { dcl_out_printf("String was not found\n"); return; }
             if (g_edt_ctx && fname[0])
                 write_file_range(g_edt_ctx, b, fname, rg.a, rg.b < b->n ? rg.b : b->n - 1);
             return;
@@ -1604,12 +1610,12 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
             int at = b->cur;
             if (*skip(q)) {
                 struct range rg = parse_range(b, &q, &nf);
-                if (nf) { printf("String was not found\n"); return; }
+                if (nf) { dcl_out_printf("String was not found\n"); return; }
                 at = rg.a;
             }
             uint32_t rst = 0;
             struct dcl_rms_reader *r = g_edt_ctx ? dcl_rms_read_open(g_edt_ctx, fname, &rst) : NULL;
-            if (!r) { printf("Input file does not exist\n"); return; }
+            if (!r) { dcl_out_printf("Input file does not exist\n"); return; }
             char **t = NULL;
             int n = 0, cap = 0, eof = 0, len;
             char rec[EDT_LINE_MAX];
@@ -1633,15 +1639,15 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
             if (kw(&q, "BUFFER", 1)) {
                 char cnt[16];
                 snprintf(cnt, sizeof cnt, "%d", b->n);
-                printf("=%-6s %-8slines\n", "MAIN", b->n ? cnt : "No");
-                printf(" %-6s %-8slines\n", "PASTE", "No");
+                dcl_out_printf("=%-6s %-8slines\n", "MAIN", b->n ? cnt : "No");
+                dcl_out_printf(" %-6s %-8slines\n", "PASTE", "No");
                 return;
             }
         }
         if (kw(&p, "RESEQUENCE", 3)) {     /* whole numbers from 1 (Q.EDTNUM R1) */
         for (int i = 0; i < b->n; i++)
             b->l[i].num = (long)(i + 1) * EDT_SCALE;
-        printf("%d line%s resequenced\n", b->n, b->n == 1 ? "" : "s");
+        dcl_out_printf("%d line%s resequenced\n", b->n, b->n == 1 ? "" : "s");
         return;
     }
     if (kw(&p, "TYPE", 1) || (p = cmd, 1)) {
@@ -1649,11 +1655,11 @@ static void line_cmd(struct edt_buf *b, const char *line, const char *cmd,
             struct range rg = parse_range(b, &p, &nf);
             if (*skip(p) != '\0' || (!rg.ok)) {
                 /* not a command and not a range */
-                printf("%*s^\nUnrecognized command\n", (int)(before - line) + 1, "");
+                dcl_out_printf("%*s^\nUnrecognized command\n", (int)(before - line) + 1, "");
                 return;
             }
             if (nf) {
-                printf("String was not found\n");
+                dcl_out_printf("String was not found\n");
                 show_line(b, b->cur);
                 return;
             }
@@ -1692,13 +1698,13 @@ int edt_run(struct dcl_context *ctx, const char *spec, const char *output,
         b.cur = 0;
         show_line(&b, b.cur);
     } else {
-        printf("Input file does not exist\n");
+        dcl_out_printf("Input file does not exist\n");
         show_line(&b, 0);
     }
 
     for (;;) {
         if (read_cmd(line, sizeof line) != 0) {
-            if (feof(stdin)) {                /* input exhausted: as QUIT */
+            if (dcl_in_at_eof()) {            /* input exhausted: as QUIT */
                 buf_free(&b);
                 return SS$_NORMAL;
             }
@@ -1722,7 +1728,7 @@ int edt_run(struct dcl_context *ctx, const char *spec, const char *output,
                        strncasecmp(c->terminal.device_type, "VT3", 3) != 0 &&
                        strncasecmp(c->terminal.device_type, "VT4", 3) != 0 &&
                        strncasecmp(c->terminal.device_type, "VT5", 3) != 0)) {
-                printf("Screen editing is supported only on a VT100-class terminal\n");
+                dcl_out_printf("Screen editing is supported only on a VT100-class terminal\n");
                 continue;
             }
             static struct kp k;
@@ -1746,7 +1752,7 @@ int edt_run(struct dcl_context *ctx, const char *spec, const char *output,
         }
         if (kw(&p, "QUIT", 4)) {
             if (!screen_used)
-                printf("\n");                /* EDT.LINE3 Q: a blank line */
+                dcl_out_printf("\n");                /* EDT.LINE3 Q: a blank line */
             screen_reset(screen_used);
             buf_free(&b);
             return SS$_NORMAL;

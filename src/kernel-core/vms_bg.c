@@ -271,6 +271,29 @@ long vms_ioctl_bg_setmode_udp(struct vms_proc *proc, unsigned long arg)
  * The address arrives as the first eight bytes of a sockaddr_in, port and v4
  * addr already in network byte order; the backend builds the host sockaddr.
  */
+/*
+ * The VMS condition for a finished connect (rd vms-d0c4). A refused connect, an
+ * unreachable network and a timeout are different answers a TCP/IP Services
+ * program acts on differently (TELNET says "connection refused" versus "network
+ * unreachable"), so they are mapped, not folded into SS$_ABORT; any other
+ * failure stays SS$_ABORT. The backend returns -errno on Linux and +errno on
+ * NetBSD, so the sign is normalised first.
+ */
+static uint32_t vms_bg_connect_status(int rc)
+{
+    int e = rc < 0 ? -rc : rc;
+
+    if (e == 0)
+        return SS__NORMAL;
+    if (e == ECONNREFUSED)
+        return SS__REJECT;
+    if (e == ENETUNREACH || e == EHOSTUNREACH)
+        return SS__UNREACHABLE;
+    if (e == ETIMEDOUT)
+        return SS__TIMEOUT;
+    return SS__ABORT;
+}
+
 long vms_ioctl_bg_connect(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_bg_connect_args args;
@@ -293,7 +316,7 @@ long vms_ioctl_bg_connect(struct vms_proc *proc, unsigned long arg)
     }
 
     rc = exec_socket_connect(sock, args.sin_family, args.sin_port, args.sin_addr);
-    args.status = rc ? SS__ABORT : SS__NORMAL;
+    args.status = vms_bg_connect_status(rc);
 
 out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
@@ -541,15 +564,22 @@ long vms_ioctl_bg_recv(struct vms_proc *proc, unsigned long arg)
         goto out_copy;
     }
 
-    n = exec_socket_recv(sock, a->data, bufsz);
+    if (a->flags & VMS_BG_IOF_NOW)
+        n = exec_socket_recv_now(sock, a->data, bufsz);
+    else
+        n = exec_socket_recv(sock, a->data, bufsz);
     if (n < 0) {
+        int e = (int)-n;
         a->len = 0;
         /* A receive timeout armed through VMS_BG_SO_RCVTIMEO_MS ends the read
          * with no data: that is SS$_TIMEOUT, not an aborted I/O (vms-a9e7). A
          * socket with no timeout set never sees -EAGAIN here (the read blocks),
          * so TCP behaviour is unchanged. (EWOULDBLOCK == EAGAIN on both Linux
          * and NetBSD.) */
-        a->status = (n == -EAGAIN) ? SS__TIMEOUT : SS__ABORT;
+        if ((e == EAGAIN || e == EWOULDBLOCK) && (a->flags & VMS_BG_IOF_NOW))
+            a->status = SS__ENDOFFILE;  /* IO$M_NOW, nothing queued (vms-a6b) */
+        else
+            a->status = (n == -EAGAIN) ? SS__TIMEOUT : SS__ABORT;
     } else {
         a->len = (uint32_t)n;
         a->status = SS__NORMAL;
@@ -727,6 +757,153 @@ out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
+}
+
+/*
+ * IO$_SENSEMODE interface-list subfunction (rd vms-99f) -- TCPIP SHOW INTERFACE's
+ * source. The channel's socket must exist (IO$_SETMODE first; none -> SS$_IVCHAN,
+ * as for getname). The executive walks the network stack THAT socket lives in
+ * (exec_socket_iflist) and copies each interface's live name / flags / MTU /
+ * first IPv4 address + mask / link-layer address into the caller's array.
+ * Nothing is synthesized; a backend that cannot enumerate says so: -EOPNOTSUPP
+ * -> SS$_UNSUPPORTED, any other failure -> SS$_ABORT.
+ */
+long vms_ioctl_bg_iflist(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_iflist_args *args;
+    struct exec_ifent *ent;
+    exec_socket_t sock;
+    uint32_t i, max, n = 0;
+    int rc;
+
+    args = kzalloc(sizeof(*args), GFP_KERNEL);
+    ent = kcalloc(VMS_BG_IFLIST_MAX, sizeof(*ent), GFP_KERNEL);
+    if (!args || !ent) {
+        kfree(args);
+        kfree(ent);
+        return -ENOMEM;
+    }
+    if (copy_from_user(args, (const void __user *)arg, sizeof(*args))) {
+        rc = -EFAULT;
+        goto free;
+    }
+    max = args->max < VMS_BG_IFLIST_MAX ? args->max : VMS_BG_IFLIST_MAX;
+    memset(args->ent, 0, sizeof(args->ent));
+    args->count = 0;
+
+    sock = vms_bg_ref_socket(proc, args->chan);   /* held across the (sleeping) walk */
+    if (!sock) {
+        args->status = SS__IVCHAN;   /* no channel, or IO$_SETMODE never issued */
+        goto out;
+    }
+    rc = exec_socket_iflist(sock, ent, max, &n);
+    exec_socket_release(sock);
+    if (rc) {
+        args->status = (rc == -EOPNOTSUPP) ? SS__UNSUPPORTED : SS__ABORT;
+        goto out;
+    }
+    for (i = 0; i < n && i < max; i++) {
+        struct vms_bg_ifent *o = &args->ent[i];
+
+        memcpy(o->name, ent[i].name, sizeof(o->name));
+        o->name[sizeof(o->name) - 1] = '\0';
+        o->flags = ent[i].flags;
+        o->mtu = ent[i].mtu;
+        o->addr = ent[i].addr;
+        o->mask = ent[i].mask;   /* NEGCTL bg-iflist-mask-zeroed */
+        memcpy(o->hwaddr, ent[i].hwaddr, sizeof(o->hwaddr));
+        o->hwlen = ent[i].hwlen;
+    }
+    args->count = i;
+    args->status = SS__NORMAL;
+
+out:
+    rc = copy_to_user((void __user *)arg, args, sizeof(*args)) ? -EFAULT : 0;
+free:
+    kfree(ent);
+    kfree(args);
+    return rc;
+}
+
+/*
+ * IO$_SENSEMODE readiness subfunction (rd vms-99f) -- the executive half of the C
+ * RTL's select()/poll() on sockets. Each named channel's socket is referenced for
+ * the duration (a concurrent $DASSGN cannot free it under the wait), its live
+ * state read by exec_socket_wait_ready, and -- when none is ready and a timeout
+ * allows -- the caller sleeps on the sockets' own wait queues. A channel the
+ * process does not hold, or one whose socket was never created, reports
+ * VMS_BG_RDY_NVAL and the request SS$_IVCHAN (no wait happens): select() maps
+ * that to EBADF. A signal ends the wait with SS$_ABORT.
+ */
+_Static_assert(VMS_BG_RDY_IN == EXEC_RDY_IN && VMS_BG_RDY_OUT == EXEC_RDY_OUT &&
+               VMS_BG_RDY_ERR == EXEC_RDY_ERR && VMS_BG_RDY_HUP == EXEC_RDY_HUP,
+               "VMS_BG_RDY_* wire bits must equal the seam's EXEC_RDY_* bits");
+
+long vms_ioctl_bg_select(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_select_args *a;
+    exec_socket_t *socks;
+    uint32_t *want, *got;
+    uint32_t i, n, bad = 0;
+    long ret = 0;
+    int rc;
+
+    a = kzalloc(sizeof(*a), GFP_KERNEL);
+    socks = kcalloc(VMS_BG_SELECT_MAX, sizeof(*socks), GFP_KERNEL);
+    want = kcalloc(VMS_BG_SELECT_MAX, sizeof(*want), GFP_KERNEL);
+    got = kcalloc(VMS_BG_SELECT_MAX, sizeof(*got), GFP_KERNEL);
+    if (!a || !socks || !want || !got) {
+        ret = -ENOMEM;
+        goto free;
+    }
+    if (copy_from_user(a, (const void __user *)arg, sizeof(*a))) {
+        ret = -EFAULT;
+        goto free;
+    }
+    a->nready = 0;
+    if (a->n > VMS_BG_SELECT_MAX) {
+        a->status = SS__BADPARAM;
+        goto out;
+    }
+    n = a->n;
+    for (i = 0; i < n; i++) {
+        a->ent[i].revents = 0;
+        want[i] = a->ent[i].events & (VMS_BG_RDY_IN | VMS_BG_RDY_OUT);
+        socks[i] = vms_bg_ref_socket(proc, a->ent[i].chan);
+        if (!socks[i]) {
+            a->ent[i].revents = VMS_BG_RDY_NVAL;
+            bad++;
+        }
+    }
+    if (bad) {
+        a->nready = bad;
+        a->status = SS__IVCHAN;
+    } else {
+        rc = exec_socket_wait_ready(socks, n, want, got, (long)a->timeout_ms);
+        if (rc == -EINTR) {
+            a->status = SS__ABORT;
+        } else if (rc < 0) {
+            a->status = (rc == -ENOMEM) ? SS__INSFMEM : SS__ABORT;
+        } else {
+            for (i = 0; i < n; i++)
+                a->ent[i].revents = (uint16_t)got[i];   /* NEGCTL bg-select-revents-dropped */
+            a->nready = (uint32_t)rc;
+            a->status = SS__NORMAL;
+        }
+    }
+    for (i = 0; i < n; i++)
+        if (socks[i])
+            exec_socket_release(socks[i]);
+
+out:
+    if (copy_to_user((void __user *)arg, a, sizeof(*a)))
+        ret = -EFAULT;
+free:
+    kfree(got);
+    kfree(want);
+    kfree(socks);
+    kfree(a);
+    return ret;
 }
 
 /*

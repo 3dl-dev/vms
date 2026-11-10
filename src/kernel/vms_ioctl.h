@@ -236,6 +236,7 @@ struct vms_mode_args {
 #define VMS_PRV_M_MOUNT     (1ULL << VMS_PRV_V_MOUNT)
 #define VMS_PRV_M_NETMBX    (1ULL << VMS_PRV_V_NETMBX)
 #define VMS_PRV_M_PHY_IO    (1ULL << VMS_PRV_V_PHY_IO)
+#define VMS_PRV_M_LOG_IO    (1ULL << VMS_PRV_V_LOG_IO)
 #define VMS_PRV_M_SYSPRV    (1ULL << VMS_PRV_V_SYSPRV)
 #define VMS_PRV_M_GRPPRV    (1ULL << VMS_PRV_V_GRPPRV)
 #define VMS_PRV_M_BYPASS    (1ULL << VMS_PRV_V_BYPASS)
@@ -2205,11 +2206,15 @@ struct vms_tt_write_args {
  * cursor position is left as it was (rd vms-457: the VAX V7.3 console after
  * DIRECTORY/PAGE's pager, keystroke PG.DIR C1) */
 #define VMS_TT_WR_NOFORMAT    0x2u
+/* The bytes OPEN a record and leave it open -- a new line before them, no
+ * carriage return after (IO$_WRITEVBLK with P4 carriage control "$", prompt;
+ * rd vms-1b6a): what a record writer flushes of a line not yet ended */
+#define VMS_TT_WR_PROMPT      0x4u
 /* IO$M_REFRESH: a read in progress is shown again after the write (its prompt
  * and the line so far). Without it a $QIO write leaves the read's line where
  * the output left it (VAX V7.3 SET HOST client, host output while a line is
  * half typed: "<CR><LF>LATE<CR>" and the typing goes on -- S2 live bench). */
-#define VMS_TT_WR_REFRESH     0x4u
+#define VMS_TT_WR_REFRESH     0x8u
 
 #define VMS_TT_MODE_PASSALL   0x1u     /* IO$_SETMODE P2 = IO$K_TT_PASSALL */
 struct vms_tt_mode_args {
@@ -3195,6 +3200,12 @@ struct vms_ident_args {
  * process may stamp an identity (SETIDENT), and only until the image after
  * LOGINOUT is activated. SUBPROCESS and DETACHED only. */
 #define VMS_CREPRC_PCB_F_LOGIN    0x100u
+/* OR'd into flags (rd vms-89dd8): $CREPRC was given a quota list. `pgflquota`
+ * carries PQL$_PGFLQUOTA from it (0 = the list did not name one); the executive
+ * sources the new process's PGFLQUOTA from it, else the LOADED SYSGEN
+ * PQL_DPGFLQUOTA, clamped up to the loaded PQL_MPGFLQUOTA (VMS_IOCTL_PQL_LOAD;
+ * never loaded = left unsourced), and marks the quota block sourced (va_quota_check). */
+#define VMS_CREPRC_PCB_F_QUOTA    0x800u
 #define VMS_CREPRC_PCB_F_NETWORK  0x400u   /* detached: PRC$M_NETWRK, a network object's server (JPI$K_NETWORK) */
 /* OR'd into flags with SUBPROCESS (rd vms-a2c): the subprocess takes the
  * given identity (username/uic/privs) instead of its creator's -- $CREPRC's
@@ -3209,9 +3220,85 @@ struct vms_creprc_pcb_args {
     uint32_t vms_pid;                     /* out: the new process's VMS PID    */
     uint64_t privs;                       /* in: DETACHED privileges           */
     uint32_t status;                      /* out: SS$_ status                  */
+    uint32_t pgflquota;                    /* in: PQL$_PGFLQUOTA (F_QUOTA), pagelets */
+    uint32_t mbxunt;                      /* in: termination mailbox unit, 0 = none (rd vms-6d9) */
     uint32_t pad;
 };
+
+/*
+ * THE TERMINATION MAILBOX (rd vms-6d9). `mbxunt` names a mailbox (MBA<mbxunt>:)
+ * the creator holds a channel to -- $CREPRC's mbxunt argument (OpenVMS System
+ * Services Reference, $CREPRC: a mailbox to receive a termination message
+ * when the created process is deleted); a unit the creator holds no channel
+ * to is refused SS$_NOSUCHDEV. When the process is deleted the EXECUTIVE
+ * writes one struct vms_exec_mbxmsg (msgtyp VMS_EXEC_MBXMSG_TERM) into it,
+ * after the process's resources are released.
+ *
+ * For DCL's image task (VMS_CREPRC_PCB_CONTINUE) the same mailbox also hears a
+ * CTRL/Y: when the terminal driver fires a CTRL/Y AST armed by another task
+ * of the image's VMS process (DCL), the executive stops the image task and
+ * writes msgtyp VMS_EXEC_MBXMSG_CTRLY -- so DCL, blocked reading the mailbox,
+ * learns of the interrupt from the executive, whatever the image does with
+ * substrate signals.
+ *
+ * OVMX DESIGN CHOICE (Rule 8): this record is OVMX's own, not the VMS ACC$
+ * termination message (MSG$_DELPRC + accounting), whose full layout is a
+ * follow-on for sys$creprc's mbxunt. finalsts sits at offset 4.
+ */
+#define VMS_EXEC_MBXMSG_TERM  1u
+#define VMS_EXEC_MBXMSG_CTRLY 2u
+struct vms_exec_mbxmsg {
+    uint16_t msgtyp;      /* VMS_EXEC_MBXMSG_*                         */
+    uint16_t has_status;  /* TERM: 1 iff the process recorded finalsts */
+    uint32_t finalsts;    /* TERM: the final condition, else SS$_ABORT */
+    uint32_t pid;         /* the process's VMS PID                     */
+    uint32_t task_pid;    /* its substrate task id                     */
+};
 #define VMS_IOCTL_CREPRC_PCB _IOWR(VMS_IOC_MAGIC, 0x9a, struct vms_creprc_pcb_args)
+
+/*
+ * $CREPRC's creation record (rd vms-416d; kernel-core/vms_proctab.c,
+ * vms_ioctl_creprc_sync). The creator and the task it forked synchronise
+ * through this executive object -- never a host pipe. ARRIVE and HOLD may be
+ * issued by a task with no PCB (the forked task, the detach intermediate); they
+ * do not make it one.
+ */
+#define VMS_CREPRC_SYNC_OPEN    1u  /* creator: out rec                                */
+#define VMS_CREPRC_SYNC_ARRIVE  2u  /* task: names itself; waits; out value=PCB status, vms_pid */
+#define VMS_CREPRC_SYNC_ACCEPT  3u  /* creator: in pid=fork child to watch; out pid=task */
+#define VMS_CREPRC_SYNC_ANSWER  4u  /* creator: in value=PCB status, vms_pid            */
+#define VMS_CREPRC_SYNC_HOLD    5u  /* detach intermediate: in pid=grandchild to watch   */
+#define VMS_CREPRC_SYNC_REPORT  6u  /* task: in value=creation status                    */
+#define VMS_CREPRC_SYNC_RESULT  7u  /* creator: out value=the task's report              */
+#define VMS_CREPRC_SYNC_CLOSE   8u  /* creator                                           */
+struct vms_creprc_sync_args {
+    uint32_t op;        /* in: VMS_CREPRC_SYNC_*                                 */
+    uint32_t rec;       /* in/out: the record                                    */
+    uint32_t pid;       /* in/out: substrate pid (see the op)                    */
+    uint32_t value;     /* in/out: a posted status (see the op)                  */
+    uint32_t vms_pid;   /* in/out: the new process's VMS PID                     */
+    uint32_t status;    /* out: SS$_ status of the op (SS$_ABORT: the other side
+                         * died or gave up)                                      */
+    uint32_t pad[2];
+};
+#define VMS_IOCTL_CREPRC_SYNC _IOWR(VMS_IOC_MAGIC, 0xc6, struct vms_creprc_sync_args)
+
+/*
+ * VMS_IOCTL_PQL_LOAD (rd vms-89dd8) -- hand the executive the SYSGEN
+ * PQL_DPGFLQUOTA / PQL_MPGFLQUOTA (pagelets) $CREPRC uses for a process whose
+ * creator gave a quota list. STARTUP.EXE issues it at boot from
+ * SYS$SYSTEM:OVMXVMSSYS.PAR; the executive holds no value of its own, so until
+ * it is called (or after VMS_PQL_LOAD_F_CLEAR) a quota-list child is left
+ * unsourced. Needs CMKRNL, as loading SYSGEN state does.
+ */
+#define VMS_PQL_LOAD_F_CLEAR      1u    /* forget the loaded pair (never-loaded state) */
+struct vms_pql_load_args {
+    uint32_t dpgflquota;                  /* in: PQL_DPGFLQUOTA, pagelets      */
+    uint32_t mpgflquota;                  /* in: PQL_MPGFLQUOTA, pagelets      */
+    uint32_t flags;                       /* in: VMS_PQL_LOAD_F_*              */
+    uint32_t status;                      /* out: SS$_ status                  */
+};
+#define VMS_IOCTL_PQL_LOAD _IOWR(VMS_IOC_MAGIC, 0xc7, struct vms_pql_load_args)
 
 
 /*
@@ -3543,6 +3630,37 @@ struct vms_pprop_args {
 #define VMS_IOCTL_PPROP     _IOWR(VMS_IOC_MAGIC, 0x77, struct vms_pprop_args)
 
 /*
+ * THE LOGIN DATA LOGINOUT LEAVES FOR THE CLI (rd vms-838b). On VMS, LOGINOUT
+ * builds the process and DCL learns from process state, never from an argument
+ * list, that it is starting a login: LOGINOUT writes the process's login data in
+ * KERNEL MODE while it logs the process in, and the CLI reads it when it gets
+ * control. Here the executive's PCB holds it:
+ *   flags     VMS_LGI_F_LOGIN -- LOGINOUT logged this process in (DCL runs
+ *             SYLOGIN and the login command procedure). Clear in every other
+ *             process: a DCL that finds it clear is a plain, non-login CLI.
+ *   uaf_flags the account's SYSUAF login flags, in the UAI$_FLAGS layout $GETUAI
+ *             returns (UAI$M_CAPTIVE, UAI$M_DISCTLY, ...).
+ *   lgicmd    the login command file (SYSUAF LGICMD, or LOGINOUT's documented
+ *             SYS$LOGIN:LOGIN.COM default), NUL-terminated; uaf$t_lgicmd is 64.
+ * VMS_LGI_OP_GET reads the caller's own. VMS_LGI_OP_SET stores it under the SAME
+ * gate as SETIDENT: CMKRNL enabled, in a LOGIN process before the image after
+ * LOGINOUT runs -- no image may write its own login data. OVMX design choice
+ * (Rule 8): the byte layout of this ioctl.
+ */
+#define VMS_LGI_OP_GET   0u
+#define VMS_LGI_OP_SET   1u
+#define VMS_LGI_F_LOGIN  0x00000001u
+#define VMS_LGICMD_SIZE  64
+struct vms_lgi_args {
+    uint32_t op;                     /* in:  VMS_LGI_OP_*              */
+    uint32_t status;                 /* return: SS$_ status            */
+    uint32_t flags;                  /* in (SET) / out (GET): VMS_LGI_F_* */
+    uint32_t uaf_flags;              /* in / out: UAI$_FLAGS layout    */
+    char     lgicmd[VMS_LGICMD_SIZE]; /* in / out: NUL-terminated spec */
+};
+#define VMS_IOCTL_LGI     _IOWR(VMS_IOC_MAGIC, 0xB6, struct vms_lgi_args)
+
+/*
  * The PROCESS RIGHTS LIST (vms-7d5a): the identifiers a process holds besides its
  * UIC, executive state like the privilege mask -- $GRANTID adds one, $REVOKID removes
  * one, and the Files-11 ACP's ACL check (vmsfs_acp.c acp_proc_holds) matches an
@@ -3719,14 +3837,22 @@ _Static_assert(sizeof(struct vms_pprop_args) == 24,
                "vms_pprop_args layout changed: VMS_IOCTL_PPROP ABI break");
 _Static_assert(VMS_IOCTL_PPROP == 0xC0185677u,
                "VMS_IOCTL_PPROP encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_lgi_args) == 16 + VMS_LGICMD_SIZE,
+               "vms_lgi_args layout changed: VMS_IOCTL_LGI ABI break");
+_Static_assert(VMS_IOCTL_LGI == 0xC05056B6u,
+               "VMS_IOCTL_LGI encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_rights_args) == 24 + 8 * VMS_RIGHTS_MAX,
                "vms_rights_args layout changed: VMS_IOCTL_RIGHTS ABI break");
 _Static_assert(sizeof(struct vms_pri_args) == 24,
                "vms_pri_args layout changed: VMS_IOCTL_PRI ABI break");
 _Static_assert(sizeof(struct vms_brkauth_args) == 8,
                "vms_brkauth_args layout changed: VMS_IOCTL_BRKAUTH ABI break");
-_Static_assert(sizeof(struct vms_creprc_pcb_args) == 64,
+_Static_assert(sizeof(struct vms_exec_mbxmsg) == 16,
+               "vms_exec_mbxmsg layout changed: termination mailbox ABI break");
+_Static_assert(sizeof(struct vms_creprc_pcb_args) == 72,
                "vms_creprc_pcb_args layout changed: VMS_IOCTL_CREPRC_PCB ABI break");
+_Static_assert(sizeof(struct vms_creprc_sync_args) == 32,
+               "vms_creprc_sync_args layout changed: VMS_IOCTL_CREPRC_SYNC ABI break");
 _Static_assert(sizeof(struct vms_procctl_args) == 16,
                "vms_procctl_args layout changed: VMS_IOCTL_PROCCTL ABI break");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,
@@ -3878,6 +4004,49 @@ _Static_assert(sizeof(struct vms_va_args) == 72,
                "vms_va_args layout changed: VMS_IOCTL_VA ABI break");
 _Static_assert(VMS_IOCTL_VA == 0xC04856C4u,
                "VMS_IOCTL_VA encodes differently here than on the reference build");
+
+/* ================================================================
+ * System time -- $GETTIM / $GETUTC / $SETIME (rd vms-642)
+ *
+ * The executive holds the system time (src/kernel-core/vms_systime.c), the
+ * EXE$GQ_SYSTIME of VMS: every process reads the same cell, and $SETIME
+ * changes it for all of them. The cell is the substrate kernel's realtime
+ * clock (the "time-of-year clock" a VMS system recalibrates from) plus an
+ * offset the executive keeps; $SETIME moves the offset, never the substrate
+ * clock. One request, an op selector:
+ *   VMS_SYSTIME_GET    out: time = the system time, VMS absolute (100 ns
+ *                      ticks since 17-NOV-1858). No privilege.
+ *   VMS_SYSTIME_SET    in: time = the new system time. OPER and LOG_IO
+ *                      enabled, else SS$_NOPRIV; a delta (negative) time is
+ *                      SS$_IVTIME. out: time = the system time now.
+ *   VMS_SYSTIME_RECAL  $SETIME with no timadr: recalibrate from the
+ *                      time-of-year clock (drop the offset). Same privileges.
+ * Privileges and condition values: OpenVMS System Services Reference Manual,
+ * $SETIME ("Required Privileges: OPER and LOG_IO"; SS$_NORMAL, SS$_ACCVIO,
+ * SS$_IVTIME, SS$_NOPRIV).
+ *
+ * INV-6: no /dev/vms -> $GETTIM/$GETUTC/$SETIME are SS$_NOSUCHDEV; there is no
+ * userspace clock fallback.
+ *
+ * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): the request layout and number are
+ * OVMX's own transport encoding, not a VMS wire format.
+ */
+#define VMS_SYSTIME_GET     1
+#define VMS_SYSTIME_SET     2
+#define VMS_SYSTIME_RECAL   3
+
+struct vms_systime_args {
+    uint32_t op;            /* in: VMS_SYSTIME_* */
+    uint32_t status;        /* out: SS$_ */
+    uint64_t time;          /* in (SET): new system time; out: the system time */
+};
+
+#define VMS_IOCTL_SYSTIME  _IOWR(VMS_IOC_MAGIC, 0xC5, struct vms_systime_args)
+
+_Static_assert(sizeof(struct vms_systime_args) == 16,
+               "vms_systime_args layout changed: VMS_IOCTL_SYSTIME ABI break");
+_Static_assert(VMS_IOCTL_SYSTIME == 0xC01056C5u,
+               "VMS_IOCTL_SYSTIME encodes differently here than on the reference build");
 
 /* ================================================================
  * P1 control region (vms-68f.ii, in-process image activation foundation,

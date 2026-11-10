@@ -262,6 +262,22 @@ def test_stale_kernel_cannot_be_reused():
             assert "netbsd-ovmx-todr.patch" in key, w
 
 
+def test_kernel_cache_key_hashes_every_kernel_stamp_input():
+    """vms-7dc2: the prime caches netbsd-OVMX on its OWN key (vax-kernel-*) so an
+    OVMX-source change does not rebuild the NetBSD kernel. That key must hash every
+    file KERNEL_STAMP is computed from, plus the NetBSD source pin."""
+    rb = open(RUNBOOT).read()
+    stamp = re.search(r'KERNEL_STAMP="\$\(cat (.*?)\| sha256sum', rb, re.S).group(1)
+    inputs = re.findall(r'\$\{REPO\}/([^"]+)"', stamp)
+    assert len(inputs) >= 4 and "tools/cross-vax/netbsd-ovmx-todr.patch" in inputs
+    keys = re.findall(r"key: vax-kernel-.*", open(
+        os.path.join(REPO, ".github/workflows/ci-vax.yml")).read())
+    assert keys, "ci-vax.yml has no vax-kernel-* cache key"
+    for key in keys:
+        for f in inputs + ["tests/netbsd/netbsd_version.env", "tests/lab-vax/run-boot.sh"]:
+            assert "'%s'" % f in key, (f, key)
+
+
 def test_build_session_gives_the_disk_todays_year():
     """Every filesystem the shipped disk's build session writes takes its year
     from that session's clock; it must be set from the host (UTC), not left at

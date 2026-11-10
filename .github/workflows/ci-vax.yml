@@ -214,6 +214,23 @@ jobs:
                  .boot-cache/lab-vax/.ovmx-modular-kernel-installed
           echo "inexact substrate restore discarded — prime will rebuild the substrate from source"
 
+      # vms-7dc2: the NetBSD/vax MODULAR kernel (netbsd-OVMX + boot-OVMX, ~7 min
+      # of build.sh) is built from the NetBSD source pin + the build script + its
+      # three patches ONLY -- no OVMX source reaches it. Cached on its OWN exact
+      # key (no restore-keys) AFTER the discard above, so a change to libvms/RMS/
+      # DCL busts only STARTUP.EXE + vms.kmod (~1 min) and the kernel comes back
+      # warm. run-boot.sh's build_kernel() still checks netbsd-OVMX.stamp against
+      # KERNEL_STAMP, so a stale kernel can never be reused; the key MUST hash
+      # every KERNEL_STAMP input (tests/lab-vax/test_todr_patch.py enforces it).
+      - name: Cache the NetBSD/vax MODULAR kernel (netbsd-OVMX + boot-OVMX) on its own key
+        uses: actions/cache@v4
+        with:
+          path: |
+            .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX
+            .boot-cache/lab-vax/boot-artifacts/boot-OVMX
+            .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX.stamp
+          key: vax-kernel-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz') }}
+
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 

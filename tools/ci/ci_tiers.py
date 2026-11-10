@@ -17,6 +17,7 @@ usage: ci_tiers.py --event EVENT --ref REF [--base SHA] [--files FILE]
 Prints `key=value` lines (GITHUB_OUTPUT format):
   heavy_release   true|false
   alpha_selfhost_tier  true|false
+  alpha_vmsgcc    true|false
   keystroke       true|false
   decnet          true|false
   vax_boot        true|false
@@ -87,6 +88,37 @@ TIERS = {
         "tools/cross-alpha-vms/**",
         "tools/cross-alpha/run-module-gp-activation-alpha.sh",
         "tools/ci/ci_tiers.py",
+    ],
+    # Alpha VMS-hosted GCC pipeline (ci-alpha alpha-as / alpha-driver /
+    # alpha-link / alpha-xgcclink, 23-34 min each of QEMU TCG). Heavy, so out
+    # of the PR path: the queue runs them when one of these paths changes (the
+    # files that can change their result -- moved here from the PR-only
+    # dorny filter `alpha_selfhost`, which ran them on every DCL/RMS/libvms PR
+    # and made them the PR critical path); nightly/dispatch/tag run them always.
+    "alpha_vmsgcc": [
+        ".github/workflows/ci-alpha.yml",
+        ".github/workflows/ci-changes.yml",
+        "tools/ci/ci_tiers.py",
+        "tools/cross-alpha-vms/selfhost/**",
+        "tools/cross-alpha-vms/joint-e2e/asrun_test.c",
+        "tools/cross-alpha-vms/joint-e2e/drvrun_test.c",
+        "tools/cross-alpha-vms/joint-e2e/lnkrun_test.c",
+        "tools/cross-alpha-vms/joint-e2e/drvlnk_test.c",
+        "tools/cross-alpha-vms/patches/**",
+        "tools/cross-alpha/run-module-gp-activation-alpha.sh",
+        "tools/cross-alpha/build-alpha-bootimage.sh",
+        "tools/cross-alpha/SYSTARTUP_VMS_AS_PROOF.COM",
+        "tools/cross-alpha/SYSTARTUP_VMS_DRV_PROOF.COM",
+        "tools/cross-alpha/SYSTARTUP_VMS_LNK_PROOF.COM",
+        "tools/cross-alpha/SYSTARTUP_VMS_DRL_PROOF.COM",
+        "tools/cross-alpha/cmp_obj_dump.py",
+        "src/vmsdcl/**",
+        "src/vmsfs/**",
+        "tools/vmsfs_master.c",
+        "src/vmslink/**",
+        "src/libvms/**",
+        "src/vmsrms/**",
+        "src/imgact/**",
     ],
     # Alpha public sys$ API tier (ci-alpha alpha-syssvc-suite, ~150 min): runs on
     # every push to main, and in the queue when its own HARNESS changes. #1893
@@ -335,23 +367,24 @@ def changed_files(repo, base):
 
 
 def decide(event, ref, files, table_fn):
-    res = {"heavy_release": "false", "alpha_selfhost_tier": "false",
+    res = {"heavy_release": "false", "alpha_selfhost_tier": "false", "alpha_vmsgcc": "false",
            "keystroke": "false", "decnet": "false", "vax_boot": "false",
            "vax_acceptance": "false", "alpha_syssvc": "false", "tcpip_net": "false", "negctl_select": ""}
     if is_full(event, ref):
-        return {"heavy_release": "true", "alpha_selfhost_tier": "true",
+        return {"heavy_release": "true", "alpha_selfhost_tier": "true", "alpha_vmsgcc": "true",
                 "keystroke": "true", "decnet": "true", "vax_boot": "true",
                 "vax_acceptance": "true", "alpha_syssvc": "true", "tcpip_net": "true", "negctl_select": "ALL"}
     if event == "push":
         return res  # the queue already tested this exact tree
     if files is None:  # could not compute: fail closed (queue / PR only)
         if event == "merge_group":
-            return {"heavy_release": "true", "alpha_selfhost_tier": "true",
+            return {"heavy_release": "true", "alpha_selfhost_tier": "true", "alpha_vmsgcc": "true",
                     "keystroke": "true", "decnet": "true", "vax_boot": "true",
                     "vax_acceptance": "true", "alpha_syssvc": "true", "tcpip_net": "true", "negctl_select": "ALL"}
         return res
     if event == "merge_group":
         res["alpha_selfhost_tier"] = "true" if matches_any(files, TIERS["alpha_selfhost_tier"]) else "false"
+        res["alpha_vmsgcc"] = "true" if matches_any(files, TIERS["alpha_vmsgcc"]) else "false"
         res["heavy_release"] = "true" if matches_any(files, TIERS["heavy_release"]) else "false"
         res["keystroke"] = "true" if matches_any(files, TIERS["keystroke"]) else "false"
         res["decnet"] = "true" if matches_any(files, TIERS["decnet"]) else "false"
@@ -388,7 +421,7 @@ def main():
     except Exception as e:  # noqa: BLE001 -- fail closed
         print("ci_tiers: cannot compute changed files (%s)" % e, file=sys.stderr)
     res = decide(a.event, a.ref, files, lambda: defect_table(a.repo))
-    for k in ("heavy_release", "alpha_selfhost_tier", "keystroke", "decnet", "vax_boot",
+    for k in ("heavy_release", "alpha_selfhost_tier", "alpha_vmsgcc", "keystroke", "decnet", "vax_boot",
               "vax_acceptance", "alpha_syssvc", "tcpip_net", "negctl_select"):
         print("%s=%s" % (k, res[k]))
 

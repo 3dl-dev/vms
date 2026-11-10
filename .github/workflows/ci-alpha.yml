@@ -1947,7 +1947,7 @@ jobs:
   alpha-as:
     name: "OVMX/Alpha self-hosting — GNU as, built for the alpha-dec-vms host, assembles cc1's output on OVMX; DCL DUMP of the EVAX object equals the cross assembler's (vms-5303e)"
     needs: changes
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_selfhost == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'merge_group' && needs.changes.outputs.alpha_vmsgcc == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
 
@@ -2022,7 +2022,7 @@ jobs:
   alpha-driver:
     name: "OVMX/Alpha self-hosting — the GCC driver (xgcc), built for the alpha-dec-vms host, runs cc1 and as on OVMX; DCL DUMP of the EVAX object equals the cross driver's (vms-1eb)"
     needs: changes
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_selfhost == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'merge_group' && needs.changes.outputs.alpha_vmsgcc == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
 
@@ -2097,7 +2097,7 @@ jobs:
   alpha-link:
     name: "OVMX/Alpha self-hosting — cc1, as and LINK.EXE, built for the alpha-dec-vms host, compile, assemble and link a C program on OVMX; RUN HELLO.EXE prints its line (vms-e40)"
     needs: changes
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_selfhost == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'merge_group' && needs.changes.outputs.alpha_vmsgcc == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
 
@@ -2172,7 +2172,7 @@ jobs:
   alpha-xgcclink:
     name: "OVMX/Alpha self-hosting — the GCC driver (xgcc) compiles and links a C program on OVMX (cc1, as, ld, LINK.EXE); RUN HELLO.EXE prints its line (vms-65a)"
     needs: changes
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_selfhost == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'merge_group' && needs.changes.outputs.alpha_vmsgcc == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
 

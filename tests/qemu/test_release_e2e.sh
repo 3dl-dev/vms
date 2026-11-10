@@ -488,6 +488,11 @@ run_provision_missing_case() {
     # what moves the catch earlier.
     if waitfor '%OVMX-F-SYSINIT, boot-image staging failed' 120 "$log2"; then
         rc=0
+        # The detail line follows the F line on the serial console; killing
+        # QEMU the moment the F line lands raced it (merge-group run
+        # 42119293842: the log ended mid-line at "could not be read from").
+        # Let it arrive before the kill; the assertion below is unchanged.
+        waitfor 'over the ACP' 30 "$log2" || true
     else
         rc=1
     fi

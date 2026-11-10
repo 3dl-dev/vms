@@ -138,6 +138,16 @@ if [ "$NEGCTL" = 1 ]; then
         DEFECTS=${SEL:-SKIP}
         [ -n "$SEL" ] || echo "== negctl: the diff selects no defect"
     fi
+    if [ "$DEFECTS" != SKIP ] && [ "$QEMU" = 1 ] && docker image inspect "$TAG" >/dev/null 2>&1; then
+        # run_facility_negctl.sh REUSES an existing ovmx-ktest-negctl-base
+        # tag rather than rebuilding it (CI builds it first). Locally that tag
+        # is whatever tree last built it, and a stale one fails the pristine
+        # positive control with the newer suites MISSING. Point it at THIS
+        # tree's image, as CI's build step does.
+        docker tag "$TAG" ovmx-ktest-negctl-base:latest
+    elif [ "$DEFECTS" != SKIP ]; then
+        docker rmi ovmx-ktest-negctl-base:latest >/dev/null 2>&1 || true   # rebuilt from this tree
+    fi
     if [ "$DEFECTS" != SKIP ]; then
         echo "== negctl: tests/qemu/run_facility_negctl.sh ${DEFECTS:-<every defect>}"
         # shellcheck disable=SC2086

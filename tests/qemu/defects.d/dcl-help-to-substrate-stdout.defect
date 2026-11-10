@@ -1,0 +1,25 @@
+# dcl-help-to-substrate-stdout -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL's HELP writes its display as SYS\$OUTPUT records through DCL's sink, so it lands wherever SYS\$OUTPUT is -- a SPAWN/OUTPUT file included (rd vms-d1a)";;
+        targets)      echo "vmsdcl/dcl_cmd_misc.c";;
+        suites_red)   echo "test_syssvc_dcl_spawn_io";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation writes HELP's display to DCL's substrate stdout (fwrite to stdout), the pre-vms-d1a dcl_out_stream() shape: a SPAWN/OUTPUT=file subprocess's HELP text never becomes a record of the file. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+SPAWN/OUTPUT=file HELP/NOPROMPT topic: the topic's header and text are records of the file
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i '/NEGCTL-ANCHORED (dcl-help-to-substrate-stdout)/{n;s|^    return dcl_out_write(p, n) == n ? 0 : -1;$|    return fwrite(p, 1, n, stdout) == n ? 0 : -1; /* NEGCTL dcl-help-to-substrate-stdout */|}' "$_file"
+    :
+}

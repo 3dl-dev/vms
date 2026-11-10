@@ -63,8 +63,8 @@ static int fb_write(const struct sink *s, const char *p, size_t n)
 static int fb_flush(const struct sink *s)        { return fflush(fb_stream(s)); }
 static int fb_error(const struct sink *s)        { return ferror(fb_stream(s)); }
 static void fb_clearerr(const struct sink *s)    { clearerr(fb_stream(s)); }
-/* an image run in this process, or the HELP renderer, writes stdio: what it
- * holds goes out before DCL's next record does */
+/* an image run in this process writes stdio: what it holds goes out before
+ * DCL's next record does */
 void dcl_out_stdio_sync(void)                    { fflush(stdout); fflush(stderr); }
 /* ================================================================ */
 
@@ -233,12 +233,6 @@ void dcl_out_clearerr(void)
         fb_clearerr(&g_out);
 }
 void dcl_out_line_buffered(void) { setvbuf(stdout, NULL, _IOLBF, 0); }
-FILE *dcl_out_stream(void)
-{
-    /* the HELP renderer writes stdio: what the sink holds goes first */
-    (void)sink_flush(&g_out);
-    return stdout;
-}
 void dcl_out_capture(FILE *f)
 {
     (void)sink_flush(&g_out);

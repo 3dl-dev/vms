@@ -179,7 +179,7 @@ echo "--- rebuilding NETACP.EXE (the subject test_syssvc_decnetd_syscall_audit t
 ( cd /src/repo && cmake --build build-static --target netacp_exe \
                         --parallel "$(nproc)" ) || exit 4
 # RTPAD.EXE: the SET HOST subject test_syssvc_sethost_syscall_audit traces (rd
-# vms-0a7 S2). Rebuilt unconditionally, as DECNETD.EXE above.
+# vms-0a7 S2). Rebuilt unconditionally, as NETACP.EXE above.
 echo "--- rebuilding RTPAD.EXE (the subject test_syssvc_sethost_syscall_audit traces) ---"
 ( cd /src/repo && cmake --build build-static --target rtpad_exe \
                         --parallel "$(nproc)" ) || exit 4

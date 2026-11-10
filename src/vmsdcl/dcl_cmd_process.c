@@ -838,7 +838,7 @@ static void image_exit_report(const char *display_name, uint32_t cond)
     md.dsc$a_pointer = m;
     if ((sys$getmsg(cond, &ml, &md, MSG$M_ALL, NULL) & 1) && ml > 0 && m[0] == '%') {
         m[ml] = '\0';
-        fprintf(stderr, "%s\n", m);
+        dcl_err_puts(m);
         return;
     }
     dcl_error("DCL", (int)(cond & 7), "ABORT",

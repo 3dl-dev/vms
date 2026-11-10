@@ -283,10 +283,11 @@ chmod +x /initramfs/tests/INITIALIZE.EXE || exit 4
 # static one). Only DCL.EXE (the subprocess MMK's lib$spawn launches from the
 # SAME SYS$SYSTEM path) is refreshed here.
 mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE || exit 4
-cp /src/repo/build-static/bin/DCL.EXE \
-   /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE || exit 4
-chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE \
-         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE || exit 4
+# A hard link to the freshly re-staged /initramfs/bin/DCL.EXE, as the image
+# build stages it (rd vms-802f): one binary under three names, held once in
+# the initramfs budget, and never a stale second copy.
+ln -f /initramfs/bin/DCL.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE || exit 4
+chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE || exit 4
 
 # TCPIP$DAYTIME.EXE at SYS$SYSTEM (vms-477) -- the SAME stale-binary trap the
 # MMK.EXE/DCL.EXE block above documents. test_syssvc_tcpip_daytime execs

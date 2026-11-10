@@ -181,6 +181,23 @@ o=$(tier merge_group q src/kernel-core/vms_tt.c)
 o=$(tier merge_group q tools/cross-alpha-vms/Dockerfile)
 [ "$(get "$o" alpha_selfhost_tier)" = true ] && ok "queue: alpha cross-toolchain change runs the cc1/C++ self-host" || bad "alpha area"
 
+# VMS-hosted GCC pipeline (alpha_vmsgcc): queue-when-touched, never on a PR,
+# always on the full events
+o=$(tier merge_group q src/vmsrms/rms_seq.c)
+[ "$(get "$o" alpha_vmsgcc)" = true ] && ok "queue: an RMS change runs the VMS-hosted GCC pipeline" || bad "vmsgcc rms"
+o=$(tier merge_group q src/vmsdcl/dcl_main.c)
+[ "$(get "$o" alpha_vmsgcc)" = true ] && ok "queue: a DCL change runs the VMS-hosted GCC pipeline" || bad "vmsgcc dcl"
+o=$(tier merge_group q src/kernel-core/vms_tt.c docs/x.md)
+[ "$(get "$o" alpha_vmsgcc)" = false ] && ok "queue: an unrelated change skips the VMS-hosted GCC pipeline" || bad "vmsgcc unrelated"
+o=$(tier pull_request x src/vmsrms/rms_seq.c)
+[ "$(get "$o" alpha_vmsgcc)" = false ] && ok "PR: the VMS-hosted GCC pipeline is out of the PR path" || bad "vmsgcc pr"
+for ev in schedule workflow_dispatch; do
+    o=$(tier $ev refs/heads/main docs/x.md)
+    [ "$(get "$o" alpha_vmsgcc)" = true ] && ok "$ev runs the VMS-hosted GCC pipeline" || bad "vmsgcc $ev"
+done
+o=$(python3 "$ROOT/tools/ci/ci_tiers.py" --repo "$T" --event merge_group --ref x --base deadbeef 2>/dev/null)
+[ "$(get "$o" alpha_vmsgcc)" = true ] && ok "queue: git failure fails closed to the VMS-hosted GCC pipeline" || bad "vmsgcc fail-closed"
+
 # failing to compute the changed files fails closed in the queue
 o=$(python3 "$ROOT/tools/ci/ci_tiers.py" --repo "$T" --event merge_group --ref x --base deadbeef 2>/dev/null)
 [ "$(get "$o" negctl_select)" = ALL ] && [ "$(get "$o" heavy_release)" = true ] \

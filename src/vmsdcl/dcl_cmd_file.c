@@ -872,64 +872,6 @@ static void dir_print_entries(const struct dir_entry *entries, int entry_count,
 }
 
 /*
- * dir_gather_tree - Depth-first collect `base` plus every subdirectory
- * below it (the real on-disk vmsfs tree), each with a trailing slash, into a
- * malloc'd, case-insensitively sorted list. This is the concrete walk the
- * VMS "[...]" ellipsis directory wildcard names. Returns 0 on success.
- */
-static void dir_gather_recurse(const char *d, char ***list, int *count, int *cap)
-{
-    /* Append d */
-    if (*count >= *cap) {
-        int nc = *cap ? *cap * 2 : 16;
-        char **tmp = realloc(*list, (size_t)nc * sizeof(char *));
-        if (!tmp) return;
-        *list = tmp;
-        *cap = nc;
-    }
-    (*list)[(*count)++] = strdup(d);
-
-    DIR *dir = opendir(d);
-    if (!dir) return;
-
-    /* Collect child subdir names first, then recurse in sorted order. */
-    char **subs = NULL; int scount = 0, scap = 0;
-    struct dirent *de;
-    while ((de = readdir(dir)) != NULL) {
-        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
-            continue;
-        char child[2048];
-        snprintf(child, sizeof(child), "%s%s", d, de->d_name);
-        struct stat st;
-        if (stat(child, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
-        if (scount >= scap) {
-            int nc = scap ? scap * 2 : 8;
-            char **tmp = realloc(subs, (size_t)nc * sizeof(char *));
-            if (!tmp) break;
-            subs = tmp; scap = nc;
-        }
-        char childslash[2049];
-        snprintf(childslash, sizeof(childslash), "%s/", child);
-        subs[scount++] = strdup(childslash);
-    }
-    closedir(dir);
-
-    /* Sort children so the tree is emitted in a stable VMS-like order. */
-    for (int i = 0; i < scount; i++) {
-        for (int j = i + 1; j < scount; j++) {
-            if (strcasecmp(subs[i], subs[j]) > 0) {
-                char *t = subs[i]; subs[i] = subs[j]; subs[j] = t;
-            }
-        }
-    }
-    for (int i = 0; i < scount; i++) {
-        dir_gather_recurse(subs[i], list, count, cap);
-        free(subs[i]);
-    }
-    free(subs);
-}
-
-/*
  * dir_spec_child - vms-481: build the VMS directory spec of a subdirectory.
  * base is "DEV:[DIR]" (or "DEV:[000000]" for the MFD); sub is the subdirectory
  * NAME (from a "NAME.DIR" entry). Returns "DEV:[DIR.SUB]" (or "DEV:[SUB]" from
@@ -1719,58 +1661,12 @@ int cmd_type(struct dcl_command *cmd)
     uint32_t rst = 0;
     struct dcl_rms_reader *r = dcl_rms_read_open(ctx, cmd->params[0], &rst);
     if (!r) {
-        /* -------- Legacy TYPE defer (vms-5f0, extended vms-b3e) --------
-         * RMS could not open it through the Files-11 ODS-2 ACP. Two honest
-         * fall-backs, BOTH reading only kernel mount truth, NEVER the /vms
-         * SYS$DISK passthrough the atomic flip forbids (INV-6):
-         *
-         *  (a) rms_executive_absent(): /dev/vms is unreachable (host ctest,
-         *      plain-container self-host/link gates), which also covers a
-         *      DEFINEd logical resolving OUTSIDE the SYSDISK root (the mkdtemp-
-         *      volume test convention) that RMS's $OPEN boundary refuses even
-         *      though the file is right there. Read it the pre-flip way.
-         *
-         *  (b) vmsfs_device_spec_kernel_mounted(): the executive IS present but
-         *      the named unit is a GENUINE cross-process vmsfs volume in
-         *      /proc/mounts (a raw `mount -t vmsfs`, e.g. the install target
-         *      vms-718 MOUNTs then RUNs AUTHORIZE against, or a loop-mounted
-         *      DKA100:) that the ACP does not own. A mounted unit is node-wide
-         *      executive state on VMS: every process must resolve it (vms-8b6 /
-         *      vms-b3e). The ACP only manages ODS-2 volumes IT mounted, so read
-         *      this one through its /mnt/<dev> mount. The gate matches ONLY a
-         *      real /proc/mounts entry -- the system disk (DKA0: -> ACP, or the
-         *      /vms passthrough) is never a /mnt/<dev> mount, so this can never
-         *      reopen the masquerade; an unmounted unit yields no fall-back and
-         *      the honest RMS$_FNF stands.
-         *
-         * In both cases dcl_resolve_path() honours the logical and an explicit
-         * ";N"; RMS stays the primary path so a genuine record-formatted /vms
-         * file is still decoded by $GET. */
-        if (rms_executive_absent() ||
-            vmsfs_device_spec_kernel_mounted(cmd->params[0])) {
-            char linux_path[1024];
-            dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
-            FILE *fp = fopen(linux_path, "r");
-            if (fp) {
-                type_list_heading(ctx, cmd);
-                int paged = dcl_has_qualifier(cmd, "PAGE");
-                int line_count = 0, page_size = type_page_lines(ctx);
-                char line[4096];
-                while (fgets(line, sizeof(line), fp)) {
-                    if (paged && line_count >= page_size) {
-                        if (!type_page_pause())
-                            break;
-                        line_count = 0;
-                    }
-                    dcl_out_fputs(line);
-                    line_count++;
-                }
-                fclose(fp);
-                return SS$_NORMAL;
-            }
-            if (errno == ENOENT)
-                rst = RMS$_FNF;          /* the fall-back's own answer: not there */
-        }
+        /* RMS could not open it. No DCL-side host read follows (vms-2cbe):
+         * with no executive RMS's own defer already served the host tree,
+         * and a unit the ACP does not own is not readable here -- the RMS
+         * status is the answer (the vms-5f0/vms-b3e fopen() defers are gone;
+         * vmsfs_device_spec_kernel_mounted() could only return 0 since the
+         * vmsfs VFS driver was retired, vms-165). */
         {
             /* as VMS says it (keystroke ERR.DCL E4): the search failed, and
              * why, on its own line -- rd vms-c174 */
@@ -3468,6 +3364,40 @@ int cmd_create(struct dcl_command *cmd)
 }
 
 /*
+ * A file a command could not open, as VMS reports it: "%FAC-x-OPENIN, error
+ * opening X as input" over RMS's reason on its own line ("-RMS-E-FNF, file not
+ * found"), the text from the system message file ($GETMSG) (vms-2cbe).
+ */
+static void file_rms_reason(uint32_t st)
+{
+    char txt[256];
+    uint16_t tl = 0;
+    struct dsc$descriptor_s md;
+    if (st == 0)
+        return;
+    md.dsc$w_length = (uint16_t)(sizeof txt - 1);
+    md.dsc$b_dtype = DSC$K_DTYPE_T;
+    md.dsc$b_class = DSC$K_CLASS_S;
+    md.dsc$a_pointer = txt;
+    if ((sys$getmsg(st, &tl, &md, 0x0F, NULL) & 1) && tl > 0) {
+        txt[tl] = '\0';
+        if (txt[0] == '%')
+            txt[0] = '-';
+        dcl_err_printf("%s\n", txt);
+    } else {
+        dcl_err_printf("-SYSTEM-F-STATUS, status %%X%08X\n", (unsigned)st);
+    }
+}
+
+static int file_rms_failed(const char *fac, int sev, const char *ident,
+                           const char *what, const char *spec, uint32_t st)
+{
+    dcl_error(fac, sev, ident, "error opening %s as %s", spec, what);
+    file_rms_reason(st);
+    return (int)(st ? st : SS$_NOSUCHFILE);
+}
+
+/*
  * SEARCH - Search file for a string (like grep).
  */
 int cmd_search(struct dcl_command *cmd)
@@ -3480,26 +3410,26 @@ int cmd_search(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char linux_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
-
     const char *search_str = cmd->params[1];
     int exact = dcl_has_qualifier(cmd, "EXACT");
     int show_numbers = dcl_has_qualifier(cmd, "NUMBERS");
     int show_stats = dcl_has_qualifier(cmd, "STATISTICS");
 
-    FILE *fp = fopen(linux_path, "r");
-    if (!fp) {
-        dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
-        return SS$_NOSUCHFILE;
-    }
+    /* The file's records through RMS ($OPEN + sequential $GET), never a host
+     * stdio read (vms-2cbe). */
+    uint32_t rst = 0;
+    struct dcl_rms_reader *fp = dcl_rms_read_open(ctx, cmd->params[0], &rst);
+    if (!fp)
+        return file_rms_failed("SEARCH", 0, "OPENIN", "input", cmd->params[0], rst);
 
-    /* Display header */
+    /* Display header: the file's NAME.TYPE */
     char vms_name[256];
-    const char *basename = strrchr(linux_path, '/');
-    if (basename) basename++; else basename = linux_path;
+    const char *basename = cmd->params[0];
+    for (const char *p = cmd->params[0]; *p; p++)
+        if (*p == ']' || *p == '>' || *p == ':' || *p == '/')
+            basename = p + 1;
     size_t i;
-    for (i = 0; i < sizeof(vms_name) - 1 && basename[i]; i++)
+    for (i = 0; i < sizeof(vms_name) - 1 && basename[i] && basename[i] != ';'; i++)
         vms_name[i] = (char)toupper((unsigned char)basename[i]);
     vms_name[i] = '\0';
 
@@ -3507,8 +3437,9 @@ int cmd_search(struct dcl_command *cmd)
     int found = 0;
     int line_num = 0;
     int match_count = 0;
+    int reof = 0;
 
-    while (fgets(line, sizeof(line), fp)) {
+    while (dcl_rms_read_record(fp, line, sizeof(line), &reof) >= 0) {
         line_num++;
         int match;
 
@@ -3543,7 +3474,7 @@ int cmd_search(struct dcl_command *cmd)
         }
     }
 
-    fclose(fp);
+    dcl_rms_read_close(fp);
 
     if (show_stats) {
         dcl_out_printf("\n%d lines matched in 1 file\n", match_count);
@@ -3558,12 +3489,6 @@ int cmd_search(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
-/* vmsfs version management API (from vmsfs/version.h) */
-extern int vmsfs_purge_versions(const char *linux_dir, const char *basename,
-                                const char *ext, int keep_count);
-extern int vmsfs_list_versions(const char *linux_dir, const char *basename,
-                               const char *ext, int *versions, int max_versions,
-                               int *count);
 
 /*
  * PURGE - Delete all but the highest N versions of files.
@@ -3643,7 +3568,16 @@ static int purge_files_acp(struct dcl_context *ctx, const char *param, int keep_
         }
         n++;
     }
+    uint32_t sst = dcl_rms_dir_status(d);
     dcl_rms_dir_close(d);
+    if (n == 0 && sst != RMS$_NMF && sst != RMS$_FNF && sst != 0 && !(sst & 1)) {
+        /* The search itself failed (a directory that is not there): VMS says
+         * %PURGE-W-SEARCHFAIL over the RMS reason (vms-2cbe). */
+        free(arr);
+        dcl_error("PURGE", 0, "SEARCHFAIL", "error searching for %s", src[0] ? src : "*.*;*");
+        file_rms_reason(sst);
+        return (int)sst;
+    }
 
     int total_deleted = 0;
     for (int i = 0; i < n; i++) {
@@ -3698,201 +3632,11 @@ int cmd_purge(struct dcl_command *cmd)
         if (endp == keep_val || *endp != '\0' || keep_count < 1) keep_count = 1;
     }
 
-    if (!rms_executive_absent())
-        return purge_files_acp(ctx, cmd->param_count >= 1 ? cmd->params[0] : "",
-                               keep_count, do_confirm, do_log);
-
-    /* Determine the target directory and pattern */
-    char linux_dir[1024];
-    const char *pattern = NULL;
-
-    if (cmd->param_count >= 1 && cmd->params[0][0] != '\0') {
-        char resolved[1024];
-        dcl_resolve_path(ctx, cmd->params[0], resolved, sizeof(resolved));
-
-        struct stat st;
-        if (stat(resolved, &st) == 0 && S_ISDIR(st.st_mode)) {
-            strncpy(linux_dir, resolved, sizeof(linux_dir) - 1);
-            linux_dir[sizeof(linux_dir) - 1] = '\0';
-        } else {
-            /* Split path into directory + filename pattern. Use the
-             * ORIGINAL filename+version text, not resolved's own
-             * basename — see dcl_filename_component()'s doc comment. */
-            const char *orig = dcl_filename_component(cmd->params[0]);
-            char *last_slash = strrchr(resolved, '/');
-            if (last_slash) {
-                pattern = strdup((orig && orig[0]) ? orig : last_slash + 1);
-                *(last_slash + 1) = '\0';
-                strncpy(linux_dir, resolved, sizeof(linux_dir) - 1);
-                linux_dir[sizeof(linux_dir) - 1] = '\0';
-            } else {
-                pattern = strdup((orig && orig[0]) ? orig : resolved);
-                vmsfs_to_linux_path(ctx->default_dir, linux_dir, sizeof(linux_dir));
-            }
-        }
-    } else {
-        /* Default: current directory, all files (*.*) */
-        vmsfs_to_linux_path(ctx->default_dir, linux_dir, sizeof(linux_dir));
-    }
-
-    /* Ensure trailing slash */
-    size_t dlen = strlen(linux_dir);
-    if (dlen > 0 && linux_dir[dlen - 1] != '/') {
-        if (dlen < sizeof(linux_dir) - 1) {
-            linux_dir[dlen] = '/';
-            linux_dir[dlen + 1] = '\0';
-        }
-    }
-
-    /* Scan the directory and collect unique base names (name without version).
-     * For each unique base+ext, call vmsfs_purge_versions(). */
-    DIR *dir = opendir(linux_dir);
-    if (!dir) {
-        dcl_error("RMS", 2, "DNF", "directory not found - %s", linux_dir);
-        if (pattern) free((void *)pattern);
-        return SS$_NOSUCHFILE;
-    }
-
-    /* Track processed bases to avoid duplicate purge calls */
-    struct purge_base {
-        char name[64];
-        char ext[64];
-    };
-    int cap = 64;
-    struct purge_base *bases = malloc((size_t)cap * sizeof(*bases));
-    if (!bases) {
-        closedir(dir);
-        if (pattern) free((void *)pattern);
-        return SS$_INSFMEM;
-    }
-    int base_count = 0;
-    int total_deleted = 0;
-
-    struct dirent *de;
-    /* Remove trailing slash for opendir (already done) — iterate entries */
-    /* Strip the trailing slash from linux_dir to use as dir arg to vmsfs */
-    char dir_notrail[1024];
-    strncpy(dir_notrail, linux_dir, sizeof(dir_notrail) - 1);
-    dir_notrail[sizeof(dir_notrail) - 1] = '\0';
-    size_t dtlen = strlen(dir_notrail);
-    if (dtlen > 1 && dir_notrail[dtlen - 1] == '/') {
-        dir_notrail[dtlen - 1] = '\0';
-    }
-
-    while ((de = readdir(dir)) != NULL) {
-        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
-
-        /* Only process versioned files (must contain ;N) */
-        const char *semi = strrchr(de->d_name, ';');
-        if (!semi) continue;
-
-        /* Apply wildcard pattern filter if one was given */
-        if (pattern) {
-            if (!vmsfs_wildcard_match(pattern, de->d_name)) continue;
-        }
-
-        /* Extract base (name) and ext from the portion before ';' */
-        char base_ext[256];
-        size_t belen = (size_t)(semi - de->d_name);
-        if (belen >= sizeof(base_ext)) belen = sizeof(base_ext) - 1;
-        memcpy(base_ext, de->d_name, belen);
-        base_ext[belen] = '\0';
-
-        /* Split base_ext into name and extension */
-        char fname[64] = {0};
-        char fext[64]  = {0};
-        const char *dot = strrchr(base_ext, '.');
-        if (dot) {
-            size_t nlen = (size_t)(dot - base_ext);
-            if (nlen >= sizeof(fname)) nlen = sizeof(fname) - 1;
-            memcpy(fname, base_ext, nlen);
-            fname[nlen] = '\0';
-            strncpy(fext, dot + 1, sizeof(fext) - 1);
-            fext[sizeof(fext) - 1] = '\0';
-        } else {
-            strncpy(fname, base_ext, sizeof(fname) - 1);
-            fname[sizeof(fname) - 1] = '\0';
-        }
-
-        /* Check if we already processed this base */
-        int already = 0;
-        for (int k = 0; k < base_count; k++) {
-            if (strcasecmp(bases[k].name, fname) == 0 &&
-                strcasecmp(bases[k].ext,  fext)  == 0) {
-                already = 1;
-                break;
-            }
-        }
-        if (already) continue;
-
-        /* Record this base */
-        if (base_count >= cap) {
-            cap *= 2;
-            struct purge_base *tmp = realloc(bases, (size_t)cap * sizeof(*bases));
-            if (!tmp) { free(bases); closedir(dir);
-                        if (pattern) free((void *)pattern);
-                        return SS$_INSFMEM; }
-            bases = tmp;
-        }
-        strncpy(bases[base_count].name, fname, sizeof(bases[0].name) - 1);
-        bases[base_count].name[sizeof(bases[0].name) - 1] = '\0';
-        strncpy(bases[base_count].ext,  fext,  sizeof(bases[0].ext)  - 1);
-        bases[base_count].ext[sizeof(bases[0].ext) - 1] = '\0';
-        base_count++;
-
-        /* /CONFIRM: prompt before purging this file */
-        if (do_confirm) {
-            char upper_name[128];
-            size_t ui;
-            for (ui = 0; ui < sizeof(upper_name) - 1 && fname[ui]; ui++)
-                upper_name[ui] = (char)toupper((unsigned char)fname[ui]);
-            upper_name[ui] = '\0';
-            char upper_ext[64];
-            for (ui = 0; ui < sizeof(upper_ext) - 1 && fext[ui]; ui++)
-                upper_ext[ui] = (char)toupper((unsigned char)fext[ui]);
-            upper_ext[ui] = '\0';
-            dcl_out_printf("PURGE %s%s%s ? [N]: ", upper_name,
-                   upper_ext[0] ? "." : "", upper_ext);
-            dcl_out_flush();
-            char resp[64];
-            if (dcl_in_get(NULL, resp, sizeof(resp)) < 0 ||
-                toupper((unsigned char)resp[0]) != 'Y')
-                continue;
-        }
-
-        /* Purge old versions for this file */
-        int deleted = vmsfs_purge_versions(dir_notrail, fname,
-                                            fext[0] ? fext : NULL, keep_count);
-        if (deleted > 0) {
-            total_deleted += deleted;
-            if (do_log) {
-                char upper_name[128];
-                size_t ui;
-                for (ui = 0; ui < sizeof(upper_name) - 1 && fname[ui]; ui++)
-                    upper_name[ui] = (char)toupper((unsigned char)fname[ui]);
-                upper_name[ui] = '\0';
-                char upper_ext[64];
-                for (ui = 0; ui < sizeof(upper_ext) - 1 && fext[ui]; ui++)
-                    upper_ext[ui] = (char)toupper((unsigned char)fext[ui]);
-                upper_ext[ui] = '\0';
-                dcl_error("PURGE", 1, "PURGED",
-                          "%s%s%s purged (%d version%s removed)",
-                          upper_name, upper_ext[0] ? "." : "", upper_ext,
-                          deleted, deleted != 1 ? "s" : "");
-            }
-        }
-    }
-    closedir(dir);
-    free(bases);
-    if (pattern) free((void *)pattern);
-
-    if (total_deleted == 0) {
-        dcl_out_printf("%%PURGE-I-NOPURGE, no file versions to purge\n");
-    } else {
-        dcl_out_printf("%%PURGE-I-PURGED, %d old version%s deleted\n",
-               total_deleted, total_deleted != 1 ? "s" : "");
-    }
-    return SS$_NORMAL;
+    /* Both runtimes: RMS $SEARCH + $ERASE (the ACP on the product runtime,
+     * RMS's own executive-absent defer on a host tree) -- never an opendir()
+     * walk and unlink() in DCL (vms-2cbe). */
+    return purge_files_acp(ctx, cmd->param_count >= 1 ? cmd->params[0] : "",
+                           keep_count, do_confirm, do_log);
 }
 
 /*
@@ -3909,39 +3653,39 @@ int cmd_append(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char src_path[1024], dst_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], src_path, sizeof(src_path));
-    dcl_resolve_path(ctx, cmd->params[1], dst_path, sizeof(dst_path));
+    /* Record by record through RMS (vms-2cbe): $GET each source record and
+     * $PUT it at the destination's end of file ($CONNECT RAB$M_EOF; a missing
+     * destination is $CREATEd). */
+    uint32_t rst = 0, wst = 0;
+    struct dcl_rms_reader *src = dcl_rms_read_open(ctx, cmd->params[0], &rst);
+    if (!src)
+        return file_rms_failed("APPEND", 2, "OPENIN", "input", cmd->params[0], rst);
 
-    FILE *src = fopen(src_path, "rb");
-    if (!src) {
-        dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
-        return SS$_NOSUCHFILE;
-    }
-
-    FILE *dst = fopen(dst_path, "ab");
+    struct dcl_rms_writer *dst = dcl_rms_write_append(ctx, cmd->params[1], &wst);
     if (!dst) {
-        fclose(src);
-        dcl_error("RMS", 2, "CRE", "cannot open for append - %s", cmd->params[1]);
-        return SS$_FILACCERR;
+        dcl_rms_read_close(src);
+        return file_rms_failed("APPEND", 2, "OPENOUT", "output", cmd->params[1], wst);
     }
 
-    char buf[8192];
-    size_t n;
-    int write_err = 0;
-    while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
-        if (fwrite(buf, 1, n, dst) != n) {
+    char rec[32768];
+    int eof = 0, n, write_err = 0;
+    uint32_t why = 0;
+    while ((n = dcl_rms_read_record(src, rec, sizeof(rec), &eof)) >= 0) {
+        if (dcl_rms_write_record(dst, rec, (size_t)n) != 0) {
             write_err = 1;
+            why = dcl_rms_write_status(dst, NULL);
             break;
         }
     }
 
-    fclose(src);
-    fclose(dst);
+    dcl_rms_read_close(src);
+    uint32_t cst = dcl_rms_write_close(dst);
+    if (!write_err && !(cst & 1)) { write_err = 1; why = cst; }
 
     if (write_err) {
-        dcl_error("RMS", 2, "WER", "write error - %s", cmd->params[1]);
-        return SS$_ABORT;
+        dcl_error("APPEND", 2, "WRITEERR", "error writing %s", cmd->params[1]);
+        file_rms_reason(why);
+        return (int)(why ? why : SS$_ABORT);
     }
 
     return SS$_NORMAL;

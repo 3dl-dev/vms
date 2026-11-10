@@ -32,12 +32,19 @@
 # every SEQUENCE fails on line 2; return SS$_NOSUCHFILE again and the STATUS
 # lines read %X00000910.
 VMSDCL="${VMSDCL:-vmsdcl}"
-TDIR=$(mktemp -d)
-printf 'alpha one\nalpha two\n' > "$TDIR/ta.txt"
-printf 'bravo one\n' > "$TDIR/tb.txt"
+# The files live on the volume RMS reaches (TYPE opens them by RMS $OPEN, rd
+# vms-2cbe), named by a VMS directory, not a host path; each has its version,
+# as every file on a Files-11 volume does (the header shows TB.TXT;1).
+TNAME="dcl_tlist_$$"
+TDIR="/vms/$TNAME"
+VDIR="$(echo "$TNAME" | tr a-z A-Z)"
+mkdir -p "$TDIR"
+trap 'rm -rf "$TDIR"' EXIT
+printf 'alpha one\nalpha two\n' > "$TDIR/ta.txt;1"
+printf 'bravo one\n' > "$TDIR/tb.txt;1"
 
 run() {
-    printf 'DEFINE TD "%s"\nSET DEFAULT TD:[000000]\n%s\n' "$TDIR" "$1" | $VMSDCL 2>/dev/null
+    printf 'SET DEFAULT SYS$SYSDEVICE:[%s]\n%s\n' "$VDIR" "$1" | $VMSDCL 2>/dev/null
 }
 
 # expected stdout: the lines given, where "@TB" / "@TA" is a header name line
@@ -81,5 +88,5 @@ st=$(run $'TYPE NOSUCH.TXT\nWRITE SYS$OUTPUT "STATUS-SINGLE=",$STATUS' | grep '^
 echo "$st"
 
 # the error lines themselves (stderr)
-printf 'DEFINE TD "%s"\nSET DEFAULT TD:[000000]\nTYPE TA.TXT,NOSUCH.TXT\n' "$TDIR" | $VMSDCL 2>&1 >/dev/null
+printf 'SET DEFAULT SYS$SYSDEVICE:[%s]\nTYPE TA.TXT,NOSUCH.TXT\n' "$VDIR" | $VMSDCL 2>&1 >/dev/null
 rm -rf "$TDIR"

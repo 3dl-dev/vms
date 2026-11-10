@@ -1,0 +1,28 @@
+# dcl-alloc-msg-to-substrate-stderr -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "A QEMU suite reads the DCL it drives from that DCL's SYS\$OUTPUT mailbox, never from an inherited substrate stdout/stderr pipe (tests/qemu/ovmx_dcl_sysout.h, rd vms-2f39)";;
+        targets)      echo "vmsdcl/dcl_cmd_io.c";;
+        suites_red)   echo "test_syssvc_dcl_allocate";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cmd_allocate() reports %DCL-I-ALLOC through DCL's output sink (dcl_out_printf), which a mailbox SYS\$OUTPUT takes by \$QIO. The mutation writes that one message with fprintf(stderr) instead: DCL still allocates through \$ALLOC and SHOW DEVICE still reads Online alloc, but the message goes only to the substrate stream DCL inherited -- the stdio fallback rd vms-f6ac removes. The suite (ported by rd vms-2f39) reads DCL's SYS\$OUTPUT mailbox and has DCL's inherited stdout/stderr on the null device, so the message never reaches it and the ALLOC-message assertion reddens. The pipe harness it replaced merged stderr into its capture and stayed green under this exact defect. Everything else the suite asserts (the allocation, the logical name, DEVALLOC, DEVNOTALLOC) stays green. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOR'
+ALLOCATE OPA0: reports %DCL-I-ALLOC, _<full name> allocated
+EOR
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one %DCL-I-ALLOC report in cmd_allocate().
+        sed -i 's|        dcl_out_printf("%%DCL-I-ALLOC, %s allocated\\n", phys);|        fprintf(stderr, "%%DCL-I-ALLOC, %s allocated\\n", phys); /* NEGCTL dcl-alloc-msg-to-substrate-stderr */|' "$_file"
+
+    :
+}

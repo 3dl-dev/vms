@@ -90,7 +90,12 @@ assert_ident "delete nonexistent" "%RMS-E-FNF" "$output"
 
 # Test 5: TYPE nonexistent file -> %TYPE-W-SEARCHFAIL then -RMS-E-FNF, as VAX
 # V7.3 says it (keystroke ERR.DCL E4; dcl_cmd_file.c cmd_type, rd vms-c174)
-output=$(echo "TYPE NONEXISTENT_FILE_QWERTY.TXT" | $VMSDCL 2>&1)
+# The default is a real system-disk directory: TYPE reaches files only
+# through RMS (libc-drop vms-2cbe), so the missing FILE is what fails.
+TYPDIR="dcl_msgt_$$"
+mkdir -p "/vms/$TYPDIR"
+output=$(printf 'SET DEFAULT SYS$SYSDEVICE:[%s]\nTYPE NONEXISTENT_FILE_QWERTY.TXT\n' "$(echo "$TYPDIR" | tr a-z A-Z)" | $VMSDCL 2>&1)
+rm -rf "/vms/$TYPDIR"
 check_vms_format "type nonexistent" "$output"
 assert_ident "type nonexistent" "%TYPE-W-SEARCHFAIL, error searching for" "$output"
 assert_ident "type nonexistent reason" "-RMS-E-FNF, file not found" "$output"

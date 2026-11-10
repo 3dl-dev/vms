@@ -1662,7 +1662,14 @@ jobs:
     permissions:
       contents: read
       packages: write   # push the main-only registry layer cache
-    # Budget per shard: roughly one Nth of the manifest's defects (the NR%n
+    # 40 -> 64 shards + cost-balanced partition (vms-7dc2): round-robin by
+    # name put the slow whole-VM defects together; merge-group run
+    # 42122832068 had 40 shards finishing between 18 and 41 min (the queue's
+    # critical path). LPT over measured costs (tools/ci/negctl_costs.tsv)
+    # models 26 min at 40 shards, 20 min at 64. Runners are not the limit
+    # (all 40 started together).
+    #
+    # Budget per shard: roughly one Nth of the manifest's defect cost (the
     # partition below) plus the fixed image-build + positive-control cost
     # every shard pays independently. Not hand-recited here because it drifts
     # as the manifest grows -- run `sh tests/qemu/facility_defects.sh list |
@@ -1685,7 +1692,7 @@ jobs:
     # 120 defects / 10 shards = ~12/shard: at shard 3's measured ~1min/defect +
     # ~5m fixed build+positive-control cost that is ~17m, comfortably inside 30m
     # even at the first-batch contention that killed the 20-defect shards. The
-    # partition below is `NR % job-total`, so this is the ONLY line to touch --
+    # partition below derives from the job total, so this is the ONLY line to touch --
     # nothing is hand-maintained. Revisit as the manifest grows (raise the
     # shard count, never delete a defect to fit).
     #
@@ -1748,7 +1755,7 @@ jobs:
         # queue's critical path (queue median 40.3 min). Runners were not the
         # bound (enterprise plan; at most 7 concurrent queue runs seen), so
         # 301 / 40 = ~7.5 per shard -> ~14 min + the ~4 min image restore.
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
 
     steps:
       - name: Checkout
@@ -1768,7 +1775,9 @@ jobs:
           fi
           # shard by position within the PICKED list so a small subset spreads
           # over the shards instead of piling onto a few
-          MINE=$(echo "$PICK" | grep . | awk -v n="${{ strategy.job-total }}" -v i="${{ matrix.shard }}" '(NR-1) % n == i' || true)
+          # Cost-balanced (LPT) partition, a pure function of the list, so
+          # the shards' union is still exactly PICK (tools/ci/negctl_shard.py).
+          MINE=$(echo "$PICK" | python3 tools/ci/negctl_shard.py pick --index "${{ matrix.shard }}" --total "${{ strategy.job-total }}" --costs tools/ci/negctl_costs.tsv)
           echo "$MINE" > "$RUNNER_TEMP/negctl-mine.txt"
           echo "n=$(echo "$MINE" | grep -c . || true)" >> "$GITHUB_OUTPUT"
           echo "selected $(echo "$PICK" | grep -c . || true) of $(echo "$ALL" | grep -c .) defects; this shard runs:"

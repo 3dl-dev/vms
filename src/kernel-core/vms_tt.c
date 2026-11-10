@@ -93,6 +93,16 @@ struct vms_tt {
 	/* echo bytes waiting for the port (handed over outside the lock) */
 	uint8_t  obuf[VMS_TT_OBUF];
 	uint32_t olen;
+	/* THE OUTPUT TURN (rd vms-ff73). Bytes leave for the port in the order
+	 * the driver framed them. Taking bytes out of obuf and handing them to
+	 * the port are two steps (the port is never called under tt->lock), so
+	 * whoever takes bytes must hand them over before anyone else takes or
+	 * writes any: one owner at a time, in tt_flush() and vms_tt_write().
+	 * Without it the receive path could take a line's echo, and the reader
+	 * it woke put its next prompt on the line first (keystroke ERR.DCL E6:
+	 * "WR<CR>_Expression: ITE SYS$OUTPUT"). */
+	int      oown;             /* a caller holds the output turn */
+	uint32_t owait;            /* writers waiting for it (on cv) */
 
 	/* WHERE THE CURSOR IS, as the carriage-control rules need it (rd vms-fc4;
 	 * see tt_nl()). Updated for every byte the driver emits -- echo, prompts
@@ -273,34 +283,62 @@ static void tt_prompt_out(struct vms_tt *tt, const uint8_t *p, uint32_t n)
 	tt_out(tt, p, n);
 }
 
-/* Hand queued echo to the port. Called WITHOUT tt->lock. In small slices so
- * no large buffer sits on the kernel stack. */
-static void tt_flush(struct vms_tt *tt)
+/* Hand everything queued in obuf to the port. Called WITH tt->lock and the
+ * output turn held; returns with the lock held and obuf empty. Drops the lock
+ * around each port call. In small slices so no large buffer sits on the
+ * kernel stack. Never sleeps (xmit never does). */
+static void tt_drain_owned(struct vms_tt *tt)
 {
 	uint8_t buf[128];
 	uint32_t n;
 
 	for (;;) {
-		exec_lock(&tt->lock);
+		struct tt_portref pr;
+
 		if (tt->detached)
 			tt->olen = 0;            /* the port is gone */
 		n = tt->olen < sizeof(buf) ? tt->olen : (uint32_t)sizeof(buf);
+		if (!n)
+			return;
 		memcpy(buf, tt->obuf, n);
 		memmove(tt->obuf, tt->obuf + n, tt->olen - n);
 		tt->olen -= n;
 		exec_unlock(&tt->lock);
-		if (!n)
-			return;
-		{
-			struct tt_portref pr;
-
-			if (tt_port_enter(tt, &pr)) {
-				if (pr.ops->xmit)
-					pr.ops->xmit(pr.port, buf, n);
-				tt_port_exit(tt);
-			}
+#if defined(OVMX_KTEST_FAULT_INJECT)
+		/* TEST-ONLY (rd vms-ff73): the bytes are taken and not yet
+		 * handed over -- the window a preempted CPU leaves open */
+		vms_tt_ktest_handoff_stall();
+#endif
+		if (tt_port_enter(tt, &pr)) {
+			if (pr.ops->xmit)
+				pr.ops->xmit(pr.port, buf, n);
+			tt_port_exit(tt);
 		}
+		exec_lock(&tt->lock);
 	}
+}
+
+/* Give the output turn back. Under tt->lock. */
+static void tt_out_release(struct vms_tt *tt)
+{
+	tt->oown = 0;
+	if (tt->owait)
+		exec_cv_broadcast(&tt->cv);
+}
+
+/* Hand queued echo to the port. Called WITHOUT tt->lock; never sleeps. When
+ * another caller holds the output turn this returns at once: the owner hands
+ * over what is queued here, after its own bytes and before it lets go (see
+ * oown). */
+static void tt_flush(struct vms_tt *tt)
+{
+	exec_lock(&tt->lock);
+	if (!tt->oown) {
+		tt->oown = 1;                /* this flush holds the turn */
+		tt_drain_owned(tt);
+		tt_out_release(tt);
+	}
+	exec_unlock(&tt->lock);
 }
 
 /* The standard terminator set, used when a read names no mask (P4 = 0): every
@@ -1380,7 +1418,9 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 			return VMS_TT_READ_ASTPEND;
 		}
 
-		if (olen) {                       /* show the prompt/echo first */
+		if (olen && !tt->oown) {          /* show the prompt/echo first
+						   * (an owner of the output
+						   * turn shows it otherwise) */
 			exec_unlock(&tt->lock);
 			tt_flush(tt);
 			exec_lock(&tt->lock);
@@ -1581,6 +1621,22 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 		}
 
 		/*
+		 * Take the output turn (see oown): what is queued in obuf goes
+		 * out first, and nothing framed after this chunk -- echo, the
+		 * next prompt -- reaches the port before it. The holder of the
+		 * turn in tt_flush() never sleeps, so the wait is short.
+		 */
+		exec_lock(&tt->lock);
+		while (tt->oown) {
+			int to = 0;
+
+			tt->owait++;
+			(void)exec_cv_wait_timeout(&tt->cv, &tt->lock, 10, &to);
+			tt->owait--;
+		}
+		tt->oown = 1;
+		tt_drain_owned(tt);
+		/*
 		 * Build the chunk under the lock: the cursor position is driver
 		 * state shared with echo. A COOKED write (a program's output
 		 * through its terminal's descriptor: printf) is a run of
@@ -1590,7 +1646,6 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 		 * return after it that leaves the line feed owed. A raw write
 		 * ($QIO IO$_WRITEVBLK, no carriage control) is the bytes.
 		 */
-		exec_lock(&tt->lock);
 		while (i < n && k < sizeof(chunk) - 4) {
 			uint8_t c = buf[i];
 
@@ -1638,6 +1693,9 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 
 			if (!tt_port_enter(tt, &pr)) {
 				rc = -EIO;       /* the line went away */
+				exec_lock(&tt->lock);
+				tt_out_release(tt);
+				exec_unlock(&tt->lock);
 				goto out;
 			}
 			if (pr.ops->write) {
@@ -1651,6 +1709,8 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 			 * re-opened): the chunk goes to the new one */
 			exec_lock(&tt->lock);
 			swapped = (rc == -EIO && tt->port_gen != pr.gen && !tt->detached);
+			if (!swapped)
+				tt_out_release(tt);   /* this chunk is out */
 			exec_unlock(&tt->lock);
 			if (!swapped)
 				break;
@@ -1671,8 +1731,8 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 		tt_reshow_read(tt);
 	}
 	exec_unlock(&tt->lock);
-	tt_flush(tt);
 out:
+	tt_flush(tt);                     /* what was queued while this wrote */
 	vms_tt_write_end(tt);    /* held executive lines follow the write */
 	return rc;
 }

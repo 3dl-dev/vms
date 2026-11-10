@@ -36,6 +36,7 @@
 #include <sys/wait.h>
 #include <poll.h>
 #include <signal.h>
+#include <time.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -43,6 +44,7 @@
 #include "ossdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
@@ -315,41 +317,60 @@ static uint32_t as_child(const char *self, char mode, uint16_t fid)
 
 static char *const dcl_env[] = { "PATH=/bin", NULL };
 
+/* DCL's output comes back from its SYS$OUTPUT mailbox (rd vms-2f39). The wait
+ * is bounded like a read from a child: DCL that writes nothing new for
+ * CHILD_WAIT_MS is killed. */
 static int run_dcl(const char *script, char *out, size_t outsz)
 {
-    int in_pipe[2], out_pipe[2];
+    int in_pipe[2];
     pid_t pid;
-    size_t used = 0;
+    struct ovmx_dcl_sysout so;
+    struct timespec t0, tn;
+    size_t seen = 0;
 
     out[0] = '\0';
-    if (pipe(in_pipe) < 0 || pipe(out_pipe) < 0)
+    if (!(ovmx_dcl_sysout_open(&so) & 1))
         return -1;
+    if (pipe(in_pipe) < 0) {
+        ovmx_dcl_sysout_collect(&so, NULL, 0);
+        return -1;
+    }
     fflush(NULL);
     pid = ovmx_fork_subprocess();
     if (pid == 0) {
-        dup2(in_pipe[0], 0); dup2(out_pipe[1], 1); dup2(out_pipe[1], 2);
-        close(in_pipe[0]); close(in_pipe[1]); close(out_pipe[0]); close(out_pipe[1]);
+        ovmx_dcl_sysout_child(&so);
+        dup2(in_pipe[0], 0);
+        close(in_pipe[0]); close(in_pipe[1]);
         execle(DCL_PATH, "DCL.EXE", (char *)NULL, dcl_env);
         _exit(127);
     }
-    close(in_pipe[0]); close(out_pipe[1]);
+    close(in_pipe[0]);
     (void)!write(in_pipe[1], script, strlen(script));
     close(in_pipe[1]);
-    for (;;) {
-        int to = 0;
-        ssize_t n = read_bounded(out_pipe[0], out + used, outsz - 1 - used, &to);
-        if (to) {
-            printf("  (DCL did not finish in %d s; killed)\n", CHILD_WAIT_MS / 1000);
-            kill(pid, SIGKILL);
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    while (pid > 0) {
+        pid_t r = waitpid(pid, NULL, WNOHANG);
+        if (r == pid || (r < 0 && errno != EINTR))
+            break;
+        size_t n = ovmx_dcl_sysout_peek(&so, out, outsz);
+        clock_gettime(CLOCK_MONOTONIC, &tn);
+        if (n != seen) {
+            seen = n;
+            t0 = tn;
+        }
+        if (n >= outsz - 1) {
+            waitpid(pid, NULL, 0);
             break;
         }
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
+        if ((tn.tv_sec - t0.tv_sec) * 1000 + (tn.tv_nsec - t0.tv_nsec) / 1000000 >= CHILD_WAIT_MS) {
+            printf("  (DCL did not finish in %d s; killed)\n", CHILD_WAIT_MS / 1000);
+            kill(pid, SIGKILL);
+            waitpid(pid, NULL, 0);
+            break;
+        }
+        usleep(20000);
     }
-    out[used] = '\0';
-    close(out_pipe[0]);
-    waitpid(pid, NULL, 0);
+    ovmx_dcl_sysout_collect(&so, out, outsz);
     return 0;
 }
 

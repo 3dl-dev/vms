@@ -99,6 +99,42 @@
 #endif
 
 /*
+ * A file a command could not open, as VMS reports it: the command's own
+ * message ("%DIFF-E-OPENIN, error opening X as input") over the RMS reason on
+ * its own line ("-RMS-E-FNF, file not found"), from RMS's status (vms-0504).
+ */
+/* The RMS reason for `st` on its own line, from the system message file
+ * ($GETMSG): "-RMS-E-FNF, file not found". */
+static void misc_rms_reason(uint32_t st)
+{
+    char txt[256];
+    uint16_t tl = 0;
+    struct dsc$descriptor_s md;
+    if (st == 0)
+        return;
+    md.dsc$w_length = (uint16_t)(sizeof txt - 1);
+    md.dsc$b_dtype = DSC$K_DTYPE_T;
+    md.dsc$b_class = DSC$K_CLASS_S;
+    md.dsc$a_pointer = txt;
+    if ((sys$getmsg(st, &tl, &md, 0x0F, NULL) & 1) && tl > 0) {
+        txt[tl] = '\0';
+        if (txt[0] == '%')
+            txt[0] = '-';
+        dcl_err_printf("%s\n", txt);
+    } else {
+        dcl_err_printf("-SYSTEM-F-STATUS, status %%X%08X\n", (unsigned)st);
+    }
+}
+
+static uint32_t misc_rms_failed(const char *fac, int sev, const char *ident,
+                                const char *what, const char *spec, uint32_t st)
+{
+    dcl_error(fac, sev, ident, "error opening %s as %s", spec, what);
+    misc_rms_reason(st);
+    return st ? st : SS$_NOSUCHFILE;
+}
+
+/*
  * DIFFERENCES - compare two text files record by record (utilities$differences).
  *
  * The listing, the counts, the closing command summary and the $STATUS are those
@@ -636,30 +672,26 @@ int cmd_sort(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char src_path[1024], dst_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], src_path, sizeof(src_path));
-    dcl_resolve_path(ctx, cmd->params[1], dst_path, sizeof(dst_path));
+    /* Read all records through RMS ($OPEN + sequential $GET, vms-0504). */
+    uint32_t rst = 0;
+    struct dcl_rms_reader *in = dcl_rms_read_open(ctx, cmd->params[0], &rst);
+    if (!in)
+        return (int)misc_rms_failed("SORT", 4, "OPENIN", "input", cmd->params[0], rst);
 
-    /* Read all lines */
-    FILE *fp = fopen(src_path, "r");
-    if (!fp) {
-        dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
-        return SS$_NOSUCHFILE;
-    }
-
-    /* Collect lines into dynamic array */
+    /* Collect records into dynamic array */
     char **lines = NULL;
     size_t line_count = 0;
     size_t line_cap = 0;
     char buf[4096];
+    int eof = 0;
 
-    while (fgets(buf, sizeof(buf), fp)) {
+    while (dcl_rms_read_record(in, buf, sizeof(buf), &eof) >= 0) {
         if (line_count >= line_cap) {
             size_t new_cap = (line_cap == 0) ? 64 : line_cap * 2;
             char **new_lines = realloc(lines, new_cap * sizeof(char *));
             if (!new_lines) {
                 dcl_error("DCL", 4, "INSFMEM", "insufficient memory for sort");
-                fclose(fp);
+                dcl_rms_read_close(in);
                 for (size_t i = 0; i < line_count; i++) free(lines[i]);
                 free(lines);
                 return SS$_INSFMEM;
@@ -670,14 +702,14 @@ int cmd_sort(struct dcl_command *cmd)
         lines[line_count] = strdup(buf);
         if (!lines[line_count]) {
             dcl_error("DCL", 4, "INSFMEM", "insufficient memory for sort");
-            fclose(fp);
+            dcl_rms_read_close(in);
             for (size_t i = 0; i < line_count; i++) free(lines[i]);
             free(lines);
             return SS$_INSFMEM;
         }
         line_count++;
     }
-    fclose(fp);
+    dcl_rms_read_close(in);
 
     /* Sort: /KEY=(POSITION:n,SIZE:m[,DESCENDING]) sorts on the [pos,size] field;
      * otherwise the whole line. /REVERSE flips the order (XORed with a key's own
@@ -698,21 +730,31 @@ int cmd_sort(struct dcl_command *cmd)
         qsort(lines, line_count, sizeof(char *), sort_cmp_desc);
     }
 
-    /* Write sorted output */
-    FILE *out = fopen(dst_path, "w");
+    /* Write the sorted records: $CREATE a new version + sequential $PUT. */
+    uint32_t wst = 0;
+    struct dcl_rms_writer *out =
+        dcl_rms_write_create(ctx, cmd->params[1], FAB$C_VAR, FAB$M_CR, 0, &wst);
     if (!out) {
-        dcl_error("RMS", 2, "CRE", "cannot create - %s", cmd->params[1]);
         for (size_t i = 0; i < line_count; i++) free(lines[i]);
         free(lines);
-        return SS$_FILACCERR;
+        return (int)misc_rms_failed("SORT", 4, "OPENOUT", "output", cmd->params[1], wst);
     }
 
+    int werr = 0;
     for (size_t i = 0; i < line_count; i++) {
-        fputs(lines[i], out);
+        if (!werr && dcl_rms_write_record(out, lines[i], strlen(lines[i])) != 0)
+            werr = 1;
         free(lines[i]);
     }
     free(lines);
-    fclose(out);
+    uint32_t pst = dcl_rms_write_status(out, NULL);
+    uint32_t cst = dcl_rms_write_close(out);
+    if (werr || !(cst & 1)) {
+        uint32_t why = werr ? pst : cst;
+        dcl_error("SORT", 4, "WRITEERR", "error writing %s", cmd->params[1]);
+        misc_rms_reason(why);
+        return (int)(why ? why : SS$_ABORT);
+    }
 
     return SS$_NORMAL;
 }
@@ -749,29 +791,36 @@ int cmd_dump(struct dcl_command *cmd)
         have = (rst == RMS$_NORMAL);
         name_src = eff;
     }
-    if (!have && (rms_executive_absent() ||
-                  vmsfs_device_spec_kernel_mounted(cmd->params[0]))) {
-        dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
-        FILE *fp = fopen(linux_path, "rb");
-        if (fp) {
-            size_t cap = 4096, n = 0, r;
+    if (!have && rms_executive_absent()) {
+        /* No executive: RMS block I/O ($OPEN FAC=BIO + $READ), whose own
+         * executive-absent defer serves the host tree -- never a DCL-side
+         * fopen() (vms-0504). */
+        struct dcl_rms_bio *b = dcl_rms_bio_open(ctx, cmd->params[0], NULL, &rst);
+        if (b) {
+            size_t cap = 4096, n = 0;
+            long r = 0;
             data = malloc(cap);
-            while (data && (r = fread(data + n, 1, cap - n, fp)) > 0) {
-                n += r;
+            while (data && (r = dcl_rms_bio_read(b, data + n, cap - n)) > 0) {
+                n += (size_t)r;
                 if (n == cap) {
                     uint8_t *g = realloc(data, cap *= 2);
                     if (!g) { free(data); data = NULL; }
                     else data = g;
                 }
             }
-            fclose(fp);
-            if (data) { dlen = n; have = 1; name_src = linux_path; }
+            if (r < 0) rst = dcl_rms_bio_status(b);
+            snprintf(linux_path, sizeof(linux_path), "%s", dcl_rms_bio_spec(b));
+            dcl_rms_bio_close(b);
+            if (data && r >= 0) { dlen = n; have = 1; name_src = linux_path; }
         }
     }
     if (!have) {
         free(data);
-        dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
-        return SS$_NOSUCHFILE;
+        if (rst == 0 || rst == RMS$_FNF || rst == RMS$_DNF) {
+            dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
+            return SS$_NOSUCHFILE;
+        }
+        return (int)misc_rms_failed("DUMP", 2, "OPENIN", "input", cmd->params[0], rst);
     }
 
     /* /BLOCKS=n — limit to n 512-byte blocks (0 = all) */
@@ -1485,11 +1534,13 @@ static void help_add_library(struct dcl_context *ctx,
             return; /* already present */
 
     if (linux_in) {
-        /* Locator override: a Linux path -- confirm it opens before adding. */
-        FILE *fp = fopen(resolved, "rb");
-        if (!fp)
+        /* Locator override: confirm RMS opens it (block I/O, as the engine
+         * reads a library) before adding -- never a host fopen() (vms-0504). */
+        uint32_t ost = 0;
+        struct dcl_rms_bio *b = dcl_rms_bio_open(ctx, resolved, NULL, &ost);
+        if (!b)
             return;
-        fclose(fp);
+        dcl_rms_bio_close(b);
     }
     /* A VMS spec is added unconditionally; help_open_libraries() skips any that
      * cannot be read (ACP miss and POSIX-fallback miss both), and cmd_help
@@ -1497,7 +1548,6 @@ static void help_add_library(struct dcl_context *ctx,
 
     snprintf(list[*count], 1024, "%s", resolved);
     (*count)++;
-    (void)ctx;
 }
 
 /* Give a VMS spec a default .HLB file type if it names no type (the last
@@ -3856,33 +3906,46 @@ int cmd_convert(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char src_path[1024], dst_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], src_path, sizeof(src_path));
-    dcl_resolve_path(ctx, cmd->params[1], dst_path, sizeof(dst_path));
+    /* Record for record through RMS (vms-0504): $OPEN + $GET the input, and
+     * $CREATE the output carrying the input's own record format and attributes
+     * (read from its header), then $PUT each record. */
+    uint32_t rst = 0;
+    struct dcl_rms_reader *src = dcl_rms_read_open(ctx, cmd->params[0], &rst);
+    if (!src)
+        return (int)misc_rms_failed("CONVERT", 2, "OPENIN", "input", cmd->params[0], rst);
 
-    FILE *src = fopen(src_path, "r");
-    if (!src) {
-        dcl_error("CONVERT", 2, "OPENIN", "error opening %s as input", cmd->params[0]);
-        return SS$_NOSUCHFILE;
+    uint8_t rfm = FAB$C_VAR, rat = FAB$M_CR;
+    uint16_t mrs = 0;
+    {
+        struct rms_fileattr fa;
+        if (dcl_rms_attr(ctx, cmd->params[0], &fa) == RMS$_NORMAL &&
+            fa.rfm >= FAB$C_FIX && fa.rfm <= FAB$C_STMCR) {
+            rfm = fa.rfm;
+            rat = fa.rat;
+            mrs = fa.mrs;
+        }
     }
-
-    FILE *dst = fopen(dst_path, "w");
+    uint32_t wst = 0;
+    struct dcl_rms_writer *dst =
+        dcl_rms_write_create(ctx, cmd->params[1], rfm, rat, mrs, &wst);
     if (!dst) {
-        fclose(src);
-        dcl_error("CONVERT", 2, "OPENOUT", "error opening %s as output", cmd->params[1]);
-        return SS$_FILACCERR;
+        dcl_rms_read_close(src);
+        return (int)misc_rms_failed("CONVERT", 2, "OPENOUT", "output", cmd->params[1], wst);
     }
 
-    /* Copy line by line, counting records */
-    char line[4096];
-    while (fgets(line, sizeof(line), src))
-        fputs(line, dst);
-
-    fclose(src);
-    int werr = ferror(dst);
-    if (fclose(dst) != 0 || werr) {
+    char line[32768];
+    int eof = 0, n, werr = 0;
+    while ((n = dcl_rms_read_record(src, line, sizeof(line), &eof)) >= 0) {
+        if (dcl_rms_write_record(dst, line, (size_t)n) != 0) { werr = 1; break; }
+    }
+    dcl_rms_read_close(src);
+    uint32_t why = werr ? dcl_rms_write_status(dst, NULL) : 0;
+    uint32_t cst = dcl_rms_write_close(dst);
+    if (!werr && !(cst & 1)) { werr = 1; why = cst; }
+    if (werr) {
         dcl_error("CONVERT", 2, "WRITEERR", "error writing %s", cmd->params[1]);
-        return SS$_FILACCERR;
+        misc_rms_reason(why);
+        return (int)(why ? why : SS$_FILACCERR);
     }
     return SS$_NORMAL;
 }

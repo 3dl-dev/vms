@@ -23,11 +23,15 @@
 #include <sys/wait.h>
 
 #include "ssdef.h"
+#include "starlet.h"            /* $VMS_STATUS_SUCCESS */
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 
 #define EXIT_SKIP 77
 #define DCL_PATH "/bin/DCL.EXE"
+#define RW_UNIT  "VDA0:"
+#define DIR      RW_UNIT "[OVMXDIR]"
 
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
@@ -37,40 +41,31 @@ static int pass = 0, fail = 0;
 
 static char *const dcl_env[] = { (char *)"PATH=/bin", NULL };
 
+/* DCL's output comes back from its SYS$OUTPUT mailbox (rd vms-2f39). */
 static int run_dcl(const char *script, char *out, size_t outsz)
 {
-    int in_pipe[2], out_pipe[2];
+    int in_pipe[2];
+    struct ovmx_dcl_sysout so;
     out[0] = '\0';
-    if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) return -1;
+    if (!(ovmx_dcl_sysout_open(&so) & 1)) return -1;
+    if (pipe(in_pipe) < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
     fflush(NULL);
     pid_t pid = ovmx_fork_login();
-    if (pid < 0) return -1;
+    if (pid < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
     if (pid == 0) {
+        ovmx_dcl_sysout_child(&so);
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
         execle(DCL_PATH, "DCL.EXE", (char *)NULL, dcl_env);
         _exit(127);
     }
     close(in_pipe[0]);
-    close(out_pipe[1]);
     if (write(in_pipe[1], script, strlen(script)) < 0) { /* best effort */ }
     close(in_pipe[1]);
-    size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
-    }
-    out[used] = '\0';
-    close(out_pipe[0]);
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
+    ovmx_dcl_sysout_collect(&so, out, outsz);
     return 0;
 }
 
@@ -88,51 +83,55 @@ int main(void)
         return 1;
     }
 
-    char dir[] = "/tmp/ovmx_cvt_XXXXXX";
-    if (!mkdtemp(dir)) { printf("  FAIL: mkdtemp\n"); return 1; }
-    char inpath[128];
-    snprintf(inpath, sizeof inpath, "%s/in.txt", dir);
-    int fd = open(inpath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    const char body[] = "alpha\nbeta\ngamma\n";
-    if (fd < 0 || write(fd, body, sizeof body - 1) != (ssize_t)(sizeof body - 1)) {
-        printf("  FAIL: could not write the input file\n");
-        return 1;
-    }
-    close(fd);
+    /* The files live on the writable ODS-2 volume (VDA0:[OVMXDIR], pid-unique
+     * names, deleted after): CONVERT reads and writes only through RMS
+     * (libc-drop vms-0504), never a host path, so the input is written and the
+     * output read back through DCL (OPEN/WRITE, TYPE) -- RMS on the volume. */
+    CHECK($VMS_STATUS_SUCCESS(vms_kif_acp_mount(RW_UNIT)), "MOUNT " RW_UNIT " (writable)");
+    unsigned pid = (unsigned)getpid() % 100000u;
 
     static char out1[16384], out2[16384];
-    char script[512];
+    char script[2048];
 
     snprintf(script, sizeof script,
-             "DEFINE CVTDIR \"%s\"\nSET DEFAULT CVTDIR:[000000]\nCONVERT in.txt out.txt\n", dir);
+             "SET DEFAULT " DIR "\n"
+             "OPEN/WRITE F CVI%1$u.TXT\nWRITE F \"alpha\"\nWRITE F \"beta\"\nWRITE F \"gamma\"\nCLOSE F\n"
+             "CONVERT CVI%1$u.TXT CVO%1$u.TXT\n"
+             "WRITE SYS$OUTPUT \"<T1>\"\nTYPE CVO%1$u.TXT\nWRITE SYS$OUTPUT \"</T1>\"\n", pid);
     CHECK(run_dcl(script, out1, sizeof out1) == 0, "DCL ran the plain CONVERT");
     printf("  ---- plain CONVERT ----\n%s  ---- end ----\n", out1);
 
-    char outpath[128], got[256] = "";
-    snprintf(outpath, sizeof outpath, "%s/out.txt", dir);
-    fd = open(outpath, O_RDONLY);
-    ssize_t n = fd >= 0 ? read(fd, got, sizeof got - 1) : -1;
-    if (fd >= 0) close(fd);
-    if (n >= 0) got[n] = '\0';
-    CHECK(n == (ssize_t)(sizeof body - 1) && strcmp(got, body) == 0,
+    const char *t1 = strstr(out1, "<T1>");
+    const char *t1e = t1 ? strstr(t1, "</T1>") : NULL;
+    char got[256] = "";
+    if (t1 && t1e) {
+        /* the records TYPE shows, one per line, between the markers */
+        const char *p = strchr(t1, '\n');
+        size_t gl = 0;
+        for (p = p ? p + 1 : t1e; p < t1e && gl < sizeof got - 1; p++)
+            if (*p != '\r') got[gl++] = *p;
+        got[gl] = '\0';
+    }
+    CHECK(strcmp(got, "alpha\nbeta\ngamma\n") == 0,
           "plain CONVERT wrote a record-for-record copy of the input");
     CHECK(strstr(out1, "CONVERTED") == NULL,
           "plain CONVERT is silent on success: no invented \"CONVERTED\" claim");
 
     snprintf(script, sizeof script,
-             "DEFINE CVTDIR \"%s\"\nSET DEFAULT CVTDIR:[000000]\nCONVERT/FDL=x.fdl in.txt fdl_out.txt\n", dir);
+             "SET DEFAULT " DIR "\n"
+             "CONVERT/FDL=x.fdl CVI%1$u.TXT CVF%1$u.TXT\n"
+             "WRITE SYS$OUTPUT \"F=<\" + F$SEARCH(\"CVF%1$u.TXT;*\") + \">\"\n"
+             "DELETE CVI%1$u.TXT;*\nDELETE CVO%1$u.TXT;*\n"
+             "IF F$SEARCH(\"CVF%1$u.TXT;*\") .NES. \"\" THEN DELETE CVF%1$u.TXT;*\n", pid);
     CHECK(run_dcl(script, out2, sizeof out2) == 0, "DCL ran CONVERT/FDL");
     printf("  ---- CONVERT/FDL ----\n%s  ---- end ----\n", out2);
-    char fdlpath[128];
-    snprintf(fdlpath, sizeof fdlpath, "%s/fdl_out.txt", dir);
     /* negctl: dcl-convert-claims-converted */
     CHECK(strstr(out2, "DCL-W-IVQUAL") != NULL,
           "CONVERT/FDL is rejected (%DCL-W-IVQUAL), not accepted-and-ignored");
     /* negctl: dcl-convert-claims-converted */
-    CHECK(access(fdlpath, F_OK) != 0,
+    CHECK(strstr(out2, "F=<>") != NULL,
           "CONVERT/FDL wrote no output file (no unconverted copy passed off as converted)");
 
-    unlink(inpath); unlink(outpath); unlink(fdlpath); rmdir(dir);
     printf("=== test_syssvc_convert_dcl: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

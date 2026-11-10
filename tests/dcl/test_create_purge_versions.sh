@@ -78,6 +78,10 @@ printf 'DEFINE TD "%s"\nSET DEFAULT TD:[000000]\nDELETE EREL.TXT;-1\nDIRECTORY E
 rm -rf "$C"
 
 # --- D) PURGE keeps only the highest version ---
-D=$(mktemp -d); for v in 1 2 3; do echo "v$v" > "$D/pkeep.txt;$v"; done
-printf 'DEFINE TD "%s"\nSET DEFAULT TD:[000000]\nPURGE PKEEP.TXT\nDIRECTORY PKEEP.TXT\n' "$D" | $VMSDCL 2>&1
+#     Staged on the system disk: PURGE finds versions only by RMS $SEARCH and
+#     removes them by $ERASE (libc-drop vms-2cbe), never a host directory walk.
+DTN="purge_test_$$"
+D="/vms/$DTN"
+mkdir -p "$D"; for v in 1 2 3; do echo "v$v" > "$D/pkeep.txt;$v"; done
+printf 'SET DEFAULT SYS$SYSDEVICE:[%s]\nPURGE PKEEP.TXT\nDIRECTORY PKEEP.TXT\n' "$(echo "$DTN" | tr a-z A-Z)" | $VMSDCL 2>&1
 rm -rf "$D"

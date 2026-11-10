@@ -42,11 +42,10 @@
  * job_id). So the session script issues its SHOW commands but sends NO LOGOUT,
  * and this process holds the command pipe OPEN, leaving DCL blocked -- root and
  * subprocess both alive -- while the $GETJPI reads run. ONLY AFTER those reads
- * does the test LOGOUT the root. That ordering is also what makes the transcript
- * capture work: DCL's stdout is a fully-buffered file and a non-interactive DCL
- * prints no prompt, so nothing reaches OUT_FILE until DCL exits -- the SHOW
- * output (produced earlier, while the subprocess was alive) is flushed as one
- * block on LOGOUT, and the transcript is read only after the child is reaped.
+ * does the test LOGOUT the root. The transcript is DCL's SYS$OUTPUT mailbox
+ * (rd vms-2f39): the SHOW output, produced while the subprocess was alive,
+ * arrives there record by record, and it is collected only after the root is
+ * reaped.
  *
  * PRECONDITION-NOT-ESTABLISHED IS A SKIP, NOT A FAIL (the blind/skip
  * discipline this tree already uses). This suite's property is the
@@ -82,6 +81,7 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 #include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
@@ -101,12 +101,12 @@ static int fail = 0;
 #define ROOT_NAME   "C17ROOT"
 #define SUB_NAME    "C17ROOT_1"
 #define CONSOLE     "OPA0:"
-#define OUT_FILE    "/tmp/ovmx_c17_dcl.out"
 
 /* SPAWN a subprocess that outlives the displays and the reads (WAIT blocks it),
  * show it both ways, then STOP -- no LOGOUT in the script, so DCL blocks and the
  * job stays alive for the $GETJPI reads. The test sends LOGOUT itself, after the
- * reads, to flush the transcript (see the header comment). Auto-naming (no
+ * reads, to end the session and complete the transcript (see the header
+ * comment). Auto-naming (no
  * /PROCESS) so the SPAWNED message and the SUB_NAME row are what vms-c17's
  * naming produces. */
 static const char *SESSION_SCRIPT =
@@ -157,23 +157,6 @@ static int has_name_row(const char *text, const char *name)
         line = eol ? eol + 1 : NULL;
     }
     return 0;
-}
-
-static long read_file(const char *path, char *buf, size_t bufsz)
-{
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-    size_t used = 0;
-    for (;;) {
-        ssize_t n = read(fd, buf + used, bufsz - 1 - used);
-        if (n < 0) { if (errno == EINTR) continue; break; }
-        if (n == 0) break;
-        used += (size_t)n;
-        if (used >= bufsz - 1) break;
-    }
-    buf[used] = '\0';
-    close(fd);
-    return (long)used;
 }
 
 static int write_all(int fd, const void *buf, size_t n)
@@ -257,13 +240,15 @@ static int device_absent_checks(void)
 /* ---- the session subject ------------------------------------------- */
 
 /* The child becomes the interactive job root: it names itself, binds the
- * console, redirects its output to OUT_FILE, and execs the real DCL.EXE reading
+ * console, names the suite's mailbox as its SYS$OUTPUT (rd vms-2f39), and
+ * execs the real DCL.EXE reading
  * SESSION_SCRIPT from stdin. It reports the status of each executive call back
  * over `repfd` so the parent can tell a broken PRECONDITION (skip) apart from a
  * real product bug. Never returns. */
 struct setup_report { uint32_t setprn; uint32_t assign; uint32_t setterm; };
 
-static void session_child(int in_fd, int repfd)
+static void session_child(int in_fd, int repfd,
+                          const struct ovmx_dcl_sysout *so)
 {
     struct setup_report rep;
     uint32_t chan = 0;
@@ -277,8 +262,9 @@ static void session_child(int in_fd, int repfd)
     (void)write_all(repfd, &rep, sizeof(rep));
     close(repfd);
 
-    int fd = open(OUT_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd >= 0) { dup2(fd, STDOUT_FILENO); dup2(fd, STDERR_FILENO); close(fd); }
+    /* After the setup report, so a mailbox the child cannot name ends it
+     * (exit 126) with an empty transcript -- a FAIL -- never a SKIP. */
+    ovmx_dcl_sysout_child(so);
     dup2(in_fd, STDIN_FILENO);
     close(in_fd);
 
@@ -419,13 +405,21 @@ int main(void)
         return EXIT_SKIP;
     }
 
-    unlink(OUT_FILE);
+    /* The session DCL's SYS$OUTPUT: the transcript (rd vms-2f39). */
+    struct ovmx_dcl_sysout so;
+    if (!(ovmx_dcl_sysout_open(&so) & 1)) {
+        printf("  FAIL: could not create the session's SYS$OUTPUT mailbox\n");
+        printf("=== test_syssvc_spawn_users: %d passed, %d failed ===\n",
+               pass, fail + 1);
+        return 1;
+    }
 
     int in_pipe[2], rep_pipe[2];
     if (pipe(in_pipe) != 0 || pipe(rep_pipe) != 0) {
         printf("  FAIL: pipe()\n");
         printf("=== test_syssvc_spawn_users: %d passed, %d failed ===\n",
                pass, fail + 1);
+        ovmx_dcl_sysout_collect(&so, NULL, 0);
         return 1;
     }
 
@@ -442,11 +436,12 @@ int main(void)
         printf("  FAIL: could not create the interactive session process\n");
         printf("=== test_syssvc_spawn_users: %d passed, %d failed ===\n",
                pass, fail + 1);
+        ovmx_dcl_sysout_collect(&so, NULL, 0);
         return 1;
     }
     if (child == 0) {
         close(in_pipe[1]); close(rep_pipe[0]);
-        session_child(in_pipe[0], rep_pipe[1]);
+        session_child(in_pipe[0], rep_pipe[1], &so);
         _exit(127);
     }
     close(in_pipe[0]); close(rep_pipe[1]);
@@ -469,18 +464,18 @@ int main(void)
                "setterm=%08X -- SKIP)\n", rep.setprn, rep.assign, rep.setterm);
         close(in_pipe[1]);
         int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ;
+        ovmx_dcl_sysout_collect(&so, NULL, 0);
         printf("=== test_syssvc_spawn_users: %d passed, %d failed (SKIPPED) ===\n",
                pass, fail);
         return EXIT_SKIP;
     }
 
-    /* The transcript is captured below, AFTER the session logs out. A non-
-     * interactive DCL prints no prompt, and its stdout is a fully-buffered file,
-     * so nothing is flushed until DCL exits -- reading OUT_FILE now would see an
-     * empty file. The $GETJPI reads that follow need the whole job ALIVE, so the
-     * order is: read the executive rows here, then LOGOUT (flush + exit), then
-     * read the flushed transcript. The SHOW commands already ran while the
-     * subprocess was alive, so the flushed transcript still shows both rows. */
+    /* The transcript is collected below, AFTER the session logs out and is
+     * reaped (rd vms-2f39: from its SYS$OUTPUT mailbox). The $GETJPI reads
+     * that follow need the whole job ALIVE, so the order is: read the
+     * executive rows here, then LOGOUT (exit), then collect the transcript.
+     * The SHOW commands already ran while the subprocess was alive, so the
+     * transcript still shows both rows. */
     int have_transcript = 0;
 
     /* Read the executive rows while root and
@@ -519,6 +514,7 @@ int main(void)
         if (sst & 1 && sub_info.linux_pid) kill((pid_t)sub_info.linux_pid, SIGKILL);
         close(in_pipe[1]);
         int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ;
+        ovmx_dcl_sysout_collect(&so, NULL, 0);
         printf("=== test_syssvc_spawn_users: %d passed, %d failed (SKIPPED) ===\n",
                pass, fail);
         return EXIT_SKIP;
@@ -538,6 +534,7 @@ int main(void)
         if (sst & 1 && sub_info.linux_pid) kill((pid_t)sub_info.linux_pid, SIGKILL);
         close(in_pipe[1]);
         int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ;
+        ovmx_dcl_sysout_collect(&so, NULL, 0);
         printf("=== test_syssvc_spawn_users: %d passed, %d failed ===\n", pass, fail);
         return 1;
     }
@@ -570,14 +567,14 @@ int main(void)
      * the row is correct the whole time it exists).
      *
      * So LOGOUT FIRST -- the root runs its remaining SHOWs with the subprocess
-     * still present, then exits, flushing OUT_FILE -- reap it, read the now-
-     * complete transcript, and only THEN release the WAIT-blocked subprocess.
+     * still present, then exits -- reap it, collect the now-complete
+     * transcript, and only THEN release the WAIT-blocked subprocess.
      * Killing after the reap cannot race the SHOWs: the root cannot have exited
      * before it processed every command ahead of LOGOUT in the pipe. */
     (void)write_all(in_pipe[1], "LOGOUT\n", strlen("LOGOUT\n"));
     close(in_pipe[1]);
     { int s; while (waitpid(child, &s, 0) < 0 && errno == EINTR) ; }
-    have_transcript = (read_file(OUT_FILE, out, sizeof(out)) > 0 &&
+    have_transcript = (ovmx_dcl_sysout_collect(&so, out, sizeof(out)) > 0 &&
                        has_substr(out, "number of processes"));
     if (sst & 1 && sub_info.linux_pid)
         kill((pid_t)sub_info.linux_pid, SIGKILL);

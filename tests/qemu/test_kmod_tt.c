@@ -158,6 +158,64 @@ static void rd_wait(struct rd *r)
     r->data[r->a.count < sizeof(r->data) ? r->a.count : sizeof(r->data) - 1] = '\0';
 }
 
+/* ECHO ORDER (rd vms-ff73): a DCL-like reader -- read a command with a
+ * prompt, write a line, read the next -- back to back, EO_N times. */
+#define EO_STALL_PARAM "/sys/module/vms/parameters/vms_ktest_tt_handoff_stall_ms"
+
+/* Arm (ms > 0) or disarm (0) the QEMU-test vms.ko's output hand-off stall. */
+static int eo_stall(unsigned ms)
+{
+    FILE *f = fopen(EO_STALL_PARAM, "w");
+    int ok;
+
+    if (!f)
+        return 0;
+    ok = fprintf(f, "%u\n", ms) > 0;
+    return (fclose(f) == 0) && ok;
+}
+#define EO_N    100
+#define EO_UNIT "_E: WRITE SYS$OUTPUT\r\nOK\r\n"
+struct eo {
+    uint32_t chan;
+    int bad;
+    int at;                     /* the read or write that failed */
+    uint32_t st, cnt;           /* its status, and a read's count */
+};
+
+static void *eo_main(void *arg)
+{
+    struct eo *e = arg;
+    char data[64];
+    int i;
+
+    for (i = 0; i < EO_N; i++) {
+        struct vms_tt_read_args a;
+
+        memset(&a, 0, sizeof a);
+        a.chan = e->chan;
+        a.flags = VMS_TT_RD_TIMED;
+        a.timeout = BOUND;
+        a.buf = (uint64_t)(uintptr_t)data;
+        a.bufsz = sizeof data - 1;
+        a.prompt = (uint64_t)(uintptr_t)"_E: ";
+        a.promptsz = 4;
+        e->at = i;
+        e->st = vms_kif_tt_read(&a);
+        e->cnt = a.count;
+        if (e->st != SS_NORMAL || a.count != 16
+            || memcmp(data, "WRITE SYS$OUTPUT", 16) != 0) {
+            e->bad++;
+            break;
+        }
+        e->st = vms_kif_tt_write(e->chan, "OK\r\n", 4);
+        if (!(e->st & 1)) {
+            e->bad++;
+            break;
+        }
+    }
+    return NULL;
+}
+
 int main(void)
 {
     char devnam[32] = "", devnam2[32] = "", scr[2048];
@@ -1041,6 +1099,94 @@ int main(void)
           "CTRL/O during a read is neither data nor shown, and does not end the read");
     if (strcmp(scr, "\nab\r\n") != 0)
         printf("      screen was [%s] data [%s] st %u\n", scr, r.data, r.st);
+
+    /* ---- ECHO ORDER (rd vms-ff73; keystroke ERR.DCL E6) ----
+     * The echo of a line goes out BEFORE whatever the program writes once the
+     * read completes: its next prompt, its output. The keystroke oracle's
+     * merge-queue flake showed "WR<CR>_Expression: ITE SYS$OUTPUT" -- the
+     * receive path had taken the echo out of the driver's buffer, and the
+     * woken reader's next prompt reached the line before it did. A DCL-like
+     * reader here reads back to back, writing a line after each read, while
+     * the "person" types each command in two bursts; the screen must be every
+     * prompt, its whole echo and the output, in order, every time.
+     *
+     * The window is the instant between the driver taking bytes for the port
+     * and handing them over. On a CPU that keeps running it is too short for
+     * anything to land in (this guest has one CPU; unstalled, 400 commands
+     * never showed it); in the merge queue a host preempted the vCPU inside
+     * it. The test-only hand-off stall (OVMX_KTEST_FAULT_INJECT,
+     * vms_tt_linux.c) holds every hand-off open for a few ms, so the woken
+     * reader runs inside the window every time: without the output turn its
+     * next prompt or its output reaches the line first. */
+    {
+        int armed;
+        static char eo_scr[EO_N * (sizeof EO_UNIT) + 256];
+        struct eo eo;
+        pthread_t eth;
+        size_t el = 0, sp = 0, ul = sizeof EO_UNIT - 1;
+        int it, firstbad = -1, nprompt = 0;
+
+        (void)screen(m, scr, sizeof(scr), 100);
+        armed = eo_stall(3);
+        CHECK(armed, "the test-only output hand-off stall arms (" EO_STALL_PARAM ")");
+        memset(&eo, 0, sizeof eo);
+        eo.chan = chan;
+        pthread_create(&eth, NULL, eo_main, &eo);
+        for (it = 0; it < EO_N; it++) {
+            /* THIS command's prompt is up (the it+1'th "_E: " on the
+             * screen): its read is outstanding. Typing only then keeps the
+             * person within the type-ahead buffer; a stale prompt at the
+             * tail of the screen is not a new read. */
+            while (nprompt < it + 1) {
+                struct pollfd pf = { m, POLLIN, 0 };
+                ssize_t k;
+
+                for (; sp + 4 <= el; sp++)
+                    if (memcmp(eo_scr + sp, "_E: ", 4) == 0) {
+                        nprompt++;
+                        sp += 3;
+                    }
+                if (nprompt >= it + 1)
+                    break;
+                if (poll(&pf, 1, BOUND * 1000) <= 0)
+                    break;
+                k = read(m, eo_scr + el, sizeof eo_scr - 1 - el);
+                if (k <= 0)
+                    break;
+                el += (size_t)k;
+            }
+            if (nprompt < it + 1)
+                break;                     /* no prompt: reported below */
+            type(m, "WR");
+            type(m, "ITE SYS$OUTPUT\r");
+        }
+        pthread_join(eth, NULL);
+        for (;;) {                         /* the last echo and output */
+            size_t k = screen(m, eo_scr + el, sizeof eo_scr - el, 300);
+            /* screen() terminates what it read */
+            if (!k)
+                break;
+            el += k;
+        }
+        if (armed && !eo_stall(0))
+            printf("      the hand-off stall did not disarm\n");
+        for (it = 0; it < EO_N; it++)
+            if ((size_t)(it + 1) * ul > el
+                || memcmp(eo_scr + (size_t)it * ul, EO_UNIT, ul) != 0) {
+                firstbad = it;
+                break;
+            }
+        /* negctl: tt-output-turn-ignored */
+        /* negctl-knockon: tt-port-input-dropped */
+        CHECK(eo.bad == 0 && firstbad < 0 && el == (size_t)EO_N * ul,
+              "100 commands typed in two bursts, each output hand-off held open: every echo goes out whole, before the next prompt and the output (ERR.DCL E6)");
+        if (eo.bad || firstbad >= 0 || el != (size_t)EO_N * ul) {
+            size_t at = firstbad >= 0 ? (size_t)firstbad * ul : 0;
+            printf("      reads failed %d (at %d: st %u count %u); first bad unit %d of %d; screen %zu bytes, want %zu; at it: [%.*s]\n",
+                   eo.bad, eo.at, eo.st, eo.cnt, firstbad, EO_N, el, (size_t)EO_N * ul,
+                   (int)(el > at ? (el - at < 2 * ul ? el - at : 2 * ul) : 0), eo_scr + at);
+        }
+    }
 
     /* ---- read(2) on the line is a terminal-driver read ---- */
     type(m, "hi\r");

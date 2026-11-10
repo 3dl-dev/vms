@@ -112,7 +112,9 @@ static void bck_name_of(const char *spec, char *out, size_t outsz)
     for (const char *p = spec; *p; p++)
         if (*p == ']' || *p == '>' || *p == ':')
             name = p + 1;
-    size_t n = strcspn(name, ";");
+    size_t n = 0;                 /* no strcspn: not in the VMS-native DCL link's surface */
+    while (name[n] && name[n] != ';')
+        n++;
     if (n >= outsz) n = outsz - 1;
     for (size_t i = 0; i < n; i++)
         out[i] = (char)toupper((unsigned char)name[i]);

@@ -200,6 +200,42 @@ done
 o=$(python3 "$ROOT/tools/ci/ci_tiers.py" --repo "$T" --event merge_group --ref x --base deadbeef 2>/dev/null)
 [ "$(get "$o" alpha_vmsgcc)" = true ] && ok "queue: git failure fails closed to the VMS-hosted GCC pipeline" || bad "vmsgcc fail-closed"
 
+# negctl shard partition (tools/ci/negctl_shard.py): every defect on exactly
+# one shard for any N, a defect the cost table lacks still runs, the CLI shard
+# union equals the manifest, and the balance beats round-robin on the table.
+python3 - "$ROOT" <<'PY' && ok "negctl_shard: complete + disjoint for any N, unknown defects still placed, LPT <= round-robin" || bad "negctl_shard partition"
+import subprocess, sys
+root = sys.argv[1]
+sys.path.insert(0, root + "/tools/ci")
+import negctl_shard as ns
+names = subprocess.run(["sh", root + "/tests/qemu/facility_defects.sh", "list"],
+                       capture_output=True, text=True, check=True).stdout.split()
+assert len(names) > 100, len(names)
+costs = ns.load_costs(root + "/tools/ci/negctl_costs.tsv")
+for n in (1, 7, 40, 64, len(names) + 5):
+    sh = ns.assign(names + ["zz-not-in-cost-table"], n, costs)
+    flat = [x for s in sh for x in s]
+    assert len(flat) == len(set(flat)) == len(names) + 1, n
+    assert set(flat) == set(names) | {"zz-not-in-cost-table"}, n
+med = sorted(costs.values())[len(costs) // 2]
+c = lambda x: costs.get(x, med)
+for n in (40, 64):
+    lpt = max(sum(c(x) for x in s) for s in ns.assign(names, n, costs))
+    rr = max(sum(c(x) for i, x in enumerate(sorted(names)) if i % n == k) for k in range(n))
+    assert lpt <= rr, (n, lpt, rr)
+# the CLI, as the workflow calls it: the union over all shards is the input
+got = []
+for i in range(5):
+    out = subprocess.run([sys.executable, root + "/tools/ci/negctl_shard.py", "pick", "--index", str(i),
+                          "--total", "5", "--costs", root + "/tools/ci/negctl_costs.tsv"],
+                         input="\n".join(names), capture_output=True, text=True, check=True).stdout.split()
+    got += out
+assert sorted(got) == sorted(names)
+r = subprocess.run([sys.executable, root + "/tools/ci/negctl_shard.py", "pick", "--index", "5", "--total", "5"],
+                   input="a", capture_output=True, text=True)
+assert r.returncode != 0
+PY
+
 # failing to compute the changed files fails closed in the queue
 o=$(python3 "$ROOT/tools/ci/ci_tiers.py" --repo "$T" --event merge_group --ref x --base deadbeef 2>/dev/null)
 [ "$(get "$o" negctl_select)" = ALL ] && [ "$(get "$o" heavy_release)" = true ] \

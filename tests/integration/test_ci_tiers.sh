@@ -66,6 +66,56 @@ done
 o=$(tier merge_group q tests/qemu/test_kmod_access.c)
 case "$(get "$o" negctl_select)" in *access-mode-escalation*) ok "queue: a suite source selects the defects that redden it" ;; *) bad "suite source map" ;; esac
 
+# a QEMU suite header selects what the suites including it select; anything
+# else including it, or nothing including it, fails closed. Fixture tree (its
+# own git index, so the map reads only this):
+#   mapped.h   <- test_a.c (defect da), and via mid.h <- test_b.c (defect db)
+#   lonely.h   <- test_c.c, which no defect names
+#   fixture.h  <- test_a.c AND mkimage_x.c (a fixture builder)
+#   outside.h  <- test_a.c AND tools/cross-x/init.c (outside tests/qemu)
+#   orphan.h   <- nothing
+H="$T/hdr"; mkdir -p "$H/tests/qemu/defects.d" "$H/tools/cross-x" "$H/src/x"
+for d in da:test_a db:test_b; do
+    printf 'defect_meta() {\n        case "$_f" in\n        targets)      echo "x/%s.c";;\n        suites_red)   echo "%s";;\n        esac\n}\n' \
+        "${d%%:*}" "${d#*:}" > "$H/tests/qemu/defects.d/${d%%:*}.defect"
+done
+q="$H/tests/qemu"
+printf '#include "ovmx_x.h"\n#include "mapped.h"\n#  include "fixture.h"\n#include <outside.h>\n' > "$q/test_a.c"
+printf '#include "mid.h"\n' > "$q/test_b.c"
+printf '#include "lonely.h"\n' > "$q/test_c.c"
+printf '#include "mapped.h"\n' > "$q/mid.h"
+printf '/* mentions orphan.h and lonely.h in a comment only */\n' > "$q/mapped.h"
+for h in lonely fixture outside orphan ovmx_x; do : > "$q/$h.h"; done
+printf '#include "fixture.h"\n' > "$q/mkimage_x.c"
+printf '#include "../../tests/qemu/outside.h"\n' > "$H/tools/cross-x/init.c"
+if git -C "$H" init -q && git -C "$H" add -A; then
+    htier() { : > "$T/files"; for f in "$@"; do echo "$f" >> "$T/files"; done
+              python3 "$ROOT/tools/ci/ci_tiers.py" --repo "$H" --event merge_group --ref q --files "$T/files"; }
+    o=$(htier tests/qemu/mapped.h)
+    [ "$(get "$o" negctl_select)" = "da db" ] \
+      && ok "queue: a suite header selects the defects of every suite including it, through another header too" \
+      || bad "suite header map (got '$(get "$o" negctl_select)')"
+    o=$(htier tests/qemu/mid.h)
+    [ "$(get "$o" negctl_select)" = "db" ] && ok "queue: an intermediate header selects only its own includers' defects" \
+      || bad "intermediate header (got '$(get "$o" negctl_select)')"
+    o=$(htier tests/qemu/ovmx_x.h tests/qemu/test_b.c)
+    [ "$(get "$o" negctl_select)" = "da db" ] && ok "queue: a header plus a suite source select the union" \
+      || bad "header + suite union (got '$(get "$o" negctl_select)')"
+    for h in lonely fixture outside orphan nosuch; do
+        o=$(htier tests/qemu/$h.h)
+        [ "$(get "$o" negctl_select)" = ALL ] && ok "fail closed: header $h.h -> ALL" || bad "fail closed header $h.h (got '$(get "$o" negctl_select)')"
+    done
+    o=$(htier tests/qemu/sub/deeper.h)
+    [ "$(get "$o" negctl_select)" = ALL ] && ok "fail closed: a header below tests/qemu/ is not a suite header -> ALL" || bad "nested header"
+else
+    bad "cannot build the header-map fixture git index"
+fi
+# the includers cannot be read (the defect table can, but it is no git tree)
+mkdir -p "$T/nogit/tests/qemu" && cp -r "$H/tests/qemu/defects.d" "$T/nogit/tests/qemu/"
+echo tests/qemu/mapped.h > "$T/files"
+o=$(python3 "$ROOT/tools/ci/ci_tiers.py" --repo "$T/nogit" --event merge_group --ref q --files "$T/files" 2>/dev/null)
+[ "$(get "$o" negctl_select)" = ALL ] && ok "queue: a header map git cannot answer fails closed" || bad "header map failure"
+
 # decnet tier (ci-vax vax-decnet-pair, rd vms-9394): queue only when touched
 o=$(tier merge_group q src/libdatalink/ovmx_datalink.c)
 [ "$(get "$o" decnet)" = true ] && ok "queue: a datalink change runs the DECnet pair" || bad "decnet area"

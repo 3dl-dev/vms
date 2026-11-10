@@ -27,9 +27,13 @@ Prints `key=value` lines (GITHUB_OUTPUT format):
 
 negctl_select is a PATH-TO-FACILITY map that FAILS CLOSED: a changed path that
 is a defect's mutation target, or a test source one defect's `suites_red`
-names, selects only those defects; a path on the explicit IGNORE list selects
-nothing; EVERY OTHER PATH selects ALL defects. Any error computing the changed
-files also yields ALL / true (fail closed).
+names, selects only those defects; a QEMU suite header (tests/qemu/*.h) is the
+suites that #include it (directly or through another tests/qemu header) and
+selects what each of them would -- but ALL when anything else includes it (a
+fixture builder, a selftest, a file outside tests/qemu) or nothing does; a
+path on the explicit IGNORE list selects nothing; EVERY OTHER PATH selects ALL
+defects. Any error computing the changed files or the includers also yields
+ALL / true (fail closed).
 """
 import argparse
 import fnmatch
@@ -334,20 +338,68 @@ def defect_table(repo):
     return table
 
 
-def negctl_select(files, table):
-    """'ALL', '' (none) or space-separated defect names. Fails closed."""
+QEMU_SUITE_RE = re.compile(r"^tests/qemu/(test_[A-Za-z0-9_]+)\.c$")
+QEMU_HEADER_RE = re.compile(r"^tests/qemu/[A-Za-z0-9_]+\.h$")
+
+
+def qemu_header_suites(repo, header):
+    """The QEMU suites (test_* names) that #include `header`, directly or
+    through other tests/qemu headers; None when anything that is not such a
+    suite or header includes it anywhere in the tree, or nothing does -- the
+    caller then fails closed. Raises when git cannot answer (also ALL)."""
+    suites, seen, todo = set(), set(), [header]
+    while todo:
+        h = todo.pop()
+        if h in seen:
+            continue
+        seen.add(h)
+        name = re.escape(os.path.basename(h))
+        out = subprocess.run(
+            ["git", "grep", "-l", "-E",
+             r'^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]([^">]*/)?' + name + r'[">]'],
+            cwd=repo, capture_output=True, text=True)
+        if out.returncode not in (0, 1):
+            raise RuntimeError("git grep failed for %s: %s" % (h, out.stderr.strip()))
+        for inc in out.stdout.split():
+            m = QEMU_SUITE_RE.match(inc)
+            if m:
+                suites.add(m.group(1))
+            elif QEMU_HEADER_RE.match(inc):
+                todo.append(inc)
+            else:
+                return None  # a non-suite includer: fail closed
+    return suites or None
+
+
+def negctl_select(files, table, header_suites=None):
+    """'ALL', '' (none) or space-separated defect names. Fails closed.
+    header_suites(path) -> set of suite names | None (qemu_header_suites)."""
     chosen = set()
+
+    def by_suite(suite):
+        hit = False
+        for d, (_targets, suites) in table.items():
+            if any(fnmatch.fnmatchcase(suite, g) for g in suites):
+                chosen.add(d)
+                hit = True
+        return hit
+
     for f in files:
         if matches(f, NEGCTL_IGNORE):
             continue
         hit = False
-        for d, (targets, suites) in table.items():
+        for d, (targets, _suites) in table.items():
             if f in ["src/" + t for t in targets]:
                 chosen.add(d)
                 hit = True
-            m = re.match(r"^tests/qemu/(test_[A-Za-z0-9_]+)\.c$", f)
-            if m and any(fnmatch.fnmatchcase(m.group(1), g) for g in suites):
-                chosen.add(d)
+        m = QEMU_SUITE_RE.match(f)
+        if m and by_suite(m.group(1)):
+            hit = True
+        if not hit and header_suites and QEMU_HEADER_RE.match(f):
+            inc = header_suites(f)
+            # every including suite must itself be mapped, as a changed
+            # suite source must; any that is not fails closed
+            if inc and all([by_suite(sname) for sname in sorted(inc)]):
                 hit = True
         if not hit:
             return "ALL"  # unmapped path: fail closed
@@ -366,7 +418,7 @@ def changed_files(repo, base):
     return [l for l in out.splitlines() if l]
 
 
-def decide(event, ref, files, table_fn):
+def decide(event, ref, files, table_fn, header_suites=None):
     res = {"heavy_release": "false", "alpha_selfhost_tier": "false", "alpha_vmsgcc": "false",
            "keystroke": "false", "decnet": "false", "vax_boot": "false",
            "vax_acceptance": "false", "alpha_syssvc": "false", "tcpip_net": "false", "negctl_select": ""}
@@ -393,7 +445,7 @@ def decide(event, ref, files, table_fn):
         res["alpha_syssvc"] = "true" if matches_any(files, TIERS["alpha_syssvc"]) else "false"
         res["tcpip_net"] = "true" if matches_any(files, TIERS["tcpip_net"]) else "false"
         try:
-            res["negctl_select"] = negctl_select(files, table_fn())
+            res["negctl_select"] = negctl_select(files, table_fn(), header_suites)
         except Exception as e:  # noqa: BLE001 -- fail closed
             print("ci_tiers: negctl map failed (%s); selecting ALL" % e, file=sys.stderr)
             res["negctl_select"] = "ALL"
@@ -420,7 +472,8 @@ def main():
             files = changed_files(a.repo, a.base)
     except Exception as e:  # noqa: BLE001 -- fail closed
         print("ci_tiers: cannot compute changed files (%s)" % e, file=sys.stderr)
-    res = decide(a.event, a.ref, files, lambda: defect_table(a.repo))
+    res = decide(a.event, a.ref, files, lambda: defect_table(a.repo),
+                 lambda h: qemu_header_suites(a.repo, h))
     for k in ("heavy_release", "alpha_selfhost_tier", "alpha_vmsgcc", "keystroke", "decnet", "vax_boot",
               "vax_acceptance", "alpha_syssvc", "tcpip_net", "negctl_select"):
         print("%s=%s" % (k, res[k]))

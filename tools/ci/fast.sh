@@ -8,6 +8,10 @@
 #
 #   1. what the queue will owe: tools/ci/ci_tiers.py over this branch's diff
 #      (the heavy tiers and the per-facility negctl selection);
+#   1b. the negative-control fixtures self-test (facility_defects.sh selftest:
+#      every defect's anchor injects exactly once, every assertion it names is
+#      in a suite source) -- the Core Gates job of that name; host-only, no
+#      QEMU, ~2 min;
 #   2. host: configure + build + ctest (the Build & Test leg);
 #   3. QEMU: the kernel-executive harness image, booted against a real
 #      /dev/vms, every suite, split into the CI's 6 shards (run in parallel)
@@ -16,8 +20,8 @@
 #   4. --negctl: the per-facility negative controls the queue selects for this
 #      diff (tests/qemu/run_facility_negctl.sh); with --negctl-all, every one.
 #
-# usage: tools/ci/fast.sh [--base REF] [--no-host] [--no-qemu] [--negctl]
-#                         [--negctl-all] [--jobs N] [--keep-image]
+# usage: tools/ci/fast.sh [--base REF] [--no-fixtures] [--no-host] [--no-qemu]
+#                         [--negctl] [--negctl-all] [--jobs N] [--keep-image]
 #   --base REF   diff base (default: merge-base with origin/main)
 #   --jobs N     QEMU shards booted at once (default 3; each VM ~1.5 GB)
 # Exit status: 0 only if every step that ran passed. Logs: $OUT (printed).
@@ -29,17 +33,18 @@ set -u
 
 ROOT=$(git rev-parse --show-toplevel) || exit 2
 cd "$ROOT" || exit 2
-BASE="" HOST=1 QEMU=1 NEGCTL=0 NEGCTL_ALL=0 JOBS=3 KEEP=0
+BASE="" FIXTURES=1 HOST=1 QEMU=1 NEGCTL=0 NEGCTL_ALL=0 JOBS=3 KEEP=0
 while [ $# -gt 0 ]; do
     case "$1" in
     --base) BASE=$2; shift ;;
+    --no-fixtures) FIXTURES=0 ;;
     --no-host) HOST=0 ;;
     --no-qemu) QEMU=0 ;;
     --negctl) NEGCTL=1 ;;
     --negctl-all) NEGCTL=1; NEGCTL_ALL=1 ;;
     --jobs) JOBS=$2; shift ;;
     --keep-image) KEEP=1 ;;
-    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "fast.sh: unknown argument $1" >&2; exit 2 ;;
     esac
     shift
@@ -70,6 +75,20 @@ case "$SEL" in
 ALL) echo "     negctl: ALL $(sh tests/qemu/facility_defects.sh list | wc -l) defects (an unmapped path; fails closed)" ;;
 *) echo "     negctl: $(echo "$SEL" | wc -w) defect(s): $SEL" ;;
 esac
+
+# ---- 1b. negative-control fixtures self-test ---------------------------------
+# Core Gates runs this on every PR; two PRs (#2070, #2071) reached CI with it
+# red because this loop did not. A defect whose anchor survives its own
+# mutation, or whose require_fail text is in no suite source, fails here.
+if [ "$FIXTURES" = 1 ]; then
+    echo "== fixtures: tests/qemu/facility_defects.sh selftest"
+    if sh tests/qemu/facility_defects.sh selftest "$ROOT" > "$OUT/fixtures-selftest.log" 2>&1; then
+        echo "     PASS negative-control fixtures self-test"
+    else
+        grep -E "^FAIL" "$OUT/fixtures-selftest.log" | sed 's/^/     /'
+        fail "negative-control fixtures self-test (see $OUT/fixtures-selftest.log)"
+    fi
+fi
 
 # ---- 2. host build + ctest ----------------------------------------------------
 if [ "$HOST" = 1 ]; then

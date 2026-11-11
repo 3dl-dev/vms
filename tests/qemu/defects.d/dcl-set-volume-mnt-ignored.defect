@@ -1,0 +1,26 @@
+# dcl-set-volume-mnt-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL SET VOLUME's mount check through \$GETDVI DEV\$M_MNT (src/vmsdcl/dcl_cmd_set.c cmd_set_volume, vms-0504)";;
+        targets)      echo "vmsdcl/dcl_cmd_set.c";;
+        suites_red)   echo "test_syssvc_dcl_set_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "SET VOLUME stops reading the executive's DEV\$M_MNT and calls every volume unmounted (the old /proc/mounts view, which an ACP mount never appears in): a mounted VDA0: draws %SET-E-DEVNOTMNT.";;
+        require_fail) cat <<'EOF2'
+SET VOLUME on an ACP-mounted volume succeeds (DEV$M_MNT from $GETDVI)
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (!(devchar \& DEV\$M_MNT)) {$|    devchar = 0; /* NEGCTL dcl-set-volume-mnt-ignored */\n    if (!(devchar \& DEV$M_MNT)) {|' "$_file"
+    :
+}

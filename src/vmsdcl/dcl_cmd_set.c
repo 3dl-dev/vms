@@ -44,6 +44,9 @@
 #include "vms_kif.h"
 #include "ossdef.h"
 #include "descrip.h"
+#include "dvidef.h"      /* DVI$_DEVCHAR (SET VOLUME, vms-0504) */
+#include "devdef.h"      /* DEV$M_MNT */
+#include "lnmdef.h"      /* struct item_list_3 */
 #include "sysuaf.h"
 #include "uaidef.h"    /* UAI$M_LOCKPWD (vms-c8fa) */
 #include "ovmx_accounting.h"
@@ -2668,17 +2671,45 @@ static int cmd_set_volume(struct dcl_command *cmd)
         dev_name[dlen + 1] = '\0';
     }
 
-    char log_name[16];
-    strncpy(log_name, dev_name, sizeof(log_name) - 1);
-    log_name[sizeof(log_name) - 1] = '\0';
-    size_t lnlen = strlen(log_name);
-    if (lnlen > 0 && log_name[lnlen - 1] == ':')
-        log_name[lnlen - 1] = '\0';
-
-    char mount_point[64];
-    mount_point_for_device(log_name, mount_point, sizeof(mount_point));
-
-    if (!mount_point_is_mounted(mount_point)) {
+    /* Is a volume mounted on it? Ask $GETDVI for DVI$_DEVCHAR and test
+     * DEV$M_MNT -- the executive's own, cross-process device state (the same
+     * longword F$GETDVI and SHOW DEVICE report), never the substrate's
+     * /proc/mounts, which an executive ($MOUNT through the Files-11 ACP)
+     * mount never appears in (rd vms-0504). Any $GETDVI failure (no such
+     * device; the ioctl-level failure of a process with no executive, which
+     * Rule 9 makes unreachable on the target) is returned as it is. */
+    uint32_t devchar = 0;
+    uint16_t dc_len = 0;
+    struct _iosb dvi_iosb;
+    struct item_list_3 dvi_il[2];
+    struct dsc$descriptor_s dvi_dev;
+    memset(dvi_il, 0, sizeof dvi_il);
+    memset(&dvi_iosb, 0, sizeof dvi_iosb);
+    dvi_il[0].buflen = (uint16_t)sizeof devchar;
+    dvi_il[0].item_code = DVI$_DEVCHAR;
+    dvi_il[0].bufaddr = &devchar;
+    dvi_il[0].retlen = &dc_len;
+    dvi_dev.dsc$w_length = (uint16_t)strlen(dev_name);
+    dvi_dev.dsc$b_dtype = DSC$K_DTYPE_T;
+    dvi_dev.dsc$b_class = DSC$K_CLASS_S;
+    dvi_dev.dsc$a_pointer = dev_name;
+    uint32_t dvi_st = sys$getdviw(0, 0, &dvi_dev, dvi_il, &dvi_iosb, NULL, 0, 0);
+    if ((dvi_st & 1) && dvi_iosb.iosb$w_status != 0 && !(dvi_iosb.iosb$w_status & 1))
+        dvi_st = dvi_iosb.iosb$w_status;
+    if (!(dvi_st & 1)) {
+        if (dvi_st == SS$_NOSUCHDEV)
+            dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available - _%s", dev_name);
+        else
+        {
+            char why[128];
+            if (!vms_status_string(dvi_st, why, sizeof why))
+                snprintf(why, sizeof why, "%%X%08X", (unsigned)dvi_st);
+            dcl_error("SET", 2, "NOTSET", "error getting device information - _%s (%s)",
+                      dev_name, why);
+        }
+        return (int)dvi_st;
+    }
+    if (!(devchar & DEV$M_MNT)) {
         /* Dictionary: device-name "specifies the name of one or more
          * MOUNTED Files-11 volumes" -- the same authentic status
          * DISMOUNT already returns for an unmounted target

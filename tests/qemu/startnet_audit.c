@@ -341,6 +341,12 @@ static int trace_all(pid_t root, struct verdict *v, struct sink *out, struct cli
     while (live > 0) {
         int st = 0;
         pid_t p = waitpid(-1, &st, __WALL);
+        /* waitpid's errno, taken NOW: the drains below read non-blocking pipes
+         * (EAGAIN) and the driver makes executive calls, and a clobbered EINTR
+         * ended this loop on the first idle tick -- leaving NETACP parked in a
+         * ptrace stop nobody resumed (rd vms-1f69: no hellos, a dead COPY 0::,
+         * no exit on SIGTERM). */
+        int werr = (p < 0) ? errno : 0;
         sink_drain(out);
         sink_drain(&cl->out);
         uint64_t t = now_ms();
@@ -374,7 +380,7 @@ static int trace_all(pid_t root, struct verdict *v, struct sink *out, struct cli
         if (!stopped && v->netacp_pid <= 0 && root_status >= 0 && t - t0 > 120000u)
             break;                                       /* no NETACP ever came */
         if (p < 0) {
-            if (errno == EINTR) continue;
+            if (werr == EINTR) continue;
             break;
         }
         if (cl->pid > 0 && p == cl->pid) {               /* the untraced client */

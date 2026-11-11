@@ -68,6 +68,10 @@
 #         NETACP (honest refusal + the same audit); that is where its facility
 #         negative control (defects.d/rms-remote-link-via-host-pipe) runs.
 #
+# Boot 3 (same disk, -nic none; rd vms-5ec): ETH0: is absent but _NET: exists,
+#   and NETACP_TEST.EXE --fal-proc-accept-test does a FAL access over 0:: --
+#   the device face is NIC-independent, only the circuit needs an adapter.
+#
 # Reboot mechanics + writeback settle: identical to test_tcpip_reboot_e2e.sh
 # (no DCL REBOOT under -no-reboot; a reboot is a fresh QEMU on the same disk).
 # Runs inside the shipped bootable image (ovmx-boot); the runner
@@ -126,11 +130,12 @@ AUDIT_DISK=/tmp/dn-startnet-audit.img
 AUDIT_TREE=/tmp/dn-startnet-audit-tree
 LOG1=/tmp/dn-startnet-boot1.log
 LOG2=/tmp/dn-startnet-boot2.log
+LOG3=/tmp/dn-startnet-boot3.log
 PCAP1=/tmp/dn-startnet-boot1.pcap
 PCAP2=/tmp/dn-startnet-boot2.pcap
 FIFO=/tmp/dn-startnet.in
 HELLO_142="ab0000030000aa0004002a046003"   # dst AB-00-00-03-00-00, src AA-00-04-00-2A-04, 0x6003
-rm -f "$DISK" "$LOG1" "$LOG2" "$PCAP1" "$PCAP2" "$FIFO"
+rm -f "$DISK" "$LOG1" "$LOG2" "$LOG3" "$PCAP1" "$PCAP2" "$FIFO"
 cp "$DISTRIB_IMG" "$DISK"
 mkfifo "$FIFO"
 rm -rf "$AUDIT_TREE" "$AUDIT_DISK"; mkdir -p "$AUDIT_TREE"
@@ -301,8 +306,8 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "boot 2: OPA0: shows NETACP's OPCOM message 'DECnet starting' (as on the real VAX)" "$rc"
 
     # rd vms-dda: an outbound link from a user process, brokered through the
-    # RUNNING boot-time NETACP over $ASSIGN _NET: + $QIO (the DCL battery VM has
-    # no NIC, hence no _NET:; this boot has both). COPY 0"SYSTEM MANAGER":: over
+    # RUNNING boot-time NETACP over $ASSIGN _NET: + $QIO (this boot has a NIC
+    # and the boot-time NETACP; boot 3 has neither). COPY 0"SYSTEM MANAGER":: over
     # NETACP's local loopback to a FAL.EXE server process and back.
     # rd vms-0a7 S3: the test image runs off the scratch test volume.
     run_seg 'MOUNT VDA100: DCLAUDIT' "$LOG2" 'MOUNT' 60
@@ -464,6 +469,50 @@ else
     record "boot 2: SYSTEM logs in" 1
 fi
 kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
+
+# --- Boot 3: NO network adapter (-nic none); _NET: is there, 0:: works --------
+# rd vms-5ec: like VMS's NETDRIVER, the executive enters the DECnet device face
+# _NET: whether or not the node has a LAN adapter; only the circuit (ETH-0 over
+# ETH0:) needs one. So on a node with NO NIC: ETH0: does not exist (the honest
+# "no circuit" state, and the proof this boot really has no adapter), _NET:
+# does, and a FAL access over the local node 0:: completes -- the DCL
+# acceptance battery's FAL persona/verbs proof, on a -nic none VM.
+rm -f "$FIFO"; mkfifo "$FIFO"
+# shellcheck disable=SC2086
+timeout -k 15 $((BOOT_TIMEOUT + 600)) $QEMU $MACHINE $ACCEL \
+    -kernel "$KERNEL" -initrd "$INITRD" \
+    -nographic -append "$CONSOLE loglevel=3 quiet" \
+    -m 512M -smp 1 -nodefaults -serial stdio -nic none \
+    -drive file="$DISK",format=raw,if=virtio,cache=writethrough \
+    -drive file="$AUDIT_DISK",format=raw,if=virtio,cache=writethrough \
+    -no-reboot <"$FIFO" >"$LOG3" 2>&1 &
+qp=$!
+exec 4>"$FIFO"
+
+wake_login "$LOG3"
+if waitfor 'Username:' "$BOOT_TIMEOUT" "$LOG3"; then rc=0; else rc=1; fi
+record "boot 3 (no NIC): reaches the login prompt" "$rc"
+if [ "$rc" -eq 0 ] && login_system "$LOG3"; then
+    record "boot 3 (no NIC): SYSTEM logs in" 0
+    run_seg 'WRITE SYS$OUTPUT "NIC3=",F$GETDVI("ETH0:","EXISTS"),"/NET3=",F$GETDVI("_NET:","EXISTS")' "$LOG3" '/NET3=' 20
+    if has 'NIC3=FALSE/'; then rc=0; else rc=1; fi
+    record "NEGCTL boot 3: the node really has no network adapter -- F\$GETDVI(\"ETH0:\",\"EXISTS\") is FALSE (no circuit to ride)" "$rc"
+    if has '/NET3=TRUE'; then rc=0; else rc=1; fi
+    record "boot 3 (no NIC): the DECnet device face _NET: exists anyway, entered by the executive as VMS's NETDRIVER is (rd vms-5ec)" "$rc"
+    run_seg 'MOUNT VDA100: DCLAUDIT' "$LOG3" 'MOUNT' 60
+    if has '%MOUNT-I-MOUNTED, DCLAUDIT mounted on _VDA100:'; then rc=0; else rc=1; fi
+    record "boot 3 (no NIC): the scratch test volume mounts (VDA100:, DCLAUDIT)" "$rc"
+    send 'DNETACC :== $VDA100:[000000]NETACP_TEST.EXE'; sleep 1
+    run_seg 'DNETACC --fal-proc-accept-test' "$LOG3" 'DECNETD-FAL-PROC-ACCEPT:' 300
+    printf '%s\n' "$seg" | grep -aE '^  (PASS|FAIL): |DECNETD-' | head -40
+    if has 'DECNETD-FAL-PROC-ACCEPT: PASS'; then rc=0; else rc=1; fi
+    record "boot 3 (no NIC): a FAL access over the local node 0:: works -- \$ASSIGN _NET:, IO\$_ACCESS 0\"user password\"::, a FAL.EXE server process with the user's UIC, SYSTEM served and GUEST refused (rd vms-5ec)" "$rc"
+    if has 'DECNETD-I-FALPROC'; then rc=0; else rc=1; fi
+    record "NEGCTL boot 3: the FAL segment is real output (the test's banner is present)" "$rc"
+else
+    record "boot 3 (no NIC): SYSTEM logs in" 1
+fi
+kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 rm -rf "$AUDIT_TREE" "$AUDIT_DISK"
 
 n2=$(frames_with "$HELLO_142" "$PCAP2")
@@ -486,6 +535,7 @@ record "boot 2: NETACP's own status lines never reach the operator console (deta
 if [ "$FAIL" -ne 0 ]; then
     echo "--- boot 1 log ---"; cat "$LOG1"
     echo "--- boot 2 log ---"; cat "$LOG2"
+    echo "--- boot 3 log ---"; cat "$LOG3"
     for p in "$PCAP1" "$PCAP2"; do
         echo "--- $p: $(stat -c %s "$p" 2>/dev/null || echo 0) bytes; 0x6003 frames: $(frames_with '6003' "$p") ---"
     done

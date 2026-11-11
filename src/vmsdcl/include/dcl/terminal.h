@@ -130,6 +130,9 @@ const char *dcl_recall_get(int back);
 int dcl_tt_inquire(char *reply, size_t replysz);
 /* One record to the terminal through $QIO IO$_WRITEVBLK; -1: no executive terminal. */
 int dcl_tt_put_record(const char *text, size_t n);
+/* One record that breaks through an outstanding read and shows it again
+ * (IO$_WRITEVBLK!IO$M_REFRESH, P4 " "): CTRL/T's status line. */
+int dcl_tt_put_breakthrough(const char *text, size_t n);
 /* SYS$OUTPUT/SYS$ERROR on the terminal through its driver (rd vms-1b6a):
  * dcl_tt_output_ready -- the process's output IS the executive's terminal;
  * dcl_tt_put_text -- $QIO IO$_WRITEVBLK of one record (P4 " ": a new line

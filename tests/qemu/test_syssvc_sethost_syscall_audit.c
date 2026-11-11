@@ -93,11 +93,19 @@ static int sc_read(pid_t pid, struct sc *s)
 {
     struct iovec iov;
 #if defined(__alpha__)
-    struct pt_regs r;
-    memset(&r, 0, sizeof r);
-    iov.iov_base = &r; iov.iov_len = sizeof r;
-    if (ptrace(PTRACE_GETREGSET, pid, (void *)NT_PRSTATUS, &iov) != 0) return -1;
-    s->nr = (long)r.r0; s->a0 = r.r16; s->a1 = r.r17; s->a2 = r.r18;
+    /* Linux/Alpha has no PTRACE_GETREGSET (no user_regset view): read the
+     * registers one at a time by number, as strace does there -- v0 ($0)
+     * carries the syscall number at syscall-entry stop, a0..a2 are $16..$18
+     * (the same reader as test_syssvc_decnetd_syscall_audit). */
+    static const int regno[4] = { 0, 16, 17, 18 };
+    unsigned long val[4];
+    (void)iov;
+    for (int i = 0; i < 4; i++) {
+        errno = 0;
+        val[i] = (unsigned long)ptrace(PTRACE_PEEKUSER, pid, (void *)(long)regno[i], 0);
+        if (errno != 0) return -1;
+    }
+    s->nr = (long)val[0]; s->a0 = val[1]; s->a1 = val[2]; s->a2 = val[3];
     return 0;
 #else
     struct user_regs_struct r;

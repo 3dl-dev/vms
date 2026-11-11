@@ -394,8 +394,8 @@ static void dcl_ctrly_ast(uint32_t prm)
 }
 
 /* CTRL/T: the status line, as a record -- written while the command read is
- * outstanding, it breaks through and the driver shows the read again (probe
- * OB.PROMPT T2). */
+ * outstanding with IO$M_REFRESH, it breaks through and the driver shows the
+ * read again (VAX V7.3 keystroke OOB.PROMPT T/T2). */
 static void dcl_ctrlt_ast(uint32_t ch)
 {
     (void)ch;
@@ -410,11 +410,8 @@ static void dcl_ctrlt_ast(uint32_t ch)
     ovmx_node_name(node, sizeof(node));
     /* at the DCL level no image runs, and VMS names the CLI there: "(DCL)"
      * (VAX V7.3 keystroke OOB.PROMPT T/T2) */
-    if (dcl_format_ctrl_t_status(&info, node, "(DCL)", time(NULL), line, sizeof(line)) & 1) {
-        dcl_out_fputs(line);
-        dcl_out_putc('\n');
-        dcl_out_flush();
-    }
+    if (dcl_format_ctrl_t_status(&info, node, "(DCL)", time(NULL), line, sizeof(line)) & 1)
+        (void)dcl_tt_put_breakthrough(line, strlen(line));
 }
 
 void dcl_arm_oob(void)

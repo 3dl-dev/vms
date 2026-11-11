@@ -333,6 +333,30 @@ int dcl_tt_put_record(const char *text, size_t n)
     return ((st & 1) && (iosb[0] & 1)) ? 0 : -1;
 }
 
+/*
+ * dcl_tt_put_breakthrough - one record written WHILE a read on the terminal is
+ * outstanding, the read shown again after it: $QIO IO$_WRITEVBLK!IO$M_REFRESH
+ * with P4 " ". This is CTRL/T's status line at the prompt (VAX V7.3 keystroke
+ * OOB.PROMPT T/T2: <CR><LF>status<CR><LF><CR><NUL>$ ). A plain write during a
+ * read leaves the read's line where the output left it (rd vms-0a7 S2); the
+ * status line is the write that asks for the redisplay. Goes to the terminal
+ * whatever SYS$OUTPUT names -- the AST is the terminal's. 0, or -1 when there
+ * is no executive terminal.
+ */
+int dcl_tt_put_breakthrough(const char *text, size_t n)
+{
+    uint16_t iosb[4];
+
+    if (n == 0 || !dcl_tt_assign())
+        return -1;
+    if (n > 4096)
+        n = 4096;
+    memset(iosb, 0, sizeof iosb);
+    uint32_t st = sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK | IO$M_REFRESH, iosb, NULL, 0,
+                           (void *)text, (uint32_t)n, 0, ' ', 0, 0);
+    return ((st & 1) && (iosb[0] & 1)) ? 0 : -1;
+}
+
 int dcl_tt_output_ready(void)
 {
     return isatty(STDOUT_FILENO) && dcl_tt_assign();

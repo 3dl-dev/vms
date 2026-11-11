@@ -1292,6 +1292,7 @@ long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
     exec_list_add_tail(&vol->list, &vms_acp_vol_list);
+    vms_devtab_set_mounted(vol->devnam, 1);   /* DEV$M_MNT, as MOUNT sets it (vms-0504) */
     exec_unlock(&vms_acp_vol_lock);
 
     args.status = SS__NORMAL;
@@ -1341,6 +1342,7 @@ long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
     exec_list_del(&vol->list);
+    vms_devtab_set_mounted(vol->devnam, 0);   /* DISMOUNT clears DEV$M_MNT (vms-0504) */
     exec_unlock(&vms_acp_vol_lock);
     /*
      * vms-25e: drop the standing volume lock this mount held (no-op if unheld).

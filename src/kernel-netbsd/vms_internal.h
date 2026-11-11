@@ -1429,6 +1429,9 @@ uint32_t vms_devtab_disk_backing(const char *devnam,
  * the shared kernel-core, on every substrate.
  */
 void vms_devtab_note_io_error(uint32_t major, uint32_t minor);
+/* Set/clear DEV$M_MNT in a unit's DEVCHAR as the ACP mounts/dismounts it
+ * (rd vms-0504); defined in kernel-core, on every substrate. */
+void vms_devtab_set_mounted(const char *devnam, int mounted);
 
 /*
  * FC-P0.9: PEA0:'s discovery of the same NIC ETH0: was already bound to at

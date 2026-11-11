@@ -162,7 +162,12 @@ static void fill_dvi_item(const struct item_list_3 *item,
         /* The DEV$M_* characteristics the driver gave the unit when it was
          * entered (rd vms-de3a); for a row without them, only the bits the
          * executive can ground (see DEV$M_ note above). */
-        uint32_t chars = info->devchar_dev ? info->devchar_dev : DEV$M_AVL;
+        uint32_t chars = info->devchar_dev;
+        /* A row whose only bit is the MNT the ACP set (a disk entered with no
+         * driver word) is still available: the AVL fallback keys on the
+         * driver's word, not on mount state (rd vms-0504). */
+        if (!(chars & ~DEV$M_MNT))
+            chars |= DEV$M_AVL;
         if (info->allocated) chars |= DEV$M_ALL;
         if (item->bufaddr && item->buflen >= sizeof(uint32_t))
             *(uint32_t *)item->bufaddr = chars;

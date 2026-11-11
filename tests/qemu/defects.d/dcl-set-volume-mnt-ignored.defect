@@ -21,6 +21,6 @@ EOF2
 }
 
 defect_apply() {
-        sed -i 's|^    if (!(devchar \& DEV\$M_MNT)) {$|    devchar = 0; /* NEGCTL dcl-set-volume-mnt-ignored */\n    if (!(devchar \& DEV$M_MNT)) {|' "$_file"
+        sed -i 's|^    if (!(devchar \& DEV\$M_MNT)) {$|    if (!((devchar = 0) \& DEV$M_MNT)) { /* NEGCTL dcl-set-volume-mnt-ignored */|' "$_file"
     :
 }

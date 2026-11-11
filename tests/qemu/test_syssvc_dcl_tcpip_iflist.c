@@ -418,7 +418,8 @@ int main(void)
     CHECK(strstr(rout, "$STATUS == \"%X00000001\"") != NULL, "SHOW ROUTE exits SS$_NORMAL");
     /* negctl: bg-routes-gw-zeroed */
     CHECK(has_route_row(rout, RT_NET, RT_GW, RT_MASK, "SE0"),
-          "SHOW ROUTE: " RT_NET " via " RT_GW " mask " RT_MASK " on SE0 (the gateway the test added)");
+          /* literal text: the negctl manifest checker matches it verbatim */
+          "SHOW ROUTE: 198.51.100.0 via 10.0.2.2 mask 255.255.255.0 on SE0 (the gateway the test added)");
     CHECK(has_route_row(rout, "10.0.2.0", "*", NIC_MASK, "SE0"),
           "SHOW ROUTE: the NIC's on-link route 10.0.2.0 * 255.255.255.0 on SE0");
     CHECK(proc_routes > 0 && count_route_rows(rout) == proc_routes,

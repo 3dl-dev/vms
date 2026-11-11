@@ -1998,7 +1998,8 @@ jobs:
   # hostname PID 1 sethostname()'d from the authored SCSNODE) reads it back,
   # with F$GETSYI("SCSNODE") and SYSGEN USE CURRENT agreeing. Where
   # boot-scsnode-hostname-e2e types the SYSGEN commands by hand and the host
-  # DCL test (tests/dcl/test_cluster_config_lan.sh) never boots, THIS gate runs
+  # harness suite (tests/qemu/test_syssvc_dcl_image_sysout.c, cclan) never
+  # boots the release image, THIS gate runs
   # the real procedure on a real boot -- the user experience is the test.
   #
   # Same SKIP_RETURN_CODE 77 => hard CI failure convention as the scsnode/

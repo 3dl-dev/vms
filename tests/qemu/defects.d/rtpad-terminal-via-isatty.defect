@@ -1,0 +1,27 @@
+# rtpad-terminal-via-isatty -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "SET HOST is RTPAD.EXE, which learns whether SYS\$INPUT is a terminal from the executive (\$GETDVIW DVI\$_DEVCLASS), never from the substrate tty by isatty() (rtpad.c, rd vms-0a7 S2)";;
+        targets)      echo "vmsdecnet/rtpad/rtpad.c";;
+        suites_red)   echo "test_syssvc_sethost_syscall_audit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sysinput_is_terminal() answers from the executive's device row (\`return (st & 1) && cls == DC\$_TERM;\`). The mutation also asks the substrate tty (\`isatty(0)\`, the pre-S2 DECNETD --set-host drop): the trace sees isatty()'s ioctl from RTPAD.EXE (TIOCGWINSZ under musl, TCGETS under glibc). Non-fatal: SYS\$INPUT is the tracer's pipe, so isatty() says no and the command behaves as before -- only the isatty assertion reddens. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+NO isatty / ioctl(TCGETS or TIOCGWINSZ) from RTPAD.EXE in SET HOST
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    return (st \& 1) \&\& cls == DC\$_TERM;$|    { extern int isatty(int); if (isatty(0)) return 1; } return (st \& 1) \&\& cls == DC$_TERM; /* NEGCTL rtpad-terminal-via-isatty */|' "$_file"
+    :
+}

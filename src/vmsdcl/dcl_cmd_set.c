@@ -44,6 +44,7 @@
 #include "vms_kif.h"
 #include "ossdef.h"
 #include "descrip.h"
+#include "clitable.h"   /* cli$$dcl_tables: SET HOST's table entry (rd vms-0a7 S2) */
 #include "dvidef.h"      /* DVI$_DEVCHAR (SET VOLUME, vms-0504) */
 #include "devdef.h"      /* DEV$M_MNT */
 #include "lnmdef.h"      /* struct item_list_3 */
@@ -651,14 +652,32 @@ static int cmd_set_terminal(struct dcl_command *cmd)
          * terminal is an ANSI and DEC CRT, which is what the driver looks at
          * (its CTRL/Z echo is a reverse-video " Exit " there: keystroke
          * Q.EDTNUM V7; rd vms-c37) */
+        int dtcode = -1;
         if (devtype_set) {
             const char *dt = term->device_type;
             int vt = (dt[0] == 'V' && dt[1] == 'T' && dt[2] >= '1' && dt[2] <= '5');
             if (vt) exec_set |= VMS_TTC_ANSI_CRT | VMS_TTC_DEC_CRT;
             else    exec_clr |= VMS_TTC_ANSI_CRT | VMS_TTC_DEC_CRT;
+            /* the type's DT$_ code, for the names whose code the V7.3 DCDEF
+             * gives (docs/oracle/vax73-starlet-defs/DCDEF.txt); a VT100 is
+             * also what VMS makes of one: a scope with hardware tabs, ANSI,
+             * advanced video, a DEC CRT (VAX V7.3, SET TERMINAL/DEVICE=VT100
+             * then SHOW TERMINAL, S2 live bench; rd vms-686) */
+            static const struct { const char *name; int code; } dts[] = {
+                { "UNKNOWN", 0 }, { "VT05", 1 }, { "LA36", 32 }, { "VT52", 64 },
+                { "VT55", 65 }, { "VT100", 96 }, { "VT101", 97 }, { "VT102", 98 },
+                { "VT105", 99 }, { "VT125", 100 }, { "VT131", 101 }, { "VT132", 102 },
+            };
+            for (unsigned d = 0; d < sizeof dts / sizeof dts[0]; d++)
+                if (strcmp(dt, dts[d].name) == 0)
+                    dtcode = dts[d].code;
+            if (dtcode == 96) {
+                exec_set |= VMS_TTC_TAB | VMS_TTC_ADVANCED_VIDEO;
+                exec_clr |= VMS_TTC_HARDCOPY;
+            }
         }
-        if (exec_set | exec_clr)
-            (void)dcl_tt_set_characteristics(exec_set, exec_clr);
+        if (exec_set | exec_clr || dtcode >= 0)
+            (void)dcl_tt_set_characteristics(exec_set, exec_clr, dtcode);
         vms_terminal_apply(term);
     }
 
@@ -2389,45 +2408,76 @@ static int cmd_set_time(struct dcl_command *cmd)
 }
 
 /*
- * SET HOST node - DECnet outbound $ SET HOST (rd vms-f54).
+ * SET HOST node - DECnet outbound $ SET HOST (rd vms-f54; RTPAD rd vms-0a7 S2).
  *
- * Opens an interactive CTERM terminal session to Session Control object 42 on
- * the remote node; the remote's LOGINOUT authenticates the user FRESH (the
- * carried /USERNAME is proxy/accounting only), this process's terminal rides
- * the NSP logical link until LOGOUT, and control returns with %REM-S-END.
+ * As on VMS, the command tables send SET HOST to SYS$SYSTEM:RTPAD.EXE, the
+ * CTERM terminal pad: DCL checks the command against its table entry
+ * (DCL$TABLES, cli$$dcl_tables -- the one definition of SET HOST's
+ * parameters and qualifiers), records the command it parsed in the executive
+ * CLI context, and activates RTPAD on the caller's terminal through the image
+ * activator (the path RUN and foreign commands use). RTPAD reads NODE and
+ * /USERNAME with CLI$GET_VALUE / CLI$PRESENT; DCL passes it no arguments.
  *
- * The client is SYS$SYSTEM:DECNETD.EXE --set-host <node>. DCL activates it
- * ATTACHED TO THE CALLER'S TERMINAL through the executive image activator
- * (dcl_activate_image -> imgact_activate, with DCL's fork fallback) -- the SAME
- * path RUN and foreign commands use, NOT a bare fork/exec from DCL, and no Linux
- * terminal mechanics above the VMS layer. The daemon self-sources its executor
- * address + resolves the node name from the node's DECnet configuration, so DCL
- * stays thin and knows nothing of DECnet internals.
- *
- * When DECNETD.EXE is not staged on this runtime's system disk, DECnet is
- * genuinely not available here and this reports exactly that (honest, INV-6) --
- * it never fakes a session.
+ * When RTPAD.EXE is not on this runtime's system disk, DECnet is genuinely
+ * not available here and this says so (INV-6) -- it never fakes a session.
  */
 static int cmd_set_host(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    /* SET HOST <node>: params[0] is the "HOST" subcommand, params[1] the node. */
+    /* SET HOST <node>: params[0] is the "HOST" keyword, params[1] the node. */
     const char *node = (cmd->param_count >= 2) ? cmd->params[1] : NULL;
     if (!node || !node[0]) {
         dcl_error("SET", 2, "NOHOST", "SET HOST requires a node name");
         return SS$_BADPARAM;
     }
 
-    /* /USERNAME=name -> the CTERM access-control username (proxy only; the
-     * remote authenticates fresh). Absent -> the daemon defaults to SYSTEM. */
-    const char *user = NULL;
-    if (dcl_has_qualifier(cmd, "USERNAME"))
-        user = dcl_qualifier_value(cmd, "USERNAME");
+    /* The command, as the tables read it: "SET " and the tail DCL was given. */
+    char line[DCL_MAX_LINE + 8];
+    snprintf(line, sizeof line, "SET %s", cmd->raw_tail);
+    const struct cli_command_table *t = cli$$dcl_tables();
+    if (!t)
+        return SS$_ABORT;
+    struct dsc$descriptor_s ld;
+    ld.dsc$w_length = (uint16_t)strlen(line);
+    ld.dsc$b_dtype = DSC$K_DTYPE_T;
+    ld.dsc$b_class = DSC$K_CLASS_S;
+    ld.dsc$a_pointer = line;
+    uint32_t ps = cli$dcl_parse(&ld, t, NULL, NULL);
+    if (ps != SS$_NORMAL) {
+        /* Name the qualifier the table does not take (or that lacks its
+         * required value), the way DCL's own validation does. */
+        const struct cli_verb *v = &t->verbs[0];
+        for (int i = 0; i < cmd->qualifier_count; i++) {
+            const struct dcl_qualifier *q = &cmd->qualifiers[i];
+            size_t ql = strlen(q->name);
+            int hit = -1, n = 0;
+            for (int j = 0; j < v->nquals; j++)
+                if (ql && strlen(v->quals[j].name) >= ql &&
+                    strncasecmp(v->quals[j].name, q->name, ql) == 0) {
+                    hit = j; n++;
+                }
+            if (n != 1 || q->negated) {
+                dcl_error("DCL", 0, "IVQUAL",
+                          "unrecognized qualifier - check validity, spelling, "
+                          "and placement\n \\%s%s\\", q->negated ? "NO" : "", q->name);
+                return CLI$_IVQUAL;
+            }
+            if ((v->quals[hit].flags & CLI_A_VALREQ) && !q->value[0]) {
+                dcl_error("DCL", 0, "VALREQ",
+                          "missing qualifier or keyword value - supply all "
+                          "required values\n \\%s\\", v->quals[hit].name);
+                return CLI$_VALREQ;
+            }
+        }
+        dcl_error("DCL", 0, "MAXPARM", "too many parameters - reenter command "
+                  "with fewer parameters");
+        return CLI$_MAXPARM;
+    }
 
-    /* Resolve SYS$SYSTEM:DECNETD.EXE to an activatable image path, exactly as
-     * RUN / a foreign command does. Not found -> DECnet is not available here. */
-    const char *img_spec = "SYS$SYSTEM:DECNETD.EXE";
+    /* Resolve SYS$SYSTEM:RTPAD.EXE exactly as RUN / a foreign command does.
+     * Not found -> DECnet is not available here. */
+    const char *img_spec = "SYS$SYSTEM:RTPAD.EXE";
     char linux_path[1024], resolved[1024];
     dcl_resolve_path(ctx, img_spec, linux_path, sizeof(linux_path));
     if (!dcl_resolve_activatable(ctx, img_spec, linux_path,
@@ -2438,19 +2488,13 @@ static int cmd_set_host(struct dcl_command *cmd)
     strncpy(linux_path, resolved, sizeof(linux_path) - 1);
     linux_path[sizeof(linux_path) - 1] = '\0';
 
-    /* Activate the client on the caller's terminal through the executive. */
-    char *argv[8];
-    int argc = 0;
-    argv[argc++] = linux_path;
-    argv[argc++] = "--set-host";
-    argv[argc++] = (char *)node;
-    if (user && user[0]) {
-        argv[argc++] = "--user";
-        argv[argc++] = (char *)user;
-    }
-    argv[argc] = NULL;
-
-    return dcl_activate_image(ctx, img_spec, linux_path, argv);
+    /* The CLI's current command, for RTPAD's CLI$GET_VALUE. No executive
+     * means no CLI context: RTPAD then finds no NODE and says so. */
+    (void)vms_kif_setcli(1, line);
+    char *argv[2] = { linux_path, NULL };
+    int rc = dcl_activate_image(ctx, img_spec, linux_path, argv);
+    (void)vms_kif_setcli(0, NULL);
+    return rc;
 }
 
 /*
@@ -2916,8 +2960,6 @@ static const struct dcl_qual_def sq_protection[] = {
     { "DEFAULT", CDU_VT_NONE, 0, NULL, NULL }, SQ_END };
 static const struct dcl_qual_def sq_working_set[] = {
     { "QUOTA", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL }, SQ_END };
-static const struct dcl_qual_def sq_host[] = {
-    { "USERNAME", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL }, SQ_END };
 static const struct dcl_qual_def sq_entry[] = {
     { "HOLD",    CDU_VT_NONE, 0, NULL, NULL },
     { "RELEASE", CDU_VT_NONE, 0, NULL, NULL },
@@ -2948,7 +2990,6 @@ static const struct {
     { "UIC",         3, sq_none },
     { "WORKING_SET", 4, sq_working_set },
     { "TIME",        4, sq_none },
-    { "HOST",        3, sq_host },
     { "ENTRY",       3, sq_entry },
     { "QUEUE",       3, sq_queue },
 };

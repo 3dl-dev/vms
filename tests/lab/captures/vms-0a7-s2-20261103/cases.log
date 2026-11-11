@@ -1,0 +1,585 @@
+==== VAX/SET HOST NOSUCH
+SET HOST NOSUCH
+%SYSTEM-F-NOSUCHNODE, remote node is unknown
+==== VAX/SET HOST NOSUCH/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X0000028C"
+==== VAX/SET HOST VAXC /BOGUS
+SET HOST VAXC /BOGUS
+%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+ \BOGUS\
+==== VAX/SET HOST VAXC /BOGUS/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X00038240"
+==== VAX-SETHOST-0/connect
+SET HOST 0
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+Username: 
+==== VAX-SETHOST-0/badpw
+ 
+User authorization failure
+%REM-S-END, cont
+==== VAX-SETHOST-0/login
+ 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAXC
+    Last interactive login on Tuesday,  3-NOV-2026 01:38
+	1 failure since last successful login
+==== VAX-SETHOST-0/node
+WRITE SYS$OUTPUT F$GETSYI("NODENAME")," ",F$GETDVI("TT","FULLDEVNAM")
+VAXC _VAXC$RTA1:
+==== VAX-SETHOST-0/paste80
+WRITE SYS$OUTPUT "PASTE=",F$GETSYI("NODENAME")," TT=",F$GETDVI("TT","FULLDEVNA
+M")
+PASTE=VAXC TT=_VAXC$RTA1:
+==== VAX-SETHOST-0/show-terminal
+SHOW TERMINAL
+Terminal: _RTA1:      Device_Type: VT100         Owner: _RTA1:
+                                              Username: SYSTEM
+Remote Port Info: VAXC::SYSTEM
+
+   Input:     300     LFfill:  0      Width:  80      Parity: None
+   Output:    300     CRfill:  0      Page:   24      
+
+Terminal Characteristics:
+   Interactive        Echo               Type_ahead         No Escape
+   No Hostsync        TTsync             Lowercase          Tab
+   Wrap               Scope              No Remote          No Eightbit
+   Broadcast          No Readsync        No Form            Fulldup
+   No Modem           No Local_echo      No Autobaud        No Hangup
+   No Brdcstmbx       No DMA             No Altypeahd       Set_speed
+   No Commsync        Line Editing       Overstrike editing No Fallback
+   No Dialup          No Secure server   No Disconnect      No Pasthru
+   No Syspassword     No SIXEL Graphics  No Soft Characters No Printer Port
+   Numeric Keypad     ANSI_CRT           No Regis           No Block_mode
+   Advanced_video     No Edit_mode       DEC_CRT            No DEC_CRT2
+   No DEC_CRT3        No DEC_CRT4        No DEC_CRT5        No Ansi_Color
+   VMS Style Input
+==== VAX-SETHOST-0/show-system
+SHOW SYSTEM
+OpenVMS V7.3  on node VAXC   3-NOV-2026 01:39:02.00  Uptime  0 00:02:29
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20200201 SWAPPER         HIB     16        0   0 00:00:00.02         0      0   
+20200206 CLUSTER_SERVER  HIB     12       11   0 00:00:00.02       207    315   
+20200207 CONFIGURE       HIB     11        6   0 00:00:00.01       114    175   
+20200208 LANACP          HIB     13       39   0 00:00:00.04       366    666   
+2020020A IPCACP          HIB     10        7   0 00:00:00.01        99    177   
+2020020B ERRFMT          HIB      9       21   0 00:00:00.03       130    211   
+2020020C CACHE_SERVER    HIB     16        6   0 00:00:00.01        84    134   
+2020020D OPCOM           HIB      7       67   0 00:00:00.03       215    263   
+2020020E AUDIT_SERVER    HIB      8       43   0 00:00:00.07       588    721   
+2020020F JOB_CONTROL     HIB      8       23   0 00:00:00.01       193    344   
+20200210 SECURITY_SERVER HIB     10       24   0 00:00:00.09      1947   1328   
+20200211 SMISERVER       HIB      8       34   0 00:00:00.05       353    516   
+20200212 TP_SERVER       HIB     10       13   0 00:00:00.02       205    317   
+20200213 NETACP          HIB      9       60   0 00:00:00.39       168    387   
+20200214 EVL             HIB      5       66   0 00:00:00.03       398    553  N
+20200215 REMACP          HIB      9       17   0 00:00:00.02       112     81   
+20200216 SYSTEM          HIB      7      699   0 00:00:00.93      6234    402   
+20200218 _RTA1:          CUR      4       94   0 00:00:00.12       748    374   
+==== VAX-SETHOST-0/show-users
+SHOW USERS
+      OpenVMS User Processes at  3-NOV-2026 01:39:02.12
+    Total number of users = 1,  number of processes = 2
+
+ Username  Node     Interactive  Subprocess   Batch
+ SYSTEM     VAXC            2
+==== VAX-SETHOST-0/directory
+DIRECTORY SYS$SYSTEM:LOGINOUT.EXE,DCL.EXE
+
+Directory SYS$COMMON:[SYSEXE]
+
+LOGINOUT.EXE;1      DCL.EXE;1           
+
+Total of 2 files.
+==== VAX-SETHOST-0/edit-delete
+SHOW TIMX E
+   3-NOV-2026 01:39:02
+==== VAX-SETHOST-0/edit-ctrlu
+SHOW NONSENSE[K$ [KSHOW TIME
+   3-NOV-2026 01:39:02
+==== VAX-SETHOST-0/edit-recall
+[K$ SHOW TIME
+   3-NOV-2026 01:39:02
+==== VAX-SETHOST-0/ctrly
+SEARCH SYS$SYSTEM:*.EXE "ZZZZQQQQ"
+7[7m Interrupt [m8
+
+==== VAX-SETHOST-0/ctrly-after
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+NODE=VAXC
+==== VAX-SETHOST-0/ctrlc
+SEARCH SYS$SYSTEM:*.EXE "ZZZZQQQQ"
+7[7m Interrupt [m8
+
+==== VAX-SETHOST-0/ctrlc-after
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+NODE=VAXC
+==== VAX-SETHOST-0/ctrly-idle
+
+7[7m Interrupt [m8
+Are you repeating ^Y to abort the remote session on node 0? <nothing within 10 s>
+==== VAX-SETHOST-0/ctrly-idle-then-return
+
+7[7m Interrupt [m8
+Are you repeating ^Y to abort the remote session on node 0? 
+==== VAX-SETHOST-0/ctrly-idle-after
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+NODE=VAXC
+==== VAX-SETHOST-0/logout
+LOGOUT
+  SYSTEM       logged out at  3-NOV-2026 01:39:24.28
+%REM-S-END, control returned to node VAXC::
+==== VAX-SETHOST-0/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+==== VAX-SETHOST-0/local-node
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+NODE=VAXC
+==== OVMX/decnetd-before
+DIRECTORY/SIZE SYS$SYSTEM:DECNETD.EXE,RTPAD.EXE
+
+Directory SYS$SYSROOT:[SYSEXE]
+
+DECNETD.EXE;1                             2050
+RTPAD.EXE;1                                772
+
+Total of 2 files, 2822 blocks.
+
+==== OVMX/decnetd-rename
+RENAME SYS$SYSTEM:DECNETD.EXE SYS$SYSTEM:DECNETD.S2HIDDEN
+%RMS-E-RNF, file not found - SYS$SYSTEM:DECNETD.EXE
+
+==== OVMX/decnetd-rename/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X00000910"
+
+==== OVMX/decnetd-rename2
+RENAME SYS$SYSROOT:[SYSEXE]DECNETD.EXE SYS$SYSROOT:[SYSEXE]DECNETD.S2HIDDEN
+%RMS-E-RNF, file not found - SYS$SYSROOT:[SYSEXE]DECNETD.EXE
+
+==== OVMX/decnetd-rename2/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X00000910"
+
+==== OVMX/decnetd-after
+DIRECTORY/SIZE SYS$SYSTEM:DECNETD.*,RTPAD.EXE
+
+Directory SYS$SYSROOT:[SYSEXE]
+
+DECNETD.EXE;1                             2050
+RTPAD.EXE;1                                772
+
+Total of 2 files, 2822 blocks.
+
+==== OVMX/decnetd-control
+RUN SYS$SYSTEM:DECNETD.EXE
+DECNETD-E-NETACPACT, a NETACP is already serving this node (DNET$NETACP_REQ names its live request mailbox); a node runs one NETACP -- this process is not starting a second
+%DCL-E-ABORT, image SYS$SYSTEM:DECNETD.EXE exited with error status %X00000001
+
+==== OVMX/decnetd-control/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X0000002C"
+
+==== OVMX/SET HOST NOSUCH
+SET HOST NOSUCH
+%SYSTEM-F-NOSUCHNODE, remote node is unknown
+==== OVMX/SET HOST NOSUCH/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X0000028C"
+==== OVMX/SET HOST VAXC /BOGUS
+SET HOST VAXC /BOGUS
+%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+ \BOGUS\
+==== OVMX/SET HOST VAXC /BOGUS/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X00038240"
+==== OVMX-SETHOST-VAXC/connect
+SET HOST VAXC
+
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+Username: 
+==== OVMX-SETHOST-VAXC/badpw
+ 
+User authorization failure
+%REM-S-END,
+==== OVMX-SETHOST-VAXC/login
+ 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAXC
+    Last interactive login on Tuesday,  3-NOV-2026 01:38
+	1 failure since last successful login
+==== OVMX-SETHOST-VAXC/node
+WRITE SYS$OUTPUT F$GETSYI("NODENAME")," ",F$GETDVI("TT","FULLDEVNAM")
+
+VAXC _VAXC$RTA1:
+==== OVMX-SETHOST-VAXC/paste80
+WRITE SYS$OUTPUT "PASTE=",F$GETSYI("NODENAME")," TT=",F$GETDVI("TT","FULLDEVNA<no prompt within 30 s>
+==== OVMX-SETHOST-VAXC/paste80-recover
+WRITE SYS$OUTPUT "PASTE=",F$GETSYI("NODENAME")," TT=",F$GETDVI("TT","FULLDEVNA                                                                               
+==== OVMX-SETHOST-VAXC/show-terminal
+SHOW TERMINAL
+
+Terminal: _RTA1:      Device_Type: Unknown       Owner: _RTA1:
+                                              Username: SYSTEM
+Remote Port Info: OVMXA::SYSTEM
+
+   Input:     300     LFfill:  0      Width:  80      Parity: None
+   Output:    300     CRfill:  0      Page:   24      
+
+Terminal Characteristics:
+   Interactive        Echo               Type_ahead         No Escape
+   No Hostsync        TTsync             Lowercase          No Tab
+   Wrap               Hardcopy           No Remote          No Eightbit
+   Broadcast          No Readsync        No Form            Fulldup
+   No Modem           No Local_echo      No Autobaud        No Hangup
+   No Brdcstmbx       No DMA             No Altypeahd       Set_speed
+   No Commsync        Line Editing       Insert editing     No Fallback
+   No Dialup          No Secure server   No Disconnect      No Pasthru
+   No Syspassword     No SIXEL Graphics  No Soft Characters No Printer Port
+   Numeric Keypad     No ANSI_CRT        No Regis           No Block_mode
+   No Advanced_video  No Edit_mode       No DEC_CRT         No DEC_CRT2
+   No DEC_CRT3        No DEC_CRT4        No DEC_CRT5        No Ansi_Color
+   VMS Style Input
+==== OVMX-SETHOST-VAXC/show-system
+SHOW SYSTEM
+
+OpenVMS V7.3  on node VAXC   3-NOV-2026 01:40:43.02  Uptime  0 00:04:10
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20200201 SWAPPER         HIB     16        0   0 00:00:00.02         0      0   
+20200206 CLUSTER_SERVER  HIB     12       11   0 00:00:00.02       207    315   
+20200207 CONFIGURE       HIB     11        6   0 00:00:00.01       114    175   
+20200208 LANACP          HIB     13       39   0 00:00:00.04       366    666   
+2020020A IPCACP          HIB     10        7   0 00:00:00.01        99    177   
+2020020B ERRFMT          HIB      9       21   0 00:00:00.03       130    211   
+2020020C CACHE_SERVER    HIB     16        6   0 00:00:00.01        84    134   
+2020020D OPCOM           HIB      7       68   0 00:00:00.03       215    263   
+2020020E AUDIT_SERVER    HIB      9       44   0 00:00:00.07       589    722   
+2020020F JOB_CONTROL     HIB      8       30   0 00:00:00.01       193    344   
+20200210 SECURITY_SERVER HIB     10       28   0 00:00:00.09      1962   1328   
+20200211 SMISERVER       HIB      9       34   0 00:00:00.05       353    516   
+20200212 TP_SERVER       HIB     10       20   0 00:00:00.02       205    317   
+20200213 NETACP          HIB      9       73   0 00:00:00.40       168    387   
+20200214 EVL             HIB      6       66   0 00:00:00.03       398    553  N
+20200215 REMACP          HIB      9       27   0 00:00:00.02       112     81   
+20200216 SYSTEM          LEF      8      823   0 00:00:00.94      6258    316   
+2020021A _RTA1:          CUR      5       96   0 00:00:00.04       730    399   
+==== OVMX-SETHOST-VAXC/show-users
+SHOW USERS
+
+      OpenVMS User Processes at  3-NOV-2026 01:40:43.24
+    Total number of users = 1,  number of processes = 2
+
+ Username  Node     Interactive  Subprocess   Batch
+ SYSTEM     VAXC            2
+==== OVMX-SETHOST-VAXC/directory
+DIRECTORY SYS$SYSTEM:LOGINOUT.EXE,DCL.EXE
+
+
+Directory SYS$COMMON:[SYSEXE]
+
+LOGINOUT.EXE;1      DCL.EXE;1           
+
+Total of 2 files.
+==== OVMX-SETHOST-VAXC/edit-delete
+SHOW TIMX E
+
+   3-NOV-2026 01:40:43
+==== OVMX-SETHOST-VAXC/edit-ctrlu
+SHOW NONSENSE                                                                               SHOW TIME
+
+   3-NOV-2026 01:40:43
+==== OVMX-SETHOST-VAXC/edit-recall
+
+$ SHOW TIME
+
+   3-NOV-2026 01:40:43
+==== OVMX-SETHOST-VAXC/ctrly
+SEARCH SYS$SYSTEM:*.EXE "ZZZZQQQQ"
+*INTERRUPT*
+==== OVMX-SETHOST-VAXC/ctrly-after
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+
+NODE=VAXC
+==== OVMX-SETHOST-VAXC/ctrlc
+SEARCH SYS$SYSTEM:*.EXE "ZZZZQQQQ"
+*INTERRUPT*
+==== OVMX-SETHOST-VAXC/ctrlc-after
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+
+NODE=VAXC
+==== OVMX-SETHOST-VAXC/ctrly-idle
+
+*INTERRUPT*<nothing within 10 s>
+==== OVMX-SETHOST-VAXC/ctrly-idle-then-return
+
+*INTERRUPT*
+
+==== OVMX-SETHOST-VAXC/ctrly-idle-after
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+
+NODE=VAXC
+==== OVMX-SETHOST-VAXC/logout
+LOGOUT
+
+  SYSTEM       logged out at  3-NOV-2026 01:41:05.57
+%REM-S-END, control returned to node OVMXA::
+==== OVMX-SETHOST-VAXC/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+==== OVMX-SETHOST-VAXC/local-node
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+NODE=OVMX
+==== OVMX-SETHOST-0/connect
+SET HOST 0
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-15 (OpenVMS-compatible)
+
+Username: 
+==== OVMX-SETHOST-0/badpw
+ 
+
+User authorization failure
+
+Username: 
+==== OVMX-SETHOST-0/login
+ 
+ Welcome to OpenVMX V0.7-15 - OpenVMS-compatible
+    Last interactive login on  3-NOV-2026 01:39:30.00
+    1 failure since last successful login
+==== OVMX-SETHOST-0/node
+WRITE SYS$OUTPUT F$GETSYI("NODENAME")," ",F$GETDVI("TT","FULLDEVNAM")
+OVMX _OVMX$RTA0:
+==== OVMX-SETHOST-0/paste80
+WRITE SYS$OUTPUT "PASTE=",F$GETSYI("NODENAME")," TT=",F$GETDVI("TT","FULLDEVNA<no prompt within 30 s>
+==== OVMX-SETHOST-0/paste80-recover
+WRITE SYS$OUTPUT "PASTE=",F$GETSYI("NODENAME")," TT=",F$GETDVI("TT","FULLDEVNA                                                                               
+==== OVMX-SETHOST-0/show-terminal
+SHOW TERMINAL
+Terminal: _RTA0:      Device_Type: Unknown       Owner: SYSTEM
+Remote Port Info: 1987::SYSTEM
+
+Terminal Characteristics:
+   Interactive        Echo               Type_ahead         No Escape
+   No Hostsync        TTsync             Lowercase          No Tab
+   Wrap               Hardcopy           No Remote          No Eightbit
+   Broadcast          No Readsync        No Form            Fulldup
+   No Modem           No Local_echo      No Autobaud        No Hangup
+   No Brdcstmbx       No DMA             No Altypeahd       Set_speed
+   No Commsync        Line Editing       Insert editing     No Fallback
+   No Dialup          No Secure server   No Disconnect      No Pasthru
+   No Syspassword     No SIXEL Graphics  No Soft Characters No Printer Port
+   Numeric Keypad     No ANSI_CRT        No Regis           No Block_mode
+   No Advanced_video  No Edit_mode       No DEC_CRT         No DEC_CRT2
+   No DEC_CRT3        No DEC_CRT4        No DEC_CRT5        No Ansi_Color
+   VMS Style Input
+==== OVMX-SETHOST-0/show-system
+SHOW SYSTEM
+OpenVMX V0.7-15 - OpenVMS-compatible  on node OVMX   3-NOV-2026 01:41:43.44  Uptime  0 00:02:18
+  Pid    Process Name          CPU         Page flts   Pages
+10000002 OPCOM              0 00:00:00.02        229     704
+10000007 _RTA0:             0 00:00:00.03       1071     916
+10000004 NETACP             0 00:00:00.24        263     860
+10000001 STARTUP            0 00:00:00.49        101     358
+10000006 SYSTEM             0 00:00:00.04         48     390
+10000006 SYSTEM             0 00:00:00.35       1445     948
+10000005 JOB_CONTROL        0 00:00:00.00         91     352
+==== OVMX-SETHOST-0/show-users
+SHOW USERS
+      OpenVMX User Processes at  3-NOV-2026 01:41:43.62
+    Total number of users = 1,  number of processes = 3
+
+ Username  Node     Interactive  Subprocess   Batch
+ SYSTEM     OVMX            3                    
+==== OVMX-SETHOST-0/directory
+DIRECTORY SYS$SYSTEM:LOGINOUT.EXE,DCL.EXE
+
+Directory SYS$SYSROOT:[SYSEXE]
+
+LOGINOUT.EXE;1      DCL.EXE;1
+
+Total of 2 files.
+==== OVMX-SETHOST-0/edit-delete
+SHOW TIMX E
+   3-NOV-2026 01:41:43
+==== OVMX-SETHOST-0/edit-ctrlu
+SHOW NONSENSE                                                                               SHOW TIME
+   3-NOV-2026 01:41:44
+==== OVMX-SETHOST-0/edit-recall
+
+==== OVMX-SETHOST-0/ctrly
+SHOW TIME
+   3-NOV-2026 01:41:44
+$ SEARCH SYS$SYSTEM:*.EXE "ZZZZQQQQ"
+%RMS-E-FNF, file not found - SYS$SYSTEM:*.EXE
+==== OVMX-SETHOST-0/ctrly-after
+
+*INTERRUPT*
+*INTERRUPT*
+
+==== OVMX-SETHOST-0/ctrlc
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+NODE=OVMX
+$ SEARCH SYS$SYSTEM:*.EXE "ZZZZQQQQ"
+%RMS-E-FNF, file not found - SYS$SYSTEM:*.EXE
+==== OVMX-SETHOST-0/ctrlc-after
+
+*INTERRUPT*
+*INTERRUPT*
+
+==== OVMX-SETHOST-0/ctrly-idle
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+*INTERRUPT*NODE=OVMX
+$ 
+*INTERRUPT*
+
+==== OVMX-SETHOST-0/ctrly-idle-after
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+NODE=OVMX
+==== OVMX-SETHOST-0/logout
+LOGOUT
+  SYSTEM       logged out at  3-NOV-2026 01:41:56.03
+%REM-S-END, control returned to node OVMXA::
+==== OVMX-SETHOST-0/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+==== OVMX-SETHOST-0/local-node
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+NODE=OVMX
+==== OVMX/decnetd-still-hidden
+DIRECTORY/SIZE SYS$SYSTEM:DECNETD.*
+
+Directory SYS$SYSROOT:[SYSEXE]
+
+DECNETD.EXE;1                             2050
+
+Total of 1 file, 2050 blocks.
+
+==== OVMX/decnetd-restore
+RENAME SYS$SYSROOT:[SYSEXE]DECNETD.S2HIDDEN SYS$SYSROOT:[SYSEXE]DECNETD.EXE
+%RMS-E-RNF, file not found - SYS$SYSROOT:[SYSEXE]DECNETD.S2HIDDEN
+
+==== VAX-SETHOST-OVMXA/connect
+SET HOST OVMXA
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-15 (OpenVMS-compat
+ible)
+
+Username: 
+==== VAX-SETHOST-OVMXA/badpw
+ 
+
+User authorization failure
+
+Username: 
+==== VAX-SETHOST-OVMXA/login
+ 
+ Welcome to OpenVMX V0.7-15 - OpenVMS-compatible
+    Last interactive login on  3-NOV-2026 01:41:10.00
+    1 failure since last successful login
+==== VAX-SETHOST-OVMXA/node
+WRITE SYS$OUTPUT F$GETSYI("NODENAME")," ",F$GETDVI("TT","FULLDEVNAM")
+OVMX _OVMX$RTA0:
+==== VAX-SETHOST-OVMXA/paste80
+WRITE SYS$OUTPUT "PASTE=",F$GETSYI("NODENAME")," TT=",F$GETDVI("TT","FULLDEVNA
+M")
+M")
+PASTE=OVMX TT=_OVMX$RTA0:
+==== VAX-SETHOST-OVMXA/show-terminal
+SHOW TERMINAL
+Terminal: _RTA0:      Device_Type:               Owner: SYSTEM
+Remote Port Info: VAXC::SYSTEM
+
+Terminal Characteristics:
+   Interactive        Echo               Type_ahead         No Escape
+   No Hostsync        TTsync             Lowercase          Tab
+   Wrap               No Hardcopy        No Remote          No Eightbit
+   Broadcast          No Readsync        No Form            Fulldup
+   No Modem           No Local_echo      No Autobaud        No Hangup
+   No Brdcstmbx       No DMA             No Altypeahd       Set_speed
+   No Commsync        Line Editing                          No Fallback
+   No Dialup          No Secure server   No Disconnect      No Pasthru
+   No Syspassword     No SIXEL Graphics  No Soft Characters No Printer Port
+   Numeric Keypad     ANSI_CRT           No Regis           No Block_mode
+   Advanced_video     No Edit_mode       DEC_CRT            No DEC_CRT2
+   No DEC_CRT3        No DEC_CRT4        No DEC_CRT5        No Ansi_Color
+   VMS Style Input
+==== VAX-SETHOST-OVMXA/show-system
+SHOW SYSTEM
+OpenVMX V0.7-15 - OpenVMS-compatible  on node OVMX   3-NOV-2026 01:42:03.88  Upt
+ime  0 00:02:38
+  Pid    Process Name          CPU         Page flts   Pages
+10000002 OPCOM              0 00:00:00.02        229     704
+10000004 NETACP             0 00:00:00.25        324     860
+10000001 STARTUP            0 00:00:00.49        101     358
+10000006 SYSTEM             0 00:00:00.37       1533     948
+10000008 _RTA0:             0 00:00:00.02       1071     916
+10000005 JOB_CONTROL        0 00:00:00.01         91     352
+==== VAX-SETHOST-OVMXA/show-users
+SHOW USERS
+      OpenVMX User Processes at  3-NOV-2026 01:42:04.04
+    Total number of users = 1,  number of processes = 2
+
+ Username  Node     Interactive  Subprocess   Batch
+ SYSTEM     OVMX            2                    
+==== VAX-SETHOST-OVMXA/directory
+DIRECTORY SYS$SYSTEM:LOGINOUT.EXE,DCL.EXE
+Directory SYS$SYSROOT:[SYSEXE]
+
+LOGINOUT.EXE;1      DCL.EXE;1
+
+Total of 2 files.
+==== VAX-SETHOST-OVMXA/edit-delete
+SHOW TIMX E
+   3-NOV-2026 01:42:04
+==== VAX-SETHOST-OVMXA/edit-ctrlu
+SHOW NONSENSE[K$ [KSHOW TIME
+   3-NOV-2026 01:42:04
+==== VAX-SETHOST-OVMXA/edit-recall
+[K$ [KSHOW TIME
+   3-NOV-2026 01:42:04
+==== VAX-SETHOST-OVMXA/ctrly
+SEARCH SYS$SYSTEM:*.EXE "ZZZZQQQQ"
+%RMS-E-FNF, file not found - SYS$SYSTEM:*.EXE
+==== VAX-SETHOST-OVMXA/ctrly-after
+
+7[7m Interrupt [m8
+
+*INTERRUPT*
+
+==== VAX-SETHOST-OVMXA/ctrlc
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+NODE=OVMX
+$ SEARCH SYS$SYSTEM:*.EXE "ZZZZQQQQ"
+%RMS-E-FNF, file not found - SYS$SYSTEM:*.EXE
+==== VAX-SETHOST-OVMXA/ctrlc-after
+
+7[7m Interrupt [m8
+
+*INTERRUPT*
+
+==== VAX-SETHOST-OVMXA/ctrly-idle
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+7[7m Interrupt [m8
+Are you repeating ^Y to abort the remote session on node OVMXA? <nothing within 10 s>
+==== VAX-SETHOST-OVMXA/ctrly-idle-then-return
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+7[7m Interrupt [m8
+Are you repeating ^Y to abort the remote session on node OVMXA? 
+NODE=OVMX
+==== VAX-SETHOST-OVMXA/ctrly-idle-after
+
+*INTERRUPT*
+
+==== VAX-SETHOST-OVMXA/logout
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+NODE=OVMX
+$ LOGOUT
+  SYSTEM       logged out at  3-NOV-2026 01:42:26.37
+%REM-S-END, control returned to node VAXC::
+==== VAX-SETHOST-OVMXA/status
+SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+==== VAX-SETHOST-OVMXA/local-node
+WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")
+NODE=VAXC

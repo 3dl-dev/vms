@@ -728,6 +728,9 @@ uint32_t vms_kif_terminal_setchar(const char *devnam, uint32_t flags,
 uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
                            uint64_t setchar, uint64_t clrchar,
                            uint32_t width, uint32_t page);
+/* The terminal's device type (DT$_ code): IO$_SETMODE buffer byte 1, SET
+ * TERMINAL/DEVICE_TYPE (rd vms-686). */
+uint32_t vms_kif_ttsettype(uint32_t chan, uint32_t devtype);
 
 /* Record this process's TERMINAL in the executive's process table, from
  * a channel it already holds to a terminal device (vms-d0b). The
@@ -750,6 +753,9 @@ uint32_t vms_kif_setterm(uint32_t chan);
 uint32_t vms_kif_tt_read(struct vms_tt_read_args *a);
 uint32_t vms_kif_tt_write(uint32_t chan, const void *buf, uint32_t len);
 /* The same as one record (VMS_TT_WR_RECORD): IO$_WRITEVBLK with P4 " ". */
+/* A terminal write with VMS_TT_WR_* flags (IO$M_REFRESH among them). */
+uint32_t vms_kif_tt_write_flags(uint32_t chan, const void *buf, uint32_t len,
+                                uint32_t flags);
 uint32_t vms_kif_tt_write_record(uint32_t chan, const void *buf, uint32_t len);
 /* The text opening a record left open (VMS_TT_WR_PROMPT): IO$_WRITEVBLK with
  * P4 "$" -- a new line before it, no carriage return after (rd vms-1b6a). */
@@ -766,6 +772,13 @@ uint32_t vms_kif_tt_sense(const char *devnam, uint32_t *state);
  * control character n. */
 uint32_t vms_kif_tt_oobast(uint32_t chan, uint32_t which, uint64_t astadr,
                            uint64_t astprm, uint32_t mask, uint32_t acmode);
+/* ... with VMS_TT_OOBF_* (OUTBAND: IO$M_TT_ABORT, rd vms-0a7 S2). */
+uint32_t vms_kif_tt_oobast_flags(uint32_t chan, uint32_t which, uint64_t astadr,
+                                 uint64_t astprm, uint32_t mask, uint32_t acmode,
+                                 uint32_t flags);
+/* $CANCEL on a terminal channel: this process's read in progress there ends
+ * SS$_ABORT (rd vms-0a7 S2). */
+uint32_t vms_kif_tt_cancel(uint32_t chan);
 /* Write a broadcast to terminal `devnam` through its class driver, breaking
  * through a read in progress (rd vms-53a). OPER. */
 uint32_t vms_kif_tt_brkthru(const char *devnam, const void *msg, uint32_t len);

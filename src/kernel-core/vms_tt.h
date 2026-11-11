@@ -79,6 +79,8 @@ struct vms_tt_read_result {
 	uint32_t termsz;     /* 1 when a terminator ended the read, else 0 */
 };
 
+struct vms_proc;
+
 struct vms_tt_read_req {
 	uint32_t flags;              /* VMS_TT_RD_* */
 	uint32_t bufsz;              /* bytes the caller can take */
@@ -90,6 +92,9 @@ struct vms_tt_read_req {
 	uint32_t inisz;
 	const void *owner;           /* who may resume this read after a signal
 				      * (vms_tt_read); NULL: not resumable */
+	struct vms_proc *proc;       /* a $QIO read: the process, whose ASTs let
+				      * the read go (it stays outstanding); NULL
+				      * for the substrate's read(2) */
 	int ldisc;                   /* the substrate's read(2) on the line */
 };
 
@@ -167,6 +172,10 @@ long vms_ioctl_tt_sense(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_oobast(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_brkthru(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_tt_typahd(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_tt_cancel(struct vms_proc *proc, unsigned long arg);
+/* vms_tt_write's `cooked` ORed with this: a $QIO write without IO$M_REFRESH,
+ * after which a read in progress is not shown again */
+#define VMS_TT_WRITE_QUIET 0x100
 
 /* A channel to terminal row `dev` is being deassigned (vms_devtab.c): the
  * out-of-band ASTs armed through it end with it (rd vms-f0fb). */

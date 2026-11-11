@@ -1677,6 +1677,20 @@ uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
     return args.status;
 }
 
+uint32_t vms_kif_ttsettype(uint32_t chan, uint32_t devtype)
+{
+    struct vms_setmode_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+    args.flags = VMS_TTSET_TYPE;
+    args.devtype = devtype;
+
+    KIF_CALL(VMS_IOCTL_TTSETMODE, &args);
+
+    return args.status;
+}
+
 uint32_t vms_kif_setterm(uint32_t chan)
 {
     struct vms_setterm_args args;
@@ -1706,6 +1720,22 @@ uint32_t vms_kif_tt_read(struct vms_tt_read_args *a)
      * runs and the read goes on (kif_wait_call). */
     KIF_WAIT_CALL(VMS_IOCTL_TT_READ, a);
     return a->status;
+}
+
+uint32_t vms_kif_tt_write_flags(uint32_t chan, const void *buf, uint32_t len,
+                                uint32_t flags)
+{
+    struct vms_tt_write_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+    args.flags = flags;
+    args.buf = (uint64_t)(uintptr_t)buf;
+    args.len = len;
+
+    KIF_CALL(VMS_IOCTL_TT_WRITE, &args);
+
+    return args.status;
 }
 
 uint32_t vms_kif_tt_write_record(uint32_t chan, const void *buf, uint32_t len)
@@ -1783,6 +1813,25 @@ uint32_t vms_kif_tt_setmode(uint32_t chan, uint32_t mode)
 uint32_t vms_kif_tt_oobast(uint32_t chan, uint32_t which, uint64_t astadr,
                            uint64_t astprm, uint32_t mask, uint32_t acmode)
 {
+    return vms_kif_tt_oobast_flags(chan, which, astadr, astprm, mask, acmode, 0);
+}
+
+uint32_t vms_kif_tt_cancel(uint32_t chan)
+{
+    struct vms_tt_cancel_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+
+    KIF_CALL(VMS_IOCTL_TT_CANCEL, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_tt_oobast_flags(uint32_t chan, uint32_t which, uint64_t astadr,
+                                 uint64_t astprm, uint32_t mask, uint32_t acmode,
+                                 uint32_t flags)
+{
     struct vms_tt_oobast_args args;
 
     vms_memset(&args, 0, sizeof(args));
@@ -1792,6 +1841,7 @@ uint32_t vms_kif_tt_oobast(uint32_t chan, uint32_t which, uint64_t astadr,
     args.astprm = astprm;
     args.mask = mask;
     args.acmode = acmode;
+    args.flags = flags;
 
     KIF_CALL(VMS_IOCTL_TT_OOBAST, &args);
 

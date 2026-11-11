@@ -54,6 +54,9 @@
 #include "stsdef.h"
 #include "libclidef.h"
 #include "clitable.h"
+#ifndef OVMX_LINK_CLI_ARGV
+#include "vms_kif.h"       /* vms_kif_getcli: the command the CLI recorded (vms-f60d) */
+#endif
 
 /* ================================================================
  * Small helpers
@@ -160,6 +163,7 @@ struct cli_parsed {
 
 struct cli_context {
     int                             valid;
+    int                             inherited; /* parsed from the CLI's command */
     const struct cli_command_table *table;
     const struct cli_verb          *verb;
     struct cli_parsed              *ents; /* nquals + nparams entries */
@@ -870,6 +874,107 @@ parsed:
 }
 
 /* ================================================================
+ * DCL$TABLES and the CLI's current command (rd vms-0a7 S2, vms-18c9)
+ *
+ * On VMS an image a DCL verb activates (SET HOST -> RTPAD.EXE) reads its
+ * command with CLI$GET_VALUE / CLI$PRESENT without parsing anything itself:
+ * DCL parsed the command against its command tables, and the CLI$ routines
+ * answer from that parse. OVMX: DCL records the command it parsed in the
+ * executive CLI context (vms_kif_setcli, the channel LIB$GET_FOREIGN reads),
+ * and when an image asks with no command of its own established by
+ * CLI$DCL_PARSE, the routines parse that recorded command against the SAME
+ * table DCL validated it with -- DCL$TABLES below, the one definition of the
+ * verb's parameters and qualifiers (DCL's SET HOST uses it too).
+ *
+ * The table text is CDU syntax (public Command Definition Utility manual);
+ * the labels are OVMX's own (Rule 8), as the compiled-table layout is.
+ * ================================================================ */
+static const char k_dcl_tables_cld[] =
+    "MODULE DCL$TABLES\n"
+    /* SET HOST node [/USERNAME=name] -> SYS$SYSTEM:RTPAD.EXE */
+    "DEFINE VERB SET\n"
+    "    PARAMETER P1, LABEL=OPTION, VALUE(REQUIRED)\n"
+    "    PARAMETER P2, LABEL=NODE, VALUE(REQUIRED)\n"
+    "    QUALIFIER USERNAME, VALUE(REQUIRED)\n";
+
+const struct cli_command_table *cli$$dcl_tables(void)
+{
+    static struct cli_command_table *t;
+    if (!t) {
+        struct dsc$descriptor_s d;
+        d.dsc$w_length = (uint16_t)(sizeof k_dcl_tables_cld - 1);
+        d.dsc$b_dtype = DSC$K_DTYPE_T;
+        d.dsc$b_class = DSC$K_CLASS_S;
+        d.dsc$a_pointer = (char *)k_dcl_tables_cld;
+        if (!(cli$compile_cld(&d, &t) & 1))
+            t = NULL;
+    }
+    return t;
+}
+
+#ifdef OVMX_LINK_CLI_ARGV
+/*
+ * OpenVMX/Alpha's host LINK.EXE (tools/cross-alpha-vms/selfhost/build-host-link.sh)
+ * compiles these routines into the image itself, at its own pointer size, and
+ * takes its command as the words the C RTL hands main(), which it parses with
+ * its own CLI$DCL_PARSE (src/vmslink/link_cli.c). It asks the CLI for nothing,
+ * so there is no CLI-recorded command to inherit: the CLI$ routines answer only
+ * from the image's own parse.
+ */
+static void cli_current(void) { }
+#else
+/* The command text an inherited context was parsed from. */
+static char g_inh_cmd[256];
+
+/*
+ * Make the current command the CLI's when the image has none of its own. The
+ * executive context is re-read on every call: under in-process activation this
+ * module's statics outlive one image, so a context parsed for an earlier image
+ * is used only while the CLI still records the same command.
+ */
+static void cli_current(void)
+{
+    if (g_ctx.valid && !g_ctx.inherited)
+        return;                                /* the image's own CLI$DCL_PARSE */
+    char cmd[256];
+    uint32_t present = 0, len = 0;
+    if (!(vms_kif_getcli(&present, cmd, sizeof cmd, &len) & 1) || !present || len == 0) {
+        if (g_ctx.inherited)
+            ctx_reset();
+        return;
+    }
+    if (g_ctx.valid && g_ctx.inherited && strcmp(cmd, g_inh_cmd) == 0)
+        return;                                /* already parsed */
+    if (g_ctx.inherited)
+        ctx_reset();
+    const struct cli_command_table *t = cli$$dcl_tables();
+    if (!t)
+        return;
+    /* Only a command whose verb DCL$TABLES defines: a foreign command's tail
+     * (the other thing the context holds) is not a tabled command. */
+    const char *p = cmd;
+    while (*p == ' ' || *p == '\t') p++;
+    size_t vl = 0;
+    while (p[vl] && p[vl] != ' ' && p[vl] != '\t' && p[vl] != '/') vl++;
+    int known = 0;
+    for (int i = 0; i < t->nverbs; i++)
+        if (strlen(t->verbs[i].name) == vl && ci_eq_n(t->verbs[i].name, p, vl))
+            known = 1;
+    if (!known)
+        return;
+    struct dsc$descriptor_s d;
+    d.dsc$w_length = (uint16_t)strlen(cmd);
+    d.dsc$b_dtype = DSC$K_DTYPE_T;
+    d.dsc$b_class = DSC$K_CLASS_S;
+    d.dsc$a_pointer = cmd;
+    if (cli$dcl_parse(&d, t, NULL, NULL) == SS$_NORMAL) {
+        g_ctx.inherited = 1;
+        memcpy(g_inh_cmd, cmd, sizeof g_inh_cmd);
+    }
+}
+#endif /* OVMX_LINK_CLI_ARGV */
+
+/* ================================================================
  * cli$present
  * ================================================================ */
 
@@ -939,6 +1044,7 @@ static int keyword_in_values(const struct cli_parsed *e, const char *kw, size_t 
 
 uint32_t cli$present(const struct dsc$descriptor_s *label)
 {
+    cli_current();
     if (!label || !label->dsc$a_pointer || !g_ctx.valid) return CLI$_ABSENT;
     const char *name = label->dsc$a_pointer;
     size_t len = label->dsc$w_length;
@@ -987,6 +1093,7 @@ uint32_t cli$get_value(const struct dsc$descriptor_s *label,
                        uint16_t *retlen)
 {
     if (retlen) *retlen = 0;
+    cli_current();
     if (!label || !label->dsc$a_pointer || !value || !g_ctx.valid)
         return CLI$_ABSENT;
 

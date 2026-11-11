@@ -24,6 +24,6 @@ EOF
 }
 
 defect_apply() {
-        sed -i 's|^\tif (tt->rd_busy \&\& !tt->rd_done \&\& !tt->passall \&\& n \&\& !more) {$|\tif (0) { /* NEGCTL tt-breakthrough-no-redisplay */|' "$_file"
+        sed -i 's|^\tif (tt->rd_busy \&\& !tt->rd_done \&\& !tt->passall \&\& n \&\& !more \&\& !quiet) {$|\tif (0) { /* NEGCTL tt-breakthrough-no-redisplay */|' "$_file"
     :
 }

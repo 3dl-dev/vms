@@ -2568,6 +2568,7 @@ uint32_t (sys$setpri)(const uint32_t *pidadr,
  */
 extern void vms$$qio_cancel_chan(uint16_t chan);
 extern void vms$$qio_cancel_uring(uint16_t chan);
+extern void vms$$qio_cancel_tt(uint16_t chan);
 
 uint32_t sys$cancel(uint16_t chan) {
     /* A channel this process does not hold is refused, as on OpenVMS (vms-4a69,
@@ -2579,9 +2580,11 @@ uint32_t sys$cancel(uint16_t chan) {
     /* Pending asynchronous MAILBOX reads on the channel complete with SS$_ABORT
      * (vms-003); io_uring-queued I/O on the channel's descriptor (terminal,
      * pipe) is cancelled in the kernel and completes with SS$_CANCEL in its
-     * IOSB, event flag set and AST queued (vms-c8c). */
+     * IOSB, event flag set and AST queued (vms-c8c); a read in progress on an
+     * executive terminal ends SS$_ABORT (rd vms-0a7 S2). */
     vms$$qio_cancel_chan(chan);
     vms$$qio_cancel_uring(chan);
+    vms$$qio_cancel_tt(chan);
     return SS$_NORMAL;
 }
 

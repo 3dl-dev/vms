@@ -153,6 +153,16 @@ uint32_t cli$compile_cld(const struct dsc$descriptor_s *cld_source,
 
 void cli$free_cld(struct cli_command_table *table);
 
+/* ================================================================
+ * cli$$dcl_tables -- OVMX (not a VSI routine): DCL$TABLES, the command-table
+ * entries of DCL verbs whose image reads its command through CLI$ (SET HOST ->
+ * RTPAD.EXE). DCL validates such a command against it and records the command
+ * in the executive CLI context; CLI$PRESENT / CLI$GET_VALUE in the activated
+ * image, having no command of their own from CLI$DCL_PARSE, answer from that
+ * recorded command parsed against the same table. NULL if it cannot compile.
+ * ================================================================ */
+const struct cli_command_table *cli$$dcl_tables(void);
+
 #ifdef __cplusplus
 }
 #endif

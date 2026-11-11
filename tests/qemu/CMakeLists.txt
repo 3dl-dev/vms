@@ -836,6 +836,11 @@ add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg
 if(TARGET decnetd_exe)
     add_dependencies(qemu_syssvc_tests decnetd_exe)
 endif()
+# RTPAD.EXE (rd vms-0a7 S2): the SET HOST client test_syssvc_sethost_syscall_audit
+# traces DCL activating; staged at SYS$SYSTEM by tests/qemu/Dockerfile.
+if(TARGET rtpad_exe)
+    add_dependencies(qemu_syssvc_tests rtpad_exe)
+endif()
 
 # ---------------------------------------------------------------------------
 # TORN OUT AS GATES (vms-49f), per the CLAUDE.md Rule 9 amendment.

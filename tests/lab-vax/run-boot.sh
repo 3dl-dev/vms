@@ -560,6 +560,7 @@ build_boot_image_set() {
      && [ -f "${SYSVOL_IMAGES_DIR}/MAIL_SERVER.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/MAIL.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/NCP.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/RTPAD.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/ROOTAUDIT.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/OPCOM.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/.shipped-stripped" ]; then
@@ -586,12 +587,13 @@ build_boot_image_set() {
       cmake -S /src -B /tmp/build-decnetd-vax \
         -DCMAKE_TOOLCHAIN_FILE=/src/tools/cross-vax/toolchain-vax-netbsd.cmake \
         -DCMAKE_BUILD_TYPE=Release >/tmp/build-decnetd-vax-configure.log 2>&1
-      cmake --build /tmp/build-decnetd-vax --target decnetd_exe fal_exe mail_server_exe vms_mail ncp_exe vms_rootaudit ovmx_opcom -- -j"$(nproc)" >/tmp/build-decnetd-vax-build.log 2>&1
+      cmake --build /tmp/build-decnetd-vax --target decnetd_exe fal_exe mail_server_exe vms_mail ncp_exe rtpad_exe vms_rootaudit ovmx_opcom -- -j"$(nproc)" >/tmp/build-decnetd-vax-build.log 2>&1
       cp /tmp/build-decnetd-vax/bin/DECNETD.EXE /out/DECNETD.EXE
       cp /tmp/build-decnetd-vax/bin/FAL.EXE /out/FAL.EXE
       cp /tmp/build-decnetd-vax/bin/MAIL_SERVER.EXE /out/MAIL_SERVER.EXE
       cp /tmp/build-decnetd-vax/bin/MAIL.EXE /out/MAIL.EXE
       cp /tmp/build-decnetd-vax/bin/NCP.EXE /out/NCP.EXE
+      cp /tmp/build-decnetd-vax/bin/RTPAD.EXE /out/RTPAD.EXE
       cp /tmp/build-decnetd-vax/bin/ROOTAUDIT.EXE /out/ROOTAUDIT.EXE
       cp /tmp/build-decnetd-vax/bin/OPCOM.EXE /out/OPCOM.EXE'
   [ -f "${SYSVOL_IMAGES_DIR}/DECNETD.EXE" ] || die "DECNETD.EXE cross-build did not produce an elf32-vax image (rd vms-c1f)"
@@ -600,6 +602,8 @@ build_boot_image_set() {
   [ -f "${SYSVOL_IMAGES_DIR}/FAL.EXE" ] || die "FAL.EXE cross-build did not produce an elf32-vax image (rd vms-d85)"
   # MAIL_SERVER.EXE (rd vms-47fd): the MAIL-11 (object 27) network server process.
   [ -f "${SYSVOL_IMAGES_DIR}/MAIL_SERVER.EXE" ] || die "MAIL_SERVER.EXE cross-build did not produce an elf32-vax image (rd vms-47fd)"
+  # RTPAD.EXE (rd vms-0a7 S2): the SET HOST client DCL activates.
+  [ -f "${SYSVOL_IMAGES_DIR}/RTPAD.EXE" ] || die "RTPAD.EXE cross-build did not produce an elf32-vax image (rd vms-0a7)"
   # MAIL.EXE (rd vms-47fd): the user's MAIL utility -- what reads a delivered
   # message back; a rail that accepts inbound mail ships the reader too.
   [ -f "${SYSVOL_IMAGES_DIR}/MAIL.EXE" ] || die "MAIL.EXE cross-build did not produce an elf32-vax image (rd vms-47fd)"

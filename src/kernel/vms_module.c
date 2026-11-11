@@ -1978,6 +1978,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_tt_brkthru(proc, arg);
     case VMS_IOCTL_TT_TYPAHD:         /* rd vms-d3cd: IO$M_TYPEAHDCNT */
         return vms_ioctl_tt_typahd(proc, arg);
+    case VMS_IOCTL_TT_CANCEL:         /* rd vms-0a7 S2: $CANCEL of a read */
+        return vms_ioctl_tt_cancel(proc, arg);
     case VMS_IOCTL_ALLOC:
         return vms_ioctl_alloc(proc, arg);
     case VMS_IOCTL_DALLOC:

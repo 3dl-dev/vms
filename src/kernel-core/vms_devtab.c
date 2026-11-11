@@ -2875,6 +2875,8 @@ long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg)
         dev->width = args.width;
     if (args.flags & VMS_TTSET_PAGE)
         dev->page = args.page;
+    if (args.flags & VMS_TTSET_TYPE)
+        dev->devtype = args.devtype;
     /* SET TERMINAL/PERMANENT: the permanent set too (rd vms-d900). */
     if (args.flags & VMS_TTSET_PERM) {
         if (args.flags & VMS_TTSET_WIDTH)

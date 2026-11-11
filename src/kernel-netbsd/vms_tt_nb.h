@@ -72,6 +72,7 @@ struct vms_tt_write_args {
 #define VMS_TT_WR_RECORD      0x1u
 #define VMS_TT_WR_NOFORMAT    0x2u   /* IO$M_NOFORMAT: the cursor position untouched (rd vms-457) */
 #define VMS_TT_WR_PROMPT      0x4u   /* P4 "$": a new line before, no CR after (rd vms-1b6a) */
+#define VMS_TT_WR_REFRESH     0x8u   /* IO$M_REFRESH: the read in progress shown again after */
 
 #define VMS_TT_MODE_PASSALL   0x1u
 struct vms_tt_mode_args {
@@ -108,7 +109,12 @@ struct vms_tt_oobast_args {
 	uint32_t mask;
 	uint32_t acmode;
 	uint32_t status;
-	uint32_t pad;
+	uint32_t flags;             /* OUTBAND: VMS_TT_OOBF_* */
+};
+#define VMS_TT_OOBF_ABORT     0x1u
+struct vms_tt_cancel_args {
+	uint32_t chan;
+	uint32_t status;
 };
 
 #define VMS_TT_BRKTHRU_MAX    512
@@ -139,6 +145,7 @@ struct vms_tt_typahd_args {
 #define VMS_IOCTL_TT_OOBAST   _IOWR(VMS_TT_IOC_MAGIC, 0xA5, struct vms_tt_oobast_args)
 #define VMS_IOCTL_TT_BRKTHRU  _IOWR(VMS_TT_IOC_MAGIC, 0xA6, struct vms_tt_brkthru_args)
 #define VMS_IOCTL_TT_TYPAHD   _IOWR(VMS_TT_IOC_MAGIC, 0xA7, struct vms_tt_typahd_args)
+#define VMS_IOCTL_TT_CANCEL   _IOWR(VMS_TT_IOC_MAGIC, 0xA8, struct vms_tt_cancel_args)
 
 _Static_assert(sizeof(struct vms_tt_read_args) == 104,
                "struct vms_tt_read_args changed size -- terminal reads would decode at the wrong offsets");
@@ -172,5 +179,9 @@ _Static_assert(sizeof(struct vms_tt_typahd_args) == 16,
                "struct vms_tt_typahd_args changed size");
 _Static_assert(VMS_IOCTL_TT_TYPAHD == 0xC01056A7u,
                "VMS_IOCTL_TT_TYPAHD encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_tt_cancel_args) == 8,
+               "struct vms_tt_cancel_args changed size");
+_Static_assert(VMS_IOCTL_TT_CANCEL == 0xC00856A8u,
+               "VMS_IOCTL_TT_CANCEL encodes differently here than on the reference build");
 
 #endif /* OVMX_VMS_TT_NB_H */

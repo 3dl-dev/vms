@@ -359,7 +359,11 @@ RUN cd /src/repo && \
     # INSTALL.EXE (rd vms-d41): the image test_syssvc_dcl_install has DCL run,
     # whose output and messages that suite reads from DCL's SYS$OUTPUT.
     echo "--- INSTALL.EXE (the image test_syssvc_dcl_install has DCL run, vms-d41) ---" && \
-    ls -la build-static/bin/INSTALL.EXE
+    ls -la build-static/bin/INSTALL.EXE && \
+    # RTPAD.EXE (rd vms-0a7 S2): the SET HOST client DCL activates, the subject
+    # of test_syssvc_sethost_syscall_audit.c. Absence is FATAL.
+    echo "--- RTPAD.EXE (the SET HOST client test_syssvc_sethost_syscall_audit traces) ---" && \
+    ls -la build-static/bin/RTPAD.EXE
 
 # TCC.EXE (vms-d1b, self-host spine #6): tinycc built as a PLAIN STATIC (musl)
 # foreign-command image -- the compiler test_syssvc_mmk_build.c drives from MMK's
@@ -702,6 +706,11 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp /src/repo/build-static/bin/DECNETD.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE || \
       { echo "FATAL: DECNETD.EXE was not built into the static tree -- the NETACP syscall audit would go unproven"; exit 1; }; } && \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE && \
+    # RTPAD.EXE at SYS$SYSTEM (rd vms-0a7 S2) -- the SET HOST client DCL
+    # activates under test_syssvc_sethost_syscall_audit.c. Absence is FATAL.
+    { cp /src/repo/build-static/bin/RTPAD.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RTPAD.EXE || \
+      { echo "FATAL: RTPAD.EXE was not built into the static tree -- the SET HOST syscall audit would go unproven"; exit 1; }; } && \
+    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RTPAD.EXE && \
     # TCC.EXE at SYS$SYSTEM (vms-d1b, self-host spine #6) -- the compiler
     # test_syssvc_mmk_build.c drives from MMK's persistent mailbox DCL. Its
     # descrip.mms defines TCC :== $/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE (an absolute

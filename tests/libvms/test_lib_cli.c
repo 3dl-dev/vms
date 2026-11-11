@@ -284,6 +284,43 @@ static void test_errors(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* DCL$TABLES: SET HOST as RTPAD.EXE reads it (rd vms-0a7 S2).         */
+/* ------------------------------------------------------------------ */
+static void test_dcl_tables_set_host(void)
+{
+    printf("Testing DCL$TABLES SET HOST (RTPAD's CLI$GET_VALUE)...\n");
+    const struct cli_command_table *t = cli$$dcl_tables();
+    check(t != NULL, "DCL$TABLES compiles");
+    if (!t) return;
+    char tmp[128];
+    struct dsc$descriptor_s c1 = sdesc("SET HOST VAXC /USERNAME=DNTEST");
+    uint32_t st = cli$dcl_parse(&c1, t, NULL, NULL);
+    check(st == SS$_NORMAL, "SET HOST VAXC /USERNAME=DNTEST parses");
+    st = cli_get_value("NODE", tmp, sizeof tmp);
+    check($VMS_STATUS_SUCCESS(st) && strcmp(tmp, "VAXC") == 0, "NODE == VAXC");
+    st = cli_get_value("USERNAME", tmp, sizeof tmp);
+    check($VMS_STATUS_SUCCESS(st) && strcmp(tmp, "DNTEST") == 0, "USERNAME == DNTEST");
+
+    struct dsc$descriptor_s c2 = sdesc("SET HOST 1.965/USER=X");
+    st = cli$dcl_parse(&c2, t, NULL, NULL);
+    check(st == SS$_NORMAL, "an abbreviated /USER parses");
+    st = cli_get_value("NODE", tmp, sizeof tmp);
+    check($VMS_STATUS_SUCCESS(st) && strcmp(tmp, "1.965") == 0, "NODE == 1.965");
+
+    struct dsc$descriptor_s c3 = sdesc("SET HOST VAXC");
+    st = cli$dcl_parse(&c3, t, NULL, NULL);
+    check(st == SS$_NORMAL && cli_present("USERNAME") == CLI$_ABSENT,
+          "no /USERNAME -> CLI$_ABSENT");
+
+    struct dsc$descriptor_s c4 = sdesc("SET HOST VAXC /BOGUS");
+    check(cli$dcl_parse(&c4, t, NULL, NULL) == CLI$_IVQUAL,
+          "a qualifier SET HOST does not take -> CLI$_IVQUAL");
+    struct dsc$descriptor_s c5 = sdesc("SET HOST VAXC /USERNAME");
+    check(!$VMS_STATUS_SUCCESS(cli$dcl_parse(&c5, t, NULL, NULL)),
+          "/USERNAME without its value -> error");
+}
+
+/* ------------------------------------------------------------------ */
 /* PLACEMENT=LOCAL / POSITIONAL qualifiers and a comma/plus LIST       */
 /* parameter (rd vms-3cb1): the shape of the LINK command, CDU manual  */
 /* PLACEMENT and the CLI$PRESENT status CLI$_LOCPRES / CLI$_LOCNEG.    */
@@ -363,6 +400,7 @@ int main(void)
     test_mmk_cld();
     test_default_on();
     test_errors();
+    test_dcl_tables_set_host();
     test_placement();
 
     if (failures == 0) {

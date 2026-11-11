@@ -1,0 +1,57 @@
+23:47:12 VAXC at Username:
+23:47:27 VAXC logged in
+23:47:37 VAXC licensed
+23:47:38 VAXC DECnet executor on
+23:47:40 VAX/SET HOST NOSUCH -> SET HOST NOSUCH | %SYSTEM-F-NOSUCHNODE, remote node is unknown
+23:47:40 VAX/SET HOST NOSUCH/status -> SHOW SYMBOL $STATUS |   $STATUS == "%X0000028C"
+23:47:40 VAX/SET HOST VAXC /BOGUS -> SET HOST VAXC /BOGUS | %DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement |  \BOGUS\
+23:47:40 VAX/SET HOST VAXC /BOGUS/status -> SHOW SYMBOL $STATUS |   $STATUS == "%X00038240"
+23:47:40 VAX-SETHOST-0/connect -> SET HOST 0 |  |  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3     |  | Username:
+23:47:40 VAX-SETHOST-0: Username: after 0.2s
+23:48:03 VAX-SETHOST-0/badpw -> User authorization failure | %REM-S-END
+23:48:03 VAX-SETHOST-0: after the bad password: %REM-S-END after 20.2s
+23:48:05 VAX-SETHOST-0/login -> Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAXC |     Last interactive login on Monday,  2-NOV-2026 23:47 | 	1 failure since last successful login
+23:48:07 VAX-SETHOST-0/node -> WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")," TT=",F$GETDVI("TT","FULLDEVNAM | ") | NODE=VAXC TT=_VAXC$RTA1:
+23:48:07 VAX-SETHOST-0/show-terminal -> SHOW TERMINAL | Terminal: _RTA1:      Device_Type: VT100         Owner: _RTA1: |                                               Username: SYSTEM | Remote Port Info: VAXC::SYSTEM |  |    Input:     300     LFfill:  0      Width:  80      Parity: None |    Output:    300     CRfill:  0      Page:   24       |  | Terminal Characteristics: |    Interactive        Echo               Type_ahead         
+23:48:07 VAX-SETHOST-0/show-system -> SHOW SYSTEM | OpenVMS V7.3  on node VAXC   2-NOV-2026 23:48:07.90  Uptime  0 00:02:32 |   Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages | 20200201 SWAPPER         HIB     16        0   0 00:00:00.03         0      0    | 20200206 CLUSTER_SERVER  HIB     12       11   0 00:00:00.02       207    315    | 20200207 CONFIGURE       HIB     11        6   0 00:00:00.02   
+23:48:08 VAX-SETHOST-0/show-users -> SHOW USERS |       OpenVMS User Processes at  2-NOV-2026 23:48:08.03 |     Total number of users = 1,  number of processes = 2 |  |  Username  Node     Interactive  Subprocess   Batch |  SYSTEM     VAXC            2
+23:48:08 VAX-SETHOST-0/directory -> DIRECTORY SYS$SYSTEM:LOGINOUT.EXE,DCL.EXE |  | Directory SYS$COMMON:[SYSEXE] |  | LOGINOUT.EXE;1      DCL.EXE;1            |  | Total of 2 files.
+23:48:08 VAX-SETHOST-0/edit-delete -> SHOW TIMX E |    2-NOV-2026 23:48:08
+23:48:08 VAX-SETHOST-0/edit-ctrlu -> SHOW NONSENSE[K$ [KSHOW TIME |    2-NOV-2026 23:48:08
+23:48:08 VAX-SETHOST-0/edit-recall -> [K$ SHOW TIME |    2-NOV-2026 23:48:08
+23:48:12 VAX-SETHOST-0/ctrly -> SEARCH SYS$SYSTEM:*.EXE "ZZZZQQQQ" | 7[7m Interrupt [m8
+23:48:13 VAX-SETHOST-0/ctrly-after -> WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME") | NODE=VAXC
+23:48:17 VAX-SETHOST-0/ctrlc -> SEARCH SYS$SYSTEM:*.EXE "ZZZZQQQQ" | 7[7m Interrupt [m8
+23:48:18 VAX-SETHOST-0/ctrlc-after -> WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME") | NODE=VAXC
+23:48:18 VAX-SETHOST-0/logout -> LOGOUT |   SYSTEM       logged out at  2-NOV-2026 23:48:18.95 | %REM-S-END, control returned to node VAXC::
+23:48:19 VAX-SETHOST-0/status -> SHOW SYMBOL $STATUS |   $STATUS == "%X00000001"
+23:48:19 VAX-SETHOST-0/local-node -> WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME") | NODE=VAXC
+23:48:38 OVMXA logged in after 19s
+23:48:39 OVMXA NCP executor on = True
+23:48:39 OVMX/decnetd-before -> DIRECTORY/SIZE SYS$SYSTEM:DECNETD.EXE,RTPAD.EXE |  | Directory SYS$SYSROOT:[SYSEXE] |  | DECNETD.EXE;1                             2049 | RTPAD.EXE;1                               1021 |  | Total of 2 files, 3070 blocks.
+23:48:39 OVMX/decnetd-rename -> RENAME SYS$SYSTEM:DECNETD.EXE SYS$SYSTEM:DECNETD.S2HIDDEN | %RMS-E-RNF, file not found - SYS$SYSTEM:DECNETD.EXE
+23:48:39 OVMX/decnetd-rename/status -> SHOW SYMBOL $STATUS |   $STATUS == "%X00000910"
+23:48:40 OVMX/decnetd-rename2 -> RENAME SYS$SYSROOT:[SYSEXE]DECNETD.EXE SYS$SYSROOT:[SYSEXE]DECNETD.S2HIDDEN | %RMS-E-RNF, file not found - SYS$SYSROOT:[SYSEXE]DECNETD.EXE
+23:48:40 OVMX/decnetd-rename2/status -> SHOW SYMBOL $STATUS |   $STATUS == "%X00000910"
+23:48:40 OVMX/decnetd-after -> DIRECTORY/SIZE SYS$SYSTEM:DECNETD.*,RTPAD.EXE |  | Directory SYS$SYSROOT:[SYSEXE] |  | DECNETD.EXE;1                             2049 | RTPAD.EXE;1                               1021 |  | Total of 2 files, 3070 blocks.
+23:48:40 OVMX/decnetd-control -> RUN SYS$SYSTEM:DECNETD.EXE | DECNETD-E-NETACPACT, a NETACP is already serving this node (DNET$NETACP_REQ names its live request mailbox); a node runs one NETACP -- this process is not starting a second | %DCL-E-ABORT, image SYS$SYSTEM:DECNETD.EXE exited with error status %X00000001
+23:48:40 OVMX/decnetd-control/status -> SHOW SYMBOL $STATUS |   $STATUS == "%X0000002C"
+23:48:41 OVMX/SET HOST NOSUCH -> SET HOST NOSUCH | %SYSTEM-F-NOSUCHNODE, remote node is unknown
+23:48:41 OVMX/SET HOST NOSUCH/status -> SHOW SYMBOL $STATUS |   $STATUS == "%X1000028C"
+23:48:41 OVMX/SET HOST VAXC /BOGUS -> SET HOST VAXC /BOGUS | %DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement |  \BOGUS\
+23:48:41 OVMX/SET HOST VAXC /BOGUS/status -> SHOW SYMBOL $STATUS |   $STATUS == "%X00038240"
+23:48:42 OVMX-SETHOST-VAXC/connect -> SET HOST VAXC |  |  |  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3     |  | Username:
+23:48:42 OVMX-SETHOST-VAXC: Username: after 0.5s
+23:50:14 OVMX-SETHOST-VAXC/badpw -> User authorization failure<TIMEOUT 90s>
+23:50:14 OVMX-SETHOST-VAXC: after the bad password: nothing after 90.1s
+23:50:17 OVMX-SETHOST-VAXC/login -> Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAXC |     Last interactive login on Monday,  2-NOV-2026 23:48 | 	1 failure since last successful login
+23:50:19 OVMX-SETHOST-VAXC/node -> WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME")," TT=",F$GETDVI("TT","FULLDEVNAM") |  | NODE=VAXC TT=_VAXC$RTA1:
+23:50:20 OVMX-SETHOST-VAXC/show-terminal -> SHOW TERMINAL |  | Terminal: _RTA1:      Device_Type: LA36          Owner: _RTA1: |                                               Username: SYSTEM | Remote Port Info: OVMXA::SYSTEM |  |    Input:     300     LFfill:  0      Width: 132      Parity: None |    Output:    300     CRfill:  0      Page:   24       |  | Terminal Characteristics: |    Interactive        Echo               
+23:50:20 OVMX-SETHOST-VAXC/show-system -> SHOW SYSTEM |  | OpenVMS V7.3  on node VAXC   2-NOV-2026 23:50:20.05  Uptime  0 00:04:45 |   Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages | 20200201 SWAPPER         HIB     16        0   0 00:00:00.03         0      0    | 20200206 CLUSTER_SERVER  HIB     12       11   0 00:00:00.02       207    315    | 20200207 CONFIGURE       HIB     11        6   0 00:0
+23:50:20 OVMX-SETHOST-VAXC/show-users -> SHOW USERS |  |       OpenVMS User Processes at  2-NOV-2026 23:50:20.49 |     Total number of users = 1,  number of processes = 2 |  |  Username  Node     Interactive  Subprocess   Batch |  SYSTEM     VAXC            2
+23:50:20 OVMX-SETHOST-VAXC/directory -> DIRECTORY SYS$SYSTEM:LOGINOUT.EXE,DCL.EXE |  |  | Directory SYS$COMMON:[SYSEXE] |  | LOGINOUT.EXE;1      DCL.EXE;1            |  | Total of 2 files.
+23:50:20 OVMX-SETHOST-VAXC/edit-delete -> SHOW TIMX E |  |    2-NOV-2026 23:50:20
+23:50:21 OVMX-SETHOST-VAXC/edit-ctrlu -> SHOW NONSENSE                                                                               SHOW TIME |  |    2-NOV-2026 23:50:21
+23:50:21 OVMX-SETHOST-VAXC/edit-recall ->  | $ SHOW TIME
+23:50:25 OVMX-SETHOST-VAXC/ctrly -> SEARCH SYS$SYSTEM:*.EXE "ZZZZQQQQ" | *INTERRUPT* |  | %DCL-F-ABORT, image SYS$SYSTEM:RTPAD.EXE terminated abnormally (signal 2)
+23:50:26 OVMX-SETHOST-VAXC/ctrly-after -> WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME") | NODE=OVMX

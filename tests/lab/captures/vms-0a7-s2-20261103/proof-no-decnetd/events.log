@@ -1,0 +1,18 @@
+01:45:17 VAXC at Username:
+01:45:33 VAXC logged in
+01:45:43 VAXC licensed
+01:45:44 VAXC DECnet executor on
+01:46:03 OVMXA logged in after 18s
+01:46:04 OVMXA NCP executor on = True
+01:46:18 PROOF/copy -> COPY SYS$SYSTEM:RTPAD.EXE SYS$LOGIN:RTPAD.EXE
+01:46:18 PROOF/define -> DEFINE/PROCESS SYS$SYSTEM SYS$LOGIN:
+01:46:18 PROOF/dir -> DIRECTORY/SIZE SYS$SYSTEM:DECNETD.EXE,RTPAD.EXE | %DIRECT-E-OPENIN, error opening SYS$SYSTEM:DECNETD.EXE as input | -RMS-E-FNF, file not found |  | Directory SYS$SYSTEM:[SYSMGR] |  | RTPAD.EXE;1                                772 |  | Total of 1 file, 772 blocks.
+01:46:18 PROOF/control -> RUN SYS$SYSTEM:DECNETD.EXE | %DCL-E-IVIMAGE, image not found - SYS$SYSTEM:DECNETD.EXE
+01:46:18 PROOF/control/status -> SHOW SYMBOL $STATUS |   $STATUS == "%X00000910"
+01:46:19 PROOF/connect -> SET HOST VAXC |  |  |  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3     | Username:
+01:46:22 PROOF/remote -> WRITE SYS$OUTPUT "NODE=",F$GETSYI("NODENAME") |  | NODE=VAXC
+01:46:22 PROOF/logout -> LOGOUT |  |   SYSTEM       logged out at  3-NOV-2026 01:46:22.49 | %REM-S-END,
+01:46:22 PROOF/status -> SHOW SYMBOL $STATUS |   $STATUS == "%X00000001"
+01:46:22 PROOF/deassign -> DEASSIGN/PROCESS SYS$SYSTEM
+01:46:22 PROOF/dir-after -> DIRECTORY/SIZE SYS$SYSTEM:DECNETD.EXE |  | Directory SYS$SYSROOT:[SYSEXE] |  | DECNETD.EXE;1                             2050 |  | Total of 1 file, 2050 blocks.
+01:46:22 DONE

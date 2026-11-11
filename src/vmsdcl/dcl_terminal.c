@@ -333,6 +333,30 @@ int dcl_tt_put_record(const char *text, size_t n)
     return ((st & 1) && (iosb[0] & 1)) ? 0 : -1;
 }
 
+/*
+ * dcl_tt_put_breakthrough - one record written WHILE a read on the terminal is
+ * outstanding, the read shown again after it: $QIO IO$_WRITEVBLK!IO$M_REFRESH
+ * with P4 " ". This is CTRL/T's status line at the prompt (VAX V7.3 keystroke
+ * OOB.PROMPT T/T2: <CR><LF>status<CR><LF><CR><NUL>$ ). A plain write during a
+ * read leaves the read's line where the output left it (rd vms-0a7 S2); the
+ * status line is the write that asks for the redisplay. Goes to the terminal
+ * whatever SYS$OUTPUT names -- the AST is the terminal's. 0, or -1 when there
+ * is no executive terminal.
+ */
+int dcl_tt_put_breakthrough(const char *text, size_t n)
+{
+    uint16_t iosb[4];
+
+    if (n == 0 || !dcl_tt_assign())
+        return -1;
+    if (n > 4096)
+        n = 4096;
+    memset(iosb, 0, sizeof iosb);
+    uint32_t st = sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK | IO$M_REFRESH, iosb, NULL, 0,
+                           (void *)text, (uint32_t)n, 0, ' ', 0, 0);
+    return ((st & 1) && (iosb[0] & 1)) ? 0 : -1;
+}
+
 int dcl_tt_output_ready(void)
 {
     return isatty(STDOUT_FILENO) && dcl_tt_assign();
@@ -593,14 +617,45 @@ int dcl_tt_read_line(const char *prompt, char *buf, size_t bufsz)
  * dcl_tt_set_characteristics - SET TERMINAL's characteristics, in the
  * executive's device row (IO$_SENSEMODE, then IO$_SETMODE with the
  * characteristics buffer -- rd vms-d900's path), so the terminal driver acts
- * on them. `set`/`clr` are VMS_TTC_* bits: the buffer's first three
- * characteristic bytes and its extended longword (bits 32-63). SS$ status.
+ * on them. `set`/`clr` are VMS_TTC_* bits; the buffer carries them as VMS
+ * does, in the $TTDEF / $TT2DEF longwords (bytes 4-6 and 8-11; VAX V7.3
+ * docs/oracle/vax73-starlet-defs/TTDEF.txt, TT2DEF.txt; rd vms-686), and the
+ * device type in byte 1 when `devtype` >= 0. SS$ status.
  */
-uint32_t dcl_tt_set_characteristics(uint64_t set, uint64_t clr)
+static const struct {
+    uint64_t ttc;
+    int      tt2;       /* 0: the TT$ longword, 1: TT2$ */
+    uint32_t mask;
+    int      inverse;   /* the $TTDEF bit means the characteristic is OFF */
+} dcl_ttdef[] = {
+    { VMS_TTC_ECHO,           0, 0x00000002u, 1 },   /* TT$M_NOECHO */
+    { VMS_TTC_TYPEAHEAD,      0, 0x00000004u, 1 },   /* TT$M_NOTYPEAHD */
+    { VMS_TTC_ESCAPE,         0, 0x00000008u, 0 },
+    { VMS_TTC_HOSTSYNC,       0, 0x00000010u, 0 },
+    { VMS_TTC_TTSYNC,         0, 0x00000020u, 0 },
+    { VMS_TTC_LOWERCASE,      0, 0x00000080u, 0 },   /* TT$M_LOWER */
+    { VMS_TTC_TAB,            0, 0x00000100u, 0 },   /* TT$M_MECHTAB */
+    { VMS_TTC_WRAP,           0, 0x00000200u, 0 },
+    { VMS_TTC_HARDCOPY,       0, 0x00001000u, 1 },   /* TT$M_SCOPE */
+    { VMS_TTC_EIGHTBIT,       0, 0x00008000u, 0 },
+    { VMS_TTC_BROADCAST,      0, 0x00020000u, 1 },   /* TT$M_NOBRDCST */
+    { VMS_TTC_READSYNC,       0, 0x00040000u, 0 },
+    { VMS_TTC_FORM,           0, 0x00080000u, 0 },   /* TT$M_MECHFORM */
+    { VMS_TTC_FULLDUP,        0, 0x00100000u, 1 },   /* TT$M_HALFDUP */
+    { VMS_TTC_MODEM,          0, 0x00200000u, 0 },
+    { VMS_TTC_ALTYPEAHD,      1, 0x00000080u, 0 },
+    { VMS_TTC_LINE_EDITING,   1, 0x00001000u, 0 },   /* TT2$M_EDITING */
+    { VMS_TTC_INSERT_EDITING, 1, 0x00002000u, 0 },   /* TT2$M_INSERT */
+    { VMS_TTC_ANSI_CRT,       1, 0x01000000u, 0 },   /* TT2$M_ANSICRT */
+    { VMS_TTC_ADVANCED_VIDEO, 1, 0x08000000u, 0 },   /* TT2$M_AVO */
+    { VMS_TTC_DEC_CRT,        1, 0x20000000u, 0 },   /* TT2$M_DECCRT */
+};
+
+uint32_t dcl_tt_set_characteristics(uint64_t set, uint64_t clr, int devtype)
 {
     uint8_t cb[12];
     uint16_t iosb[4];
-    uint64_t chars;
+    uint32_t tt, tt2;
     uint32_t st;
 
     if (!dcl_tt_assign())
@@ -609,16 +664,28 @@ uint32_t dcl_tt_set_characteristics(uint64_t set, uint64_t clr)
     st = sys$qiow(0, dcl_tt_chan, IO$_SENSEMODE, iosb, NULL, 0, cb, sizeof cb, 0, 0, 0, 0);
     if (!(st & 1) || !(iosb[0] & 1))
         return (st & 1) ? iosb[0] : st;
-    uint32_t ext;
-    memcpy(&ext, cb + 8, 4);
-    chars = (uint64_t)cb[4] | ((uint64_t)cb[5] << 8) | ((uint64_t)cb[6] << 16) |
-            ((uint64_t)ext << 32);
-    chars = (chars | set) & ~clr;
-    cb[4] = (uint8_t)(chars & 0xFF);
-    cb[5] = (uint8_t)((chars >> 8) & 0xFF);
-    cb[6] = (uint8_t)((chars >> 16) & 0xFF);
-    ext = (uint32_t)(chars >> 32);           /* the extended characteristics */
-    memcpy(cb + 8, &ext, 4);
+    tt = (uint32_t)cb[4] | ((uint32_t)cb[5] << 8) | ((uint32_t)cb[6] << 16);
+    memcpy(&tt2, cb + 8, 4);
+    for (unsigned i = 0; i < sizeof dcl_ttdef / sizeof dcl_ttdef[0]; i++) {
+        uint32_t *w = dcl_ttdef[i].tt2 ? &tt2 : &tt;
+        int want;
+        if (set & dcl_ttdef[i].ttc)
+            want = 1;
+        else if (clr & dcl_ttdef[i].ttc)
+            want = 0;
+        else
+            continue;
+        if (want != (dcl_ttdef[i].inverse != 0))
+            *w |= dcl_ttdef[i].mask;
+        else
+            *w &= ~dcl_ttdef[i].mask;
+    }
+    cb[4] = (uint8_t)(tt & 0xFF);
+    cb[5] = (uint8_t)((tt >> 8) & 0xFF);
+    cb[6] = (uint8_t)((tt >> 16) & 0xFF);
+    memcpy(cb + 8, &tt2, 4);
+    if (devtype >= 0)
+        cb[1] = (uint8_t)devtype;
     st = sys$qiow(0, dcl_tt_chan, IO$_SETMODE, iosb, NULL, 0, cb, sizeof cb, 0, 0, 0, 0);
     if (!(st & 1))
         return st;

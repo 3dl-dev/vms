@@ -84,6 +84,7 @@ extern "C" {
 #define IO$M_ESCAPE         0x4000  /*  escape processing enabled */
 #define IO$M_EXTEND         0x8000  /*  extended read */
 #define IO$M_NOFORMAT       0x0100  /*  terminal write: no carriage control (VAX V7.3 IODEF 256) */
+#define IO$M_REFRESH        0x2000  /*  terminal write: the read in progress is shown again after it (IODEF 8192) */
 
 /* IO$_SETMODE terminal modifiers (out-of-band ASTs, rd vms-f0fb). Values from
  * the VAX V7.3 node's own IODEF (docs/oracle/vax73-starlet-defs/IODEF.txt);
@@ -91,6 +92,9 @@ extern "C" {
 #define IO$M_CTRLYAST       0x0080  /* 128  */
 #define IO$M_CTRLCAST       0x0100  /* 256  */
 #define IO$M_OUTBAND        0x0400  /* 1024 */
+/* with IO$M_OUTBAND (VAX V7.3 IODEF, docs/oracle/vax73-starlet-defs/IODEF.txt) */
+#define IO$M_INCLUDE        0x0800  /* 2048: the character is also input */
+#define IO$M_TT_ABORT       0x1000  /* 4096: the character aborts the read */
 /* IO$_SENSEMODE terminal modifier: the type-ahead count (rd vms-d3cd; same
  * IODEF, IO$M_TYPEAHDCNT 64). */
 #define IO$M_TYPEAHDCNT     0x0040  /* 64   */

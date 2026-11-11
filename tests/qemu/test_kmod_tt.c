@@ -657,6 +657,187 @@ int main(void)
                   "the same read resumes and completes with the whole line 'ABCD'");
             (void)screen(m, scr, sizeof(scr), 300);
         }
+        /* CTRL/Y and CTRL/C in an OUT-OF-BAND mask (SET HOST's RTPAD.EXE,
+         * rd vms-0a7 S2): the mask owner gets them -- no *INTERRUPT*, no
+         * CTRL/Y AST (DCL's stays armed and unqueued), no image interrupt,
+         * and the read in progress stays outstanding */
+        {
+            static const uint32_t yc = (1u << 0x19) | (1u << 0x03);
+            (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_CTRLY, 0x5555, 9, 0, 3);
+            st = vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0x6666, 0, yc, 3);
+            CHECK(st & 1, "IO$M_OUTBAND arms an out-of-band AST for CTRL/Y and CTRL/C");
+            while (vms_kif_deliverast(&aa, &ap, &am) == 0)
+                ;
+            rd_start(&r, chan, 0, NULL, 0);
+            msleep(200);
+            type(m, "AB\x19");
+            rd_wait(&r);
+            screen(m, scr, sizeof(scr), 300);
+            got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+            CHECK((r.a.oflags & VMS_TT_RDO_ASTPEND) && got && aa == 0x6666 && ap == 0x19 &&
+                  strstr(scr, "INTERRUPT") == NULL,
+                  "CTRL/Y in the OUTBAND mask: its out-of-band AST (parameter 0x19), no *INTERRUPT*, the read still outstanding");
+            CHECK(vms_kif_deliverast(&aa, &ap, &am) != 0,
+                  "... and the CTRL/Y AST armed beside it is NOT queued");
+            /* CTRL/C the same way, on a read of its own (the CTRL/Y read is
+             * left suspended; the driver lets this one have the slot after
+             * VMS_TT_SUSPEND_MS) */
+            rd_start(&r, chan, 0, NULL, 0);
+            msleep(1500);
+            type(m, "C\x03");
+            rd_wait(&r);
+            (void)screen(m, scr, sizeof(scr), 300);
+            got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+            CHECK((r.a.oflags & VMS_TT_RDO_ASTPEND) && got && aa == 0x6666 && ap == 0x03 &&
+                  strstr(scr, "INTERRUPT") == NULL,
+                  "CTRL/C in the OUTBAND mask: its out-of-band AST (parameter 0x03), no *INTERRUPT*, the read still outstanding");
+            while (vms_kif_deliverast(&aa, &ap, &am) == 0)
+                ;
+            msleep(1200);   /* the suspended read is then abandoned to the next reader */
+        }
+        /* ---- rd vms-0a7 S2: SET HOST's RTPAD on the local driver ---- */
+        {
+            static const uint32_t yc2 = (1u << 0x19) | (1u << 0x03);
+            struct vms_devinfo di;
+
+            /* IO$M_OUTBAND!IO$M_TT_ABORT: CTRL/Y ends the read SS$_ABORT,
+             * the driver shows its interrupt, the AST carries the character */
+            st = vms_kif_tt_oobast_flags(chan, VMS_TT_OOB_OUTBAND, 0x6767, 0, yc2, 3,
+                                         VMS_TT_OOBF_ABORT);
+            CHECK(st & 1, "IO$M_OUTBAND!IO$M_TT_ABORT arms CTRL/Y and CTRL/C");
+            while (vms_kif_deliverast(&aa, &ap, &am) == 0)
+                ;
+            rd_start(&r, chan, 0, "$ ", 0);
+            msleep(200);
+            type(m, "AB\x19");
+            rd_wait(&r);
+            screen(m, scr, sizeof(scr), 300);
+            got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+            CHECK(r.st == SS_ABORT && got && aa == 0x6767 && ap == 0x19 &&
+                  strstr(scr, "*INTERRUPT*\r\n") != NULL,
+                  "IO$M_TT_ABORT: CTRL/Y ends the read SS$_ABORT, *INTERRUPT* shown, its AST queued");
+            /* ... on an ANSI CRT the interrupt is the reverse-video form (VAX
+             * V7.3 VT100: "<ESC>7<ESC>[7m Interrupt <ESC>[m<ESC>8<CR><LF>") */
+            (void)vms_kif_ttsetmode(chan, VMS_TTSET_CHAR, VMS_TTC_ANSI_CRT, 0, 0, 0);
+            rd_start(&r, chan, 0, "$ ", 0);
+            msleep(200);
+            type(m, "\x03");
+            rd_wait(&r);
+            screen(m, scr, sizeof(scr), 300);
+            got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+            CHECK(r.st == SS_ABORT && got && ap == 0x03 &&
+                  strstr(scr, "\r\n\0337\033[7m Interrupt \033[m\0338\r\n") != NULL,
+                  "... CTRL/C on an ANSI CRT: the reverse-video ' Interrupt '");
+            (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0, 0, 0, 3);
+
+            /* CTRL/U on an ANSI CRT, the whole line: erased, the prompt again,
+             * erased to its end (VAX V7.3 VT100: "<CR><ESC>[K<CR><NUL>$ <ESC>[K") */
+            rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+            msleep(200);
+            screen(m, scr, sizeof(scr), 200);
+            type(m, "SHOW NONSENSE\025");
+            msleep(200);
+            screen(m, scr, sizeof(scr), 300);
+            CHECK(memcmp(scr, "SHOW NONSENSE\r\033[K\r\0$ \033[K", 24) == 0,
+                  "CTRL/U on an ANSI CRT: <CR><ESC>[K<CR><NUL>$ <ESC>[K");
+            type(m, "\r");
+            rd_wait(&r);
+            (void)screen(m, scr, sizeof(scr), 300);
+
+            /* the recall key, then the recalled line drawn again IN PLACE on an
+             * ANSI CRT (VAX V7.3 VT100: "<02><CR><ESC>[K<NUL><NUL><NUL>$ SHOW TIME") */
+            rd_start_n(&r, chan, 0, "\r\n\0$ ", 5, 0);
+            msleep(200);
+            (void)screen(m, scr, sizeof(scr), 200);
+            type(m, "\033[A");
+            rd_wait(&r);
+            {
+                static const char ini[] = "SHOW TIME";
+                memset(&r, 0, sizeof r);
+                r.a.chan = chan;
+                r.a.flags = VMS_TT_RD_TIMED | VMS_TT_RD_INISTR;
+                r.a.timeout = BOUND;
+                r.a.buf = (uint64_t)(uintptr_t)r.data;
+                r.a.bufsz = sizeof(r.data) - 1;
+                memcpy(r.prompt, "\r\n\0$ ", 5);
+                r.a.prompt = (uint64_t)(uintptr_t)r.prompt;
+                r.a.promptsz = 5;
+                r.a.inistr = (uint64_t)(uintptr_t)ini;
+                r.a.inisz = 9;
+                pthread_create(&r.th, NULL, rd_main, &r);
+            }
+            msleep(200);
+            screen(m, scr, sizeof(scr), 300);
+            CHECK(memcmp(scr, "\002\r\033[K\0\0\0$ SHOW TIME", 19) == 0,
+                  "a recalled line on an ANSI CRT is drawn in place: <02><CR><ESC>[K<NUL><NUL><NUL>$ SHOW TIME");
+            type(m, "\r");
+            rd_wait(&r);
+            (void)screen(m, scr, sizeof(scr), 300);
+            (void)vms_kif_ttsetmode(chan, VMS_TTSET_CHAR, 0, VMS_TTC_ANSI_CRT, 0, 0);
+
+            /* a $QIO write during a read: without IO$M_REFRESH the read is NOT
+             * shown again (VAX V7.3 SET HOST client: "$ SHOW TI<CR><LF>LATE
+             * <CR>ME"); with it, it is */
+            rd_start(&r, chan, 0, "$ ", 0);
+            msleep(200);
+            type(m, "AB");
+            msleep(150);
+            (void)screen(m, scr, sizeof(scr), 200);
+            st = vms_kif_tt_write(chan, "\r\nLATE\r", 7);
+            msleep(150);
+            screen(m, scr, sizeof(scr), 300);
+            CHECK((st & 1) && strcmp(scr, "\r\nLATE\r") == 0,
+                  "a $QIO write during a read, no IO$M_REFRESH: the read is not shown again");
+            st = vms_kif_tt_write_flags(chan, "X", 1, VMS_TT_WR_REFRESH);
+            msleep(150);
+            screen(m, scr, sizeof(scr), 300);
+            CHECK((st & 1) && strstr(scr, "X") == scr && strstr(scr, "$ AB") != NULL,
+                  "... with IO$M_REFRESH it is: the prompt and the line so far again");
+            type(m, "C\r");
+            rd_wait(&r);
+            (void)screen(m, scr, sizeof(scr), 300);
+            CHECK(strcmp(r.data, "ABC") == 0, "the read goes on through both and completes with 'ABC'");
+
+            /* a deliverable AST lets a waiting read go -- it stays outstanding --
+             * when a signal interrupts the wait (RTPAD's timer AST $DCLASTs the
+             * link's service this way) */
+            st = vms_kif_dclast(0x7171, 7, 3);
+            rd_start(&r, chan, 0, NULL, 0);
+            msleep(200);
+            pthread_kill(r.th, SIGUSR1);
+            rd_wait(&r);
+            got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+            CHECK((st & 1) && (r.a.oflags & VMS_TT_RDO_ASTPEND) && got && aa == 0x7171 && ap == 7,
+                  "a queued AST lets the read go after a signal (ASTPEND), the read outstanding");
+            rd_start(&r, chan, 0, NULL, 0);           /* the same read, resumed */
+            msleep(200);
+            type(m, "Q\r");
+            rd_wait(&r);
+            (void)screen(m, scr, sizeof(scr), 300);
+            CHECK(r.st == SS_NORMAL && strcmp(r.data, "Q") == 0, "... and resumed, it completes with 'Q'");
+
+            /* $CANCEL: a read suspended for an AST ends SS$_ABORT */
+            (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0x6868, 0, 1u << 0x14, 3);
+            rd_start(&r, chan, 0, NULL, 0);
+            msleep(200);
+            type(m, "A\x14");
+            rd_wait(&r);
+            while (vms_kif_deliverast(&aa, &ap, &am) == 0)
+                ;
+            st = vms_kif_tt_cancel(chan);
+            rd_start(&r, chan, 0, NULL, 0);
+            rd_wait(&r);
+            (void)screen(m, scr, sizeof(scr), 300);
+            CHECK((st & 1) && r.st == SS_ABORT, "$CANCEL ends this process's suspended read SS$_ABORT");
+            (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0, 0, 0, 3);
+
+            /* the device type (IO$_SETMODE byte 1; SET TERMINAL/DEVICE=VT100) */
+            st = vms_kif_ttsettype(chan, 96);
+            memset(&di, 0, sizeof di);
+            CHECK((st & 1) && (vms_kif_getdvi_chan(chan, &di) & 1) && di.devtype == 96,
+                  "the terminal's type is set (DT$_VT100 = 96) and $GETDVI reads it back");
+            (void)vms_kif_ttsettype(chan, 0);
+        }
         (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0, 0, 0, 3);
         (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_CTRLY, 0, 0, 0, 3);
 

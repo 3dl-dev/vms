@@ -565,6 +565,16 @@ void vms$$qio_cancel_chan(uint16_t chan) { (void)chan; }
 /* $CANCEL support, io_uring half (vms-c8c): every request queued on the
  * channel's descriptor is cancelled in the kernel and completes with
  * SS$_CANCEL in its IOSB (+ event flag + AST). */
+/* $CANCEL's terminal half (rd vms-0a7 S2): this process's read in progress on
+ * the channel's terminal -- the executive driver's, waiting or suspended while
+ * an AST runs -- ends SS$_ABORT. A channel to anything else: nothing. */
+void vms$$qio_cancel_tt(uint16_t chan)
+{
+    uint32_t ec = vms$$chan_exec_chan(chan);
+    if (ec)
+        (void)vms_kif_tt_cancel(ec);
+}
+
 void vms$$qio_cancel_uring(uint16_t chan)
 {
     int fd = vms$$chan_to_fd(chan);
@@ -1255,6 +1265,99 @@ void vms$$deliver_pending_asts(void);        /* sys_ast.c */
 /* The device class of an executive-resident channel (one $GETDVI by channel,
  * shared by the terminal and LAN dispatch), or -1 for a channel with no
  * executive channel behind it. */
+/*
+ * THE TERMINAL CHARACTERISTICS BUFFER (IO$_SENSEMODE / SENSECHAR / SETMODE /
+ * SETCHAR, rd vms-686). Bytes 4-7 are the TT$ longword (its high byte the page
+ * length) and 8-11 the TT2$ longword, in the $TTDEF/$TT2DEF layout (VAX V7.3,
+ * docs/oracle/vax73-starlet-defs/TTDEF.txt, TT2DEF.txt) -- what a VMS program,
+ * and a SET HOST client reporting its terminal to a VMS host, reads there. The
+ * executive keeps them as VMS_TTC_* bits; these two tables are the one mapping.
+ * A $TTDEF bit with no VMS_TTC_ counterpart is reported clear and left alone on
+ * a set. Checked against a real VAX client's report of a VT100 (docs/oracle/
+ * vax-sethost-cterm.pcap: TT 0x13a0 TTSYNC LOWER MECHTAB WRAP SCOPE, TT2
+ * 0x29003200 ANSICRT AVO DECCRT EDITING INSERT DCL_MAILBX).
+ */
+static const struct { uint32_t tt; uint64_t ttc; int inverse; } tt_map[] = {
+    { 0x00000002u, VMS_TTC_ECHO,        1 },   /* TT$M_NOECHO */
+    { 0x00000004u, VMS_TTC_TYPEAHEAD,   1 },   /* TT$M_NOTYPEAHD */
+    { 0x00000008u, VMS_TTC_ESCAPE,      0 },
+    { 0x00000010u, VMS_TTC_HOSTSYNC,    0 },
+    { 0x00000020u, VMS_TTC_TTSYNC,      0 },
+    { 0x00000080u, VMS_TTC_LOWERCASE,   0 },   /* TT$M_LOWER */
+    { 0x00000100u, VMS_TTC_TAB,         0 },   /* TT$M_MECHTAB */
+    { 0x00000200u, VMS_TTC_WRAP,        0 },
+    { 0x00001000u, VMS_TTC_HARDCOPY,    1 },   /* TT$M_SCOPE */
+    { 0x00002000u, VMS_TTC_REMOTE,      0 },
+    { 0x00008000u, VMS_TTC_EIGHTBIT,    0 },
+    { 0x00020000u, VMS_TTC_BROADCAST,   1 },   /* TT$M_NOBRDCST */
+    { 0x00040000u, VMS_TTC_READSYNC,    0 },
+    { 0x00080000u, VMS_TTC_FORM,        0 },   /* TT$M_MECHFORM */
+    { 0x00100000u, VMS_TTC_FULLDUP,     1 },   /* TT$M_HALFDUP */
+    { 0x00200000u, VMS_TTC_MODEM,       0 },
+};
+static const struct { uint32_t tt2; uint64_t ttc; int inverse; } tt2_map[] = {
+    { 0x00000001u, VMS_TTC_LOCAL_ECHO,      0 },
+    { 0x00000002u, VMS_TTC_AUTOBAUD,        0 },
+    { 0x00000004u, VMS_TTC_HANGUP,          0 },
+    { 0x00000010u, VMS_TTC_BRDCSTMBX,       0 },
+    { 0x00000040u, VMS_TTC_DMA,             0 },
+    { 0x00000080u, VMS_TTC_ALTYPEAHD,       0 },
+    { 0x00000100u, VMS_TTC_SET_SPEED,       0 },   /* TT2$M_SETSPEED */
+    { 0x00000800u, VMS_TTC_COMMSYNC,        0 },
+    { 0x00001000u, VMS_TTC_LINE_EDITING,    0 },   /* TT2$M_EDITING */
+    { 0x00002000u, VMS_TTC_INSERT_EDITING,  0 },   /* TT2$M_INSERT */
+    { 0x00004000u, VMS_TTC_FALLBACK,        0 },
+    { 0x00008000u, VMS_TTC_DIALUP,          0 },
+    { 0x00010000u, VMS_TTC_SECURE_SERVER,   0 },   /* TT2$M_SECURE */
+    { 0x00020000u, VMS_TTC_DISCONNECT,      0 },
+    { 0x00040000u, VMS_TTC_PASTHRU,         0 },
+    { 0x00080000u, VMS_TTC_SYSPASSWORD,     0 },   /* TT2$M_SYSPWD */
+    { 0x00100000u, VMS_TTC_SIXEL,           0 },
+    { 0x00200000u, VMS_TTC_SOFT_CHARACTERS, 0 },   /* TT2$M_DRCS */
+    { 0x00400000u, VMS_TTC_PRINTER_PORT,    0 },   /* TT2$M_PRINTER */
+    { 0x00800000u, VMS_TTC_NUMERIC_KEYPAD,  1 },   /* TT2$M_APP_KEYPAD */
+    { 0x01000000u, VMS_TTC_ANSI_CRT,        0 },   /* TT2$M_ANSICRT */
+    { 0x02000000u, VMS_TTC_REGIS,           0 },
+    { 0x04000000u, VMS_TTC_BLOCK_MODE,      0 },   /* TT2$M_BLOCK */
+    { 0x08000000u, VMS_TTC_ADVANCED_VIDEO,  0 },   /* TT2$M_AVO */
+    { 0x10000000u, VMS_TTC_EDIT_MODE,       0 },   /* TT2$M_EDIT */
+    { 0x20000000u, VMS_TTC_DEC_CRT,         0 },   /* TT2$M_DECCRT */
+    { 0x40000000u, VMS_TTC_DEC_CRT2,        0 },
+    { 0x80000000u, VMS_TTC_DEC_CRT3,        0 },
+};
+
+/* VMS_TTC_* -> the TT$ (bits 0-23) and TT2$ longwords */
+static void ttc_to_ttdef(uint64_t ttc, uint32_t *tt, uint32_t *tt2)
+{
+    uint32_t a = 0, b = 0;
+    for (size_t i = 0; i < sizeof tt_map / sizeof tt_map[0]; i++)
+        if (((ttc & tt_map[i].ttc) != 0) != (tt_map[i].inverse != 0))
+            a |= tt_map[i].tt;
+    for (size_t i = 0; i < sizeof tt2_map / sizeof tt2_map[0]; i++)
+        if (((ttc & tt2_map[i].ttc) != 0) != (tt2_map[i].inverse != 0))
+            b |= tt2_map[i].tt2;
+    *tt = a;
+    *tt2 = b;
+}
+
+/* The TT$ (bits 0-23) and, when `has2`, TT2$ longwords -> the VMS_TTC_* bits
+ * to set and to clear (only bits the buffer can say anything about). */
+static void ttdef_to_ttc(uint32_t tt, uint32_t tt2, int has2, uint64_t *set, uint64_t *clr)
+{
+    uint64_t s1 = 0, c1 = 0;
+    for (size_t i = 0; i < sizeof tt_map / sizeof tt_map[0]; i++) {
+        int on = ((tt & tt_map[i].tt) != 0) != (tt_map[i].inverse != 0);
+        if (on) s1 |= tt_map[i].ttc; else c1 |= tt_map[i].ttc;
+    }
+    if (has2)
+        for (size_t i = 0; i < sizeof tt2_map / sizeof tt2_map[0]; i++) {
+            int on = ((tt2 & tt2_map[i].tt2) != 0) != (tt2_map[i].inverse != 0);
+            if (on) s1 |= tt2_map[i].ttc; else c1 |= tt2_map[i].ttc;
+        }
+    *set = s1;
+    *clr = c1;
+}
+
 static int qio_chan_exec_class(uint16_t chan, uint32_t *exec_chan_out,
                                struct vms_devinfo *info)
 {
@@ -1375,12 +1478,13 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
             b[1] = (uint8_t)info->devtype;
             b[2] = (uint8_t)(w & 0xFF);
             b[3] = (uint8_t)((w >> 8) & 0xFF);
-            b[4] = (uint8_t)(info->devchar & 0xFF);
-            b[5] = (uint8_t)((info->devchar >> 8) & 0xFF);
-            b[6] = (uint8_t)((info->devchar >> 16) & 0xFF);
+            uint32_t tt = 0, tt2 = 0;
+            ttc_to_ttdef(info->devchar, &tt, &tt2);
+            b[4] = (uint8_t)(tt & 0xFF);
+            b[5] = (uint8_t)((tt >> 8) & 0xFF);
+            b[6] = (uint8_t)((tt >> 16) & 0xFF);
             b[7] = (uint8_t)(pg & 0xFF);
-            uint32_t ext = (uint32_t)(info->devchar >> 32);
-            memcpy(b + 8, &ext, 4);
+            memcpy(b + 8, &tt2, 4);
             memcpy(p1, b, p2 < sizeof b ? p2 : sizeof b);
         }
         tt_iosb(iosb_ptr, SS$_NORMAL, TT_SPEED_9600, 0, 0);
@@ -1404,9 +1508,13 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
             uintptr_t mq = p4 ? p4 : (uintptr_t)p2;
             if (which == VMS_TT_OOB_OUTBAND && mq)
                 mask = ((const uint32_t *)mq)[1];
-            uint32_t st = vms_kif_tt_oobast(ec, which, (uint64_t)(uintptr_t)p1,
-                                            which == VMS_TT_OOB_OUTBAND ? 0 : p2,
-                                            mask, p3 & 3u);
+            /* IO$M_TT_ABORT: an interrupt character in the mask also
+             * aborts the read in progress (rd vms-0a7 S2) */
+            uint32_t st = which == VMS_TT_OOB_OUTBAND
+                ? vms_kif_tt_oobast_flags(ec, which, (uint64_t)(uintptr_t)p1, 0, mask,
+                                          p3 & 3u,
+                                          (func & IO$M_TT_ABORT) ? VMS_TT_OOBF_ABORT : 0)
+                : vms_kif_tt_oobast(ec, which, (uint64_t)(uintptr_t)p1, p2, 0, p3 & 3u);
             if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
             tt_iosb(iosb_ptr, SS$_NORMAL, 0, 0, 0);
             break;
@@ -1423,20 +1531,26 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
         const uint8_t *b = (const uint8_t *)p1;
         uint32_t width = (uint32_t)b[2] | ((uint32_t)b[3] << 8);
         uint32_t page = b[7];
-        uint64_t chars = (uint64_t)b[4] | ((uint64_t)b[5] << 8) | ((uint64_t)b[6] << 16);
-        if (p2 >= 12) {
-            uint32_t ext; memcpy(&ext, b + 8, 4);
-            chars |= (uint64_t)ext << 32;
-        }
-        /* the buffer carries characteristic bits 0-23 and (with room) the
-         * extended longword; bits 24-31 are not in it and are left alone */
-        uint64_t covered = 0x0000000000FFFFFFULL | (p2 >= 12 ? 0xFFFFFFFF00000000ULL : 0);
+        /* bytes 4-6: TT$ bits 0-23; 8-11 (with room): TT2$ ($TTDEF layout,
+         * see ttdef_to_ttc). A characteristic the buffer cannot carry --
+         * INTERACTIVE, say -- is left alone. */
+        uint32_t tt = (uint32_t)b[4] | ((uint32_t)b[5] << 8) | ((uint32_t)b[6] << 16);
+        uint32_t tt2 = 0;
+        if (p2 >= 12)
+            memcpy(&tt2, b + 8, 4);
+        uint64_t cset = 0, cclr = 0;
+        ttdef_to_ttc(tt, tt2, p2 >= 12, &cset, &cclr);
         /* IO$_SETCHAR sets the permanent characteristics as well as the
          * current ones; IO$_SETMODE only the current (rd vms-d900). */
         uint32_t st = vms_kif_ttsetmode(ec, VMS_TTSET_CHAR | VMS_TTSET_WIDTH | VMS_TTSET_PAGE |
                                             (base == IO$_SETCHAR ? VMS_TTSET_PERM : 0),
-                                        chars & covered, (~chars) & covered, width, page);
+                                        cset, cclr, width, page);
         if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
+        /* byte 1: the terminal's type (DT$_), when it is not what it was */
+        if (b[1] != (uint8_t)info->devtype) {
+            st = vms_kif_ttsettype(ec, b[1]);
+            if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
+        }
         tt_iosb(iosb_ptr, SS$_NORMAL, TT_SPEED_9600, 0, 0);
         break;
     }
@@ -1556,14 +1670,20 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
         int prompt = ((p4 & 0xFF) == 0x24) && !(func & IO$M_NOFORMAT);
         /* An empty record (P2 = 0, P4 " ") is still a record: its new line and
          * carriage return show a blank line, as DCL's blank output lines do on
-         * VAX V7.3 (SHOW CPU / SHOW PROCESS goldens, rd vms-1b6a). */
+         * VAX V7.3 (SHOW CPU / SHOW PROCESS goldens, rd vms-1b6a).
+         * IO$M_REFRESH: a read in progress is shown again after the write;
+         * without it the read's line stays where the output left it. */
         uint32_t st = (record && !p2) ? vms_kif_tt_write_record(ec, p1, 0)
-                    : (p1 && p2) ? (record ? vms_kif_tt_write_record(ec, p1, p2)
-                                    : prompt ? vms_kif_tt_write_prompt(ec, p1, p2)
-                                    : (func & IO$M_NOFORMAT)
-                                           ? vms_kif_tt_write_noformat(ec, p1, p2)
-                                           : vms_kif_tt_write(ec, p1, p2))
-                                 : SS$_NORMAL;
+                    : !(p1 && p2) ? SS$_NORMAL
+                    : (func & IO$M_REFRESH)
+                          ? vms_kif_tt_write_flags(ec, p1, p2, VMS_TT_WR_REFRESH |
+                                                   (record ? VMS_TT_WR_RECORD
+                                                    : prompt ? VMS_TT_WR_PROMPT
+                                                    : (func & IO$M_NOFORMAT) ? VMS_TT_WR_NOFORMAT : 0))
+                    : record ? vms_kif_tt_write_record(ec, p1, p2)
+                    : prompt ? vms_kif_tt_write_prompt(ec, p1, p2)
+                    : (func & IO$M_NOFORMAT) ? vms_kif_tt_write_noformat(ec, p1, p2)
+                    : vms_kif_tt_write(ec, p1, p2);
         if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
         tt_iosb(iosb_ptr, SS$_NORMAL, (uint16_t)(p2 + (record && p2 ? 3 : 0)), 0, 0);
         break;

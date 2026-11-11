@@ -170,6 +170,11 @@ static uint32_t bg_qio_func(uint32_t exec_chan, uint32_t func, void *p1,
             return vms_kif_bg_iflist(exec_chan, (struct vms_bg_ifent *)p1,
                                      p2 / (uint32_t)sizeof(struct vms_bg_ifent),
                                      actlen);
+        case IO$K_BG_SENSE_ROUTES:
+            if (!p1) return SS$_BADPARAM;
+            return vms_kif_bg_routes(exec_chan, (struct vms_bg_rtent *)p1,
+                                     p2 / (uint32_t)sizeof(struct vms_bg_rtent),
+                                     actlen);
         case IO$K_BG_SENSE_READY:
             if (!p1 && p2) return SS$_BADPARAM;
             return vms_kif_bg_select((struct vms_bg_selent *)p1, p2,

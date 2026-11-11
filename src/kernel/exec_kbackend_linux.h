@@ -98,6 +98,8 @@
 #include <net/inet_sock.h>        /* inet_sk() */
 #include <linux/poll.h>               /* poll_table, init_poll_funcptr (exec_socket_wait_ready, vms-99f) */
 #include <linux/inetdevice.h>    /* in_dev, in_dev_for_each_ifa_rtnl (exec_socket_iflist, vms-99f) */
+#include <linux/netlink.h>        /* sockaddr_nl, NETLINK_ROUTE (exec_socket_routes, vms-6d6c) */
+#include <net/netlink.h>          /* nlmsg_ok/nlmsg_next, nla_for_each_attr (exec_socket_routes) */
 
 /* ---- primitive types ---- */
 typedef spinlock_t        exec_lock_t;
@@ -1407,6 +1409,158 @@ static inline int exec_socket_iflist(exec_socket_t s, struct exec_ifent *ent,
 	rtnl_unlock();
 	*count = n;
 	return 0;
+}
+
+/* The route list (rd vms-6d6c, TCPIP SHOW ROUTE): the IPv4 main unicast
+ * routing table of the network namespace the channel's OWN socket lives in.
+ * The FIB trie walk is not exported to modules, so the executive asks the
+ * kernel the documented way any routing client does -- an RTM_GETROUTE dump
+ * (NLM_F_DUMP, AF_INET) on a kernel NETLINK_ROUTE socket created in that
+ * namespace (sock_create_kern) -- and reads each RTM_NEWROUTE back: rtm_dst_len
+ * -> mask, RTA_DST / RTA_GATEWAY / RTA_OIF / RTA_TABLE. Only RT_TABLE_MAIN
+ * RTN_UNICAST routes (the table /proc/net/route shows); the output interface's
+ * name is the live net_device's. Nothing is synthesized. Public rtnetlink(7)
+ * message format + netlink KPI only (Rule 8). */
+static inline int exec_socket_routes(exec_socket_t s, struct exec_rtent *ent,
+				     uint32_t max, uint32_t *count)
+{
+	struct {
+		struct nlmsghdr nh;
+		struct rtmsg rt;
+	} req;
+	const size_t bufsz = 32768;
+	struct sockaddr_nl sa;
+	struct msghdr msg;
+	struct kvec iov;
+	struct socket *nl;
+	struct net *net;
+	void *buf;
+	uint32_t n = 0;
+	int rc, done = 0;
+
+	*count = 0;
+	if (!s || !s->sock || !s->sock->sk)
+		return -EINVAL;
+	net = sock_net(s->sock->sk);
+	buf = kmalloc(bufsz, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+	rc = sock_create_kern(net, AF_NETLINK, SOCK_RAW, NETLINK_ROUTE, &nl);
+	if (rc) {
+		kfree(buf);
+		return rc;
+	}
+	nl->sk->sk_rcvtimeo = 2 * HZ;   /* a dump that never ends is an error, not a hang */
+
+	memset(&req, 0, sizeof(req));
+	req.nh.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
+	req.nh.nlmsg_type = RTM_GETROUTE;
+	req.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+	req.nh.nlmsg_seq = 1;
+	req.rt.rtm_family = AF_INET;
+	memset(&sa, 0, sizeof(sa));
+	sa.nl_family = AF_NETLINK;          /* nl_pid 0: the kernel */
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_name = &sa;
+	msg.msg_namelen = sizeof(sa);
+	iov.iov_base = &req;
+	iov.iov_len = req.nh.nlmsg_len;
+	rc = kernel_sendmsg(nl, &msg, &iov, 1, iov.iov_len);
+	if (rc < 0)
+		goto out;
+
+	while (!done) {
+		const struct nlmsghdr *nh;
+		int len;
+
+		memset(&msg, 0, sizeof(msg));
+		iov.iov_base = buf;
+		iov.iov_len = bufsz;
+		rc = kernel_recvmsg(nl, &msg, &iov, 1, bufsz, 0);
+		if (rc < 0)
+			goto out;
+		if (rc == 0 || (msg.msg_flags & MSG_TRUNC)) {
+			rc = -EIO;
+			goto out;
+		}
+		len = rc;
+		for (nh = buf; nlmsg_ok(nh, len); nh = nlmsg_next(nh, &len)) {
+			const struct rtmsg *rtm;
+			const struct nlattr *a;
+			struct exec_rtent *e;
+			uint32_t table, oif = 0;
+			__be32 dst = 0, gw = 0;
+			int rem;
+
+			if (nh->nlmsg_type == NLMSG_DONE) {
+				done = 1;
+				break;
+			}
+			if (nh->nlmsg_type == NLMSG_ERROR) {
+				const struct nlmsgerr *err = nlmsg_data(nh);
+
+				rc = err->error ? err->error : -EIO;
+				goto out;
+			}
+			if (nh->nlmsg_type != RTM_NEWROUTE ||
+			    nh->nlmsg_len < NLMSG_LENGTH(sizeof(*rtm)))
+				continue;
+			rtm = nlmsg_data(nh);
+			if (rtm->rtm_family != AF_INET || rtm->rtm_type != RTN_UNICAST ||
+			    rtm->rtm_dst_len > 32)
+				continue;
+			table = rtm->rtm_table;
+			nla_for_each_attr(a, nlmsg_attrdata(nh, sizeof(*rtm)),
+					  nlmsg_attrlen(nh, sizeof(*rtm)), rem) {
+				switch (nla_type(a)) {
+				case RTA_DST:
+					if (nla_len(a) >= 4) dst = nla_get_in_addr(a);
+					break;
+				case RTA_GATEWAY:
+					if (nla_len(a) >= 4) gw = nla_get_in_addr(a);
+					break;
+				case RTA_OIF:
+					if (nla_len(a) >= 4) oif = nla_get_u32(a);
+					break;
+				case RTA_TABLE:
+					if (nla_len(a) >= 4) table = nla_get_u32(a);
+					break;
+				}
+			}
+			if (table != RT_TABLE_MAIN || n >= max)
+				continue;   /* keep draining the dump to NLMSG_DONE */
+			e = &ent[n];
+			memset(e, 0, sizeof(*e));
+			e->dest = (uint32_t)dst;
+			e->gw = (uint32_t)gw;
+			e->mask = rtm->rtm_dst_len ?
+				  (uint32_t)htonl(~0u << (32 - rtm->rtm_dst_len)) : 0;
+			e->flags = (rtm->rtm_flags & RTNH_F_DEAD) ? 0 : EXEC_RTF_UP;
+			if (gw)
+				e->flags |= EXEC_RTF_GATEWAY;
+			if (rtm->rtm_dst_len == 32)
+				e->flags |= EXEC_RTF_HOST;
+			if (oif) {
+				struct net_device *dev = dev_get_by_index(net, (int)oif);
+
+				if (dev) {
+					unsigned int i;
+
+					for (i = 0; i + 1 < sizeof(e->ifname) && dev->name[i]; i++)
+						e->ifname[i] = dev->name[i];
+					dev_put(dev);
+				}
+			}
+			n++;
+		}
+	}
+	rc = 0;
+out:
+	sock_release(nl);
+	kfree(buf);
+	if (rc == 0)
+		*count = n;
+	return rc < 0 ? rc : 0;
 }
 
 /* The readiness wait (rd vms-99f) behind the C RTL's select()/poll() on BG

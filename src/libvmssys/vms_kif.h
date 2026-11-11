@@ -1418,6 +1418,14 @@ uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
 struct vms_bg_ifent;
 uint32_t vms_kif_bg_iflist(uint32_t exec_chan, struct vms_bg_ifent *out,
                            uint32_t max, uint32_t *count);
+/* IO$_SENSEMODE route list (rd vms-6d6c) -- the executive's own IPv4 main
+ * routing table (dest/gateway/mask/flags/output interface), read live from the
+ * stack the channel's socket lives in; TCPIP SHOW ROUTE's source. The channel
+ * needs its socket (vms_kif_bg_setmode first). Fails SS$_NOSUCHDEV with no
+ * executive, SS$_IVCHAN with no socket. */
+struct vms_bg_rtent;
+uint32_t vms_kif_bg_routes(uint32_t exec_chan, struct vms_bg_rtent *out,
+                           uint32_t max, uint32_t *count);
 /* IO$_SENSEMODE readiness wait (rd vms-99f) over up to VMS_BG_SELECT_MAX BG
  * channels: each entry's revents gets the executive's live VMS_BG_RDY_* state;
  * timeout_ms 0 = sense only, < 0 = no limit. SS$_IVCHAN when a channel has no

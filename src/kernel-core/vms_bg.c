@@ -826,6 +826,74 @@ free:
 }
 
 /*
+ * IO$_SENSEMODE route-list subfunction (rd vms-6d6c) -- TCPIP SHOW ROUTE's
+ * source. As the interface list: the channel's socket must exist (none ->
+ * SS$_IVCHAN); the executive reads the main unicast routing table of the
+ * network stack THAT socket lives in (exec_socket_routes) and copies each
+ * route's live destination / gateway / mask / flags / output interface into the
+ * caller's array. Nothing is synthesized: -EOPNOTSUPP -> SS$_UNSUPPORTED, any
+ * other failure -> SS$_ABORT.
+ */
+_Static_assert(VMS_BG_RTF_UP == EXEC_RTF_UP && VMS_BG_RTF_GATEWAY == EXEC_RTF_GATEWAY &&
+               VMS_BG_RTF_HOST == EXEC_RTF_HOST,
+               "VMS_BG_RTF_* wire bits must equal the backend's EXEC_RTF_* bits");
+
+long vms_ioctl_bg_routes(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_bg_routes_args *args;
+    struct exec_rtent *ent;
+    exec_socket_t sock;
+    uint32_t i, max, n = 0;
+    int rc;
+
+    args = kzalloc(sizeof(*args), GFP_KERNEL);
+    ent = kcalloc(VMS_BG_ROUTES_MAX, sizeof(*ent), GFP_KERNEL);
+    if (!args || !ent) {
+        kfree(args);
+        kfree(ent);
+        return -ENOMEM;
+    }
+    if (copy_from_user(args, (const void __user *)arg, sizeof(*args))) {
+        rc = -EFAULT;
+        goto free;
+    }
+    max = args->max < VMS_BG_ROUTES_MAX ? args->max : VMS_BG_ROUTES_MAX;
+    memset(args->ent, 0, sizeof(args->ent));
+    args->count = 0;
+
+    sock = vms_bg_ref_socket(proc, args->chan);   /* held across the (sleeping) dump */
+    if (!sock) {
+        args->status = SS__IVCHAN;   /* no channel, or IO$_SETMODE never issued */
+        goto out;
+    }
+    rc = exec_socket_routes(sock, ent, max, &n);
+    exec_socket_release(sock);
+    if (rc) {
+        args->status = (rc == -EOPNOTSUPP) ? SS__UNSUPPORTED : SS__ABORT;
+        goto out;
+    }
+    for (i = 0; i < n && i < max; i++) {
+        struct vms_bg_rtent *o = &args->ent[i];
+
+        o->dest = ent[i].dest;
+        o->gw = ent[i].gw;   /* NEGCTL bg-routes-gw-zeroed */
+        o->mask = ent[i].mask;
+        o->flags = ent[i].flags;
+        memcpy(o->ifname, ent[i].ifname, sizeof(o->ifname));
+        o->ifname[sizeof(o->ifname) - 1] = '\0';
+    }
+    args->count = i;
+    args->status = SS__NORMAL;
+
+out:
+    rc = copy_to_user((void __user *)arg, args, sizeof(*args)) ? -EFAULT : 0;
+free:
+    kfree(ent);
+    kfree(args);
+    return rc;
+}
+
+/*
  * IO$_SENSEMODE readiness subfunction (rd vms-99f) -- the executive half of the C
  * RTL's select()/poll() on sockets. Each named channel's socket is referenced for
  * the duration (a concurrent $DASSGN cannot free it under the wait), its live

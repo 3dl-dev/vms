@@ -307,6 +307,36 @@ uint32_t vms_kif_bg_iflist(uint32_t exec_chan, struct vms_bg_ifent *out,
     return args.status;
 }
 
+/* IO$_SENSEMODE route list (rd vms-6d6c) -- the executive's own IPv4 main
+ * routing table, read from the stack the channel's socket lives in (TCPIP SHOW
+ * ROUTE). The channel must have its socket (IO$_SETMODE first). `out` takes at
+ * most `max` entries (clamped to VMS_BG_ROUTES_MAX); *count gets the number
+ * filled. /dev/vms absent -> SS$_NOSUCHDEV, never a host listing. */
+uint32_t vms_kif_bg_routes(uint32_t exec_chan, struct vms_bg_rtent *out,
+                           uint32_t max, uint32_t *count)
+{
+    struct vms_bg_routes_args args;
+    uint32_t i;
+
+    if (count) *count = 0;
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+    args.max = (max < VMS_BG_ROUTES_MAX) ? max : VMS_BG_ROUTES_MAX;
+
+    KIF_CALL(VMS_IOCTL_BG_ROUTES, &args);
+
+    if (args.status & 1) {
+        uint32_t n = (args.count < args.max) ? args.count : args.max;
+        for (i = 0; i < n; i++)
+            if (out) vms_memcpy(&out[i], &args.ent[i], sizeof(out[i]));
+        if (count) *count = n;
+    }
+    return args.status;
+}
+
 /* IO$_SENSEMODE readiness wait (rd vms-99f): the C RTL's select()/poll() on BG
  * channels. ent[0..n-1] name the channels and the VMS_BG_RDY_* conditions each
  * waits for; on return their revents are the executive's live readiness and

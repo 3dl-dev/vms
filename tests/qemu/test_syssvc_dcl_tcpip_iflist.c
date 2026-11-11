@@ -24,6 +24,11 @@
  * With no executive it exits EXIT_SKIP (77), the honest-skip code the
  * kernel-executive negative-control rig requires of every public-sys$ suite.
  * NEGATIVE CONTROL: tests/qemu/defects.d/bg-iflist-mask-zeroed.defect.
+ *
+ * TCPIP SHOW ROUTE (rd vms-6d6c) is proven here too: its rows come from the
+ * executive's IO$_SENSEMODE route-list request (VMS_IOCTL_BG_ROUTES), checked
+ * against a route the test adds and the kernel's /proc/net/route count.
+ * NEGATIVE CONTROL: tests/qemu/defects.d/bg-routes-gw-zeroed.defect.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +44,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <net/if.h>
+#include <net/route.h>         /* struct rtentry, RTF_* (the test adds a route) */
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -52,6 +58,11 @@
 #define NIC_ADDR "10.0.2.15"
 #define NIC_MASK "255.255.255.0"
 #define NIC_MTU  1432          /* distinctive: not the 1500 default */
+
+/* The route the test adds (rd vms-6d6c): TEST-NET-2 via the slirp gateway. */
+#define RT_NET  "198.51.100.0"
+#define RT_MASK "255.255.255.0"
+#define RT_GW   "10.0.2.2"
 
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
@@ -159,6 +170,55 @@ static int count_rows(const char *out)
         p = eol;
     }
     return n;
+}
+
+/* The kernel's own count of usable main-table routes (independent source:
+ * /proc/net/route, read by the TEST, never by DCL). */
+static int count_proc_routes(void)
+{
+    FILE *f = fopen("/proc/net/route", "r");
+    char line[256];
+    int n = 0;
+    if (!f) return -1;
+    if (!fgets(line, sizeof line, f)) { fclose(f); return -1; }
+    while (fgets(line, sizeof line, f)) {
+        char ifn[32]; unsigned long dst, gw; unsigned int flags;
+        if (sscanf(line, "%31s %lx %lx %x", ifn, &dst, &gw, &flags) == 4 && (flags & RTF_UP))
+            n++;
+    }
+    fclose(f);
+    return n;
+}
+
+/* SHOW ROUTE rows: "<dest> <gw> <mask> <iface>" after the Destination header. */
+static int route_rows(const char *out, const char *d, const char *g,
+                      const char *m, const char *ifn)
+{
+    int n = 0, hit = 0;
+    const char *p = strstr(out, "Destination");
+    if (!p) return -1;
+    p = strchr(p, '\n');
+    while (p && *++p) {
+        const char *eol = strchr(p, '\n');
+        char line[256], c1[32], c2[32], c3[32], c4[32];
+        size_t len = eol ? (size_t)(eol - p) : strlen(p);
+        if (len >= sizeof line) len = sizeof line - 1;
+        memcpy(line, p, len); line[len] = '\0';
+        if (sscanf(line, "%31s %31s %31s %31s", c1, c2, c3, c4) == 4 &&
+            (isdigit((unsigned char)c1[0]) || !strcmp(c1, "default"))) {
+            n++;
+            if (d && !strcmp(c1, d) && !strcmp(c2, g) && !strcmp(c3, m) && !strcmp(c4, ifn))
+                hit = 1;
+        }
+        p = eol;
+    }
+    return d ? hit : n;
+}
+static int count_route_rows(const char *out) { return route_rows(out, NULL, NULL, NULL, NULL); }
+static int has_route_row(const char *out, const char *d, const char *g,
+                         const char *m, const char *ifn)
+{
+    return route_rows(out, d, g, m, ifn) == 1;
 }
 
 static int set_ifaddr(int s, const char *ifn, unsigned long req, const char *dotted)
@@ -316,6 +376,58 @@ int main(void)
     CHECK(have_se && strcmp(se.state, "Up") == 0, "SE0 state is Up");
     CHECK(have_se && nic_hw[0] && strcmp(se.hw, nic_hw) == 0,
           "SE0 /FULL hardware address equals /sys/class/net/<nic>/address");
+
+    /* ==== TCPIP SHOW ROUTE reads the EXECUTIVE'S routing table (rd vms-6d6c) ====
+     * The test adds a distinctive gateway route through the substrate
+     * (SIOCADDRT, the TEST's doing), then requires SHOW ROUTE -- whose rows
+     * come from the IO$_SENSEMODE route-list request, never /proc/net/route in
+     * DCL -- to show it and the NIC's on-link route on SE0, and to carry exactly
+     * as many routes as the kernel's own /proc/net/route (an independent
+     * source, read here by the test). */
+    {
+        uint32_t chan = 0, cnt = 99;
+        struct vms_bg_rtent rent[VMS_BG_ROUTES_MAX];
+        uint32_t st = vms_kif_bg_create(&chan, NULL, NULL, 0);
+        CHECK(st & 1, "route list: $ASSIGN TCPIP$DEVICE: succeeds");
+        st = vms_kif_bg_routes(chan, rent, VMS_BG_ROUTES_MAX, &cnt);
+        CHECK(st == SS$_IVCHAN && cnt == 0,
+              "the route list on a channel with no socket (no IO$_SETMODE) is SS$_IVCHAN, nothing returned");
+        (void)vms_kif_bg_dassgn(chan);
+    }
+
+    struct rtentry rte;
+    memset(&rte, 0, sizeof rte);
+    ((struct sockaddr_in *)&rte.rt_dst)->sin_family = AF_INET;
+    inet_pton(AF_INET, RT_NET, &((struct sockaddr_in *)&rte.rt_dst)->sin_addr);
+    ((struct sockaddr_in *)&rte.rt_genmask)->sin_family = AF_INET;
+    inet_pton(AF_INET, RT_MASK, &((struct sockaddr_in *)&rte.rt_genmask)->sin_addr);
+    ((struct sockaddr_in *)&rte.rt_gateway)->sin_family = AF_INET;
+    inet_pton(AF_INET, RT_GW, &((struct sockaddr_in *)&rte.rt_gateway)->sin_addr);
+    rte.rt_flags = RTF_UP | RTF_GATEWAY;
+    rte.rt_dev = nic;
+    int rt_added = ioctl(s, SIOCADDRT, &rte) == 0;
+    CHECK(rt_added, "test added the route " RT_NET "/" RT_MASK " via " RT_GW " (substrate SIOCADDRT)");
+
+    int proc_routes = count_proc_routes();
+    static char rout[16384];
+    CHECK(run_dcl("TCPIP SHOW ROUTE\nSHOW SYMBOL $STATUS\n", rout, sizeof rout) == 0,
+          "DCL ran TCPIP SHOW ROUTE");
+    printf("  ---- SHOW ROUTE ----\n%s  ---- end ----\n", rout);
+    CHECK(strstr(rout, "NOEXEC") == NULL && strstr(rout, "NOROUTE") == NULL,
+          "no %TCPIP-E-NOEXEC / NOROUTE: the routing table came from the executive");
+    CHECK(strstr(rout, "$STATUS == \"%X00000001\"") != NULL, "SHOW ROUTE exits SS$_NORMAL");
+    /* negctl: bg-routes-gw-zeroed */
+    CHECK(has_route_row(rout, RT_NET, RT_GW, RT_MASK, "SE0"),
+          /* literal text: the negctl manifest checker matches it verbatim */
+          "SHOW ROUTE: 198.51.100.0 via 10.0.2.2 mask 255.255.255.0 on SE0 (the gateway the test added)");
+    CHECK(has_route_row(rout, "10.0.2.0", "*", NIC_MASK, "SE0"),
+          "SHOW ROUTE: the NIC's on-link route 10.0.2.0 * 255.255.255.0 on SE0");
+    CHECK(proc_routes > 0 && count_route_rows(rout) == proc_routes,
+          "one row per usable route in the kernel's main table (/proc/net/route count)");
+    CHECK(strstr(rout, nic) == NULL, "the substrate NIC name is not shown by SHOW ROUTE");
+
+    if (rt_added)
+        (void)ioctl(s, SIOCDELRT, &rte);
 
     /* ---- restore the NIC ---- */
     memset(&ifr, 0, sizeof ifr);

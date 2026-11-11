@@ -1963,6 +1963,7 @@ long vms_ioctl_bg_pollfd(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_getname(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_sockopt(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_iflist(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_routes(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_select(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_bind(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_listen(struct vms_proc *proc, unsigned long arg);

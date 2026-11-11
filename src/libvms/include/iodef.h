@@ -181,6 +181,8 @@ struct tcpip_timeval32 {            /* the RCVTIMEO value: two 32-bit fields */
  *                         the IOSB count is the number of ready channels.
  *   IO$K_BG_SENSE_LOCAL / IO$K_BG_SENSE_PEER
  *                         P1 = the 8-byte family/port/address block out.
+ *   IO$K_BG_SENSE_ROUTES  P1 = struct vms_bg_rtent[], P2 = its size in bytes;
+ *                         the IOSB count is the number of routes (rd vms-6d6c).
  * With P3 = 0, IO$_SENSEMODE's P4 is a socket-option list (TCPIP$C_SOCKOPT /
  * TCPIP$C_TCPOPT / TCPIP$C_IPOPT above) whose entries it fills (getsockopt).
  */
@@ -188,6 +190,7 @@ struct tcpip_timeval32 {            /* the RCVTIMEO value: two 32-bit fields */
 #define IO$K_BG_SENSE_READY    2
 #define IO$K_BG_SENSE_LOCAL    3
 #define IO$K_BG_SENSE_PEER     4
+#define IO$K_BG_SENSE_ROUTES   5
 
 /*
  * TERMINAL (TTn:/RTAn:/OPA0:) IO$_SETMODE line-discipline selector, passed in P2

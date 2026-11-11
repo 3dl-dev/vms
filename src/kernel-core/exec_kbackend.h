@@ -688,6 +688,19 @@
  *        IFADDR_READER_FOREACH(AF_INET) in a pserialize read section,
  *        CLLADDR(if_sadl) (contract-only twin, like the rest of SS12 there).
  *
+ *   int  exec_socket_routes(exec_socket_t s, struct exec_rtent *ent,
+ *                           uint32_t max, uint32_t *count)   (rd vms-6d6c)
+ *        list the IPv4 routes of the MAIN unicast routing table of the network
+ *        stack the socket s lives in (TCPIP SHOW ROUTE's source), filling at
+ *        most `max` entries and *count with the number filled. Per route: its
+ *        destination, gateway (0 when on-link), mask (network order), EXEC_RTF_*
+ *        flags and output interface name. Every field is read from the live
+ *        stack, never synthesized. 0 / negative errno (-EOPNOTSUPP when the
+ *        backend cannot read its routing table). MAY SLEEP.
+ *        Linux: an in-kernel NETLINK_ROUTE RTM_GETROUTE dump on a kernel socket
+ *        in sock_net(sk) (the FIB trie walk is not exported); RT_TABLE_MAIN,
+ *        RTN_UNICAST. NetBSD: rt_walktree(AF_INET) (contract-only twin).
+ *
  *   int  exec_socket_wait_ready(exec_socket_t *s, uint32_t n,
  *                               const uint32_t *want, uint32_t *got,
  *                               long timeout_ms)                 (rd vms-99f)
@@ -1180,6 +1193,21 @@ typedef void (*exec_lan_rx_cb_t)(void *ctx, const uint8_t *frame, uint32_t len);
 #define EXEC_RDY_OUT  0x2u
 #define EXEC_RDY_ERR  0x4u
 #define EXEC_RDY_HUP  0x8u
+
+/* One IPv4 route as exec_socket_routes (SS12, rd vms-6d6c) reports it; the
+ * facility copies it into the VMS_IOCTL_BG_ROUTES wire form (vms_bg.h), whose
+ * VMS_BG_RTF_* bits vms_bg.c pins equal to these. */
+#define EXEC_RTF_UP      0x1u
+#define EXEC_RTF_GATEWAY 0x2u
+#define EXEC_RTF_HOST    0x4u
+
+struct exec_rtent {
+	uint32_t dest;       /* network order (0 = default) */
+	uint32_t gw;         /* network order (0 = on-link) */
+	uint32_t mask;       /* network order */
+	uint32_t flags;      /* EXEC_RTF_* */
+	char     ifname[16]; /* substrate output-interface name, NUL-terminated */
+};
 
 struct exec_ifent {
 	char     name[16];   /* substrate interface name, NUL-terminated */

@@ -49,6 +49,7 @@
 #include <sys/pserialize.h>     /* pserialize_read_enter/_exit (exec_socket_iflist) */
 #include <net/if.h>              /* IFNET_READER_FOREACH, IFADDR_READER_FOREACH */
 #include <net/if_dl.h>           /* struct sockaddr_dl, CLLADDR */
+#include <net/route.h>           /* struct rtentry, rt_walktree, rt_getkey/rt_mask (exec_socket_routes) */
 
 #include "exec_kbackend.h"      /* the op declarations (via exec_kbackend_netbsd.h) */
 
@@ -477,6 +478,81 @@ exec_socket_iflist(exec_socket_t s, struct exec_ifent *ent, uint32_t max,
 	}
 	pserialize_read_exit(ps);
 	*count = n;
+	return 0;
+}
+
+/*
+ * exec_socket_routes (rd vms-6d6c) -- the routing table behind TCPIP SHOW
+ * ROUTE. NetBSD has one network stack, so the socket only scopes the call (it
+ * must exist, as on Linux). rt_walktree(AF_INET) visits each IPv4 rtentry;
+ * the callback copies its live key / mask / gateway / flags and output
+ * interface name, skipping the link-layer, local and broadcast entries (the
+ * per-address cloned routes the Linux main table does not carry either).
+ * Nothing is synthesized. Contract-only twin like the rest of SS12 here (no
+ * NetBSD BGn: dispatch yet, vms-024). Clean-room (Rule 8): public net/route.h
+ * KPI shapes only.
+ */
+struct exec_routes_walk {
+	struct exec_rtent *ent;
+	uint32_t max;
+	uint32_t n;
+};
+
+static int
+exec_routes_visit(struct rtentry *rt, void *arg)
+{
+	struct exec_routes_walk *w = arg;
+	const struct sockaddr *key = rt_getkey(rt);
+	const struct sockaddr *mask = rt_mask(rt);
+	struct exec_rtent *e;
+	unsigned int i;
+
+	if (w->n >= w->max)
+		return 0;
+	if (key == NULL || key->sa_family != AF_INET)
+		return 0;
+	if (rt->rt_flags & (RTF_LLDATA | RTF_LOCAL | RTF_BROADCAST))
+		return 0;
+	e = &w->ent[w->n];
+	memset(e, 0, sizeof(*e));
+	e->dest = ((const struct sockaddr_in *)key)->sin_addr.s_addr;
+	if (rt->rt_flags & RTF_HOST)
+		e->mask = 0xffffffffu;
+	else if (mask != NULL)
+		e->mask = ((const struct sockaddr_in *)mask)->sin_addr.s_addr;
+	if ((rt->rt_flags & RTF_GATEWAY) && rt->rt_gateway != NULL &&
+	    rt->rt_gateway->sa_family == AF_INET)
+		e->gw = ((const struct sockaddr_in *)rt->rt_gateway)->sin_addr.s_addr;
+	if (rt->rt_flags & RTF_UP)
+		e->flags |= EXEC_RTF_UP;
+	if (e->gw != 0)
+		e->flags |= EXEC_RTF_GATEWAY;
+	if (rt->rt_flags & RTF_HOST)
+		e->flags |= EXEC_RTF_HOST;
+	if (rt->rt_ifp != NULL)
+		for (i = 0; i + 1 < sizeof(e->ifname) && rt->rt_ifp->if_xname[i] != '\0'; i++)
+			e->ifname[i] = rt->rt_ifp->if_xname[i];
+	w->n++;
+	return 0;
+}
+
+int
+exec_socket_routes(exec_socket_t s, struct exec_rtent *ent, uint32_t max,
+    uint32_t *count)
+{
+	struct exec_routes_walk w;
+	int err;
+
+	*count = 0;
+	if (s == NULL || s->so == NULL)
+		return -EINVAL;
+	w.ent = ent;
+	w.max = max;
+	w.n = 0;
+	err = rt_walktree(AF_INET, exec_routes_visit, &w);
+	if (err != 0)
+		return -err;
+	*count = w.n;
 	return 0;
 }
 

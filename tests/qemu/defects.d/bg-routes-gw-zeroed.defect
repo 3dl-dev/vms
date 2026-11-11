@@ -1,0 +1,28 @@
+# bg-routes-gw-zeroed -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "TCP/IP Services routing table -- IO\$_SENSEMODE route-list subfunction on a BGn: channel (vms_ioctl_bg_routes, VMS_IOCTL_BG_ROUTES) in the executive BGn: driver (src/kernel-core/vms_bg.c, rd vms-6d6c). The executive reads the main unicast routing table of the network stack the channel's socket lives in (exec_socket_routes) and returns each route's live destination/gateway/mask/flags/output interface; DCL TCPIP SHOW ROUTE renders it with VMS device names. With no executive SHOW ROUTE fails %TCPIP-E-NOEXEC (SS\$_NOSUCHDEV), never the host's /proc/net/route.";;
+        targets)      echo "kernel-core/vms_bg.c";;
+        suites_red)   echo "test_syssvc_dcl_tcpip_iflist";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_bg_routes() copies each route's gateway from the executive's routing-table read into the wire entry. The mutation zeroes it, so SHOW ROUTE shows '*' for every gateway -- reddening exactly the 198.51.100.0 via 10.0.2.2 assertion, while the on-link route, the row count and every SHOW INTERFACE assertion (each copied separately) stay green. One field zeroed.";;
+        require_fail) cat <<'EOF2'
+SHOW ROUTE: 198.51.100.0 via 10.0.2.2 mask 255.255.255.0 on SE0 (the gateway the test added)
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Anchored on the UNIQUE NEGCTL line in vms_ioctl_bg_routes(); after
+        # substitution the anchor no longer matches, so a second apply is a no-op.
+        sed -i 's|        o->gw = ent\[i\]\.gw;   /\* NEGCTL bg-routes-gw-zeroed \*/|        o->gw = 0;   /* NEGCTL bg-routes-gw-zeroed (applied) */|' "$_file"
+    :
+}

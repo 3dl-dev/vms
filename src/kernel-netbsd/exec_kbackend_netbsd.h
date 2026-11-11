@@ -1041,6 +1041,7 @@ int  exec_socket_accept(exec_socket_t s, exec_socket_t *out);
  * twin -- IFNET_READER_FOREACH / IFADDR_READER_FOREACH, vms_socket_netbsd.c). */
 struct exec_ifent;
 int  exec_socket_iflist(exec_socket_t s, struct exec_ifent *ent, uint32_t max, uint32_t *count);
+int  exec_socket_routes(exec_socket_t s, struct exec_rtent *ent, uint32_t max, uint32_t *count);
 /* Readiness wait (rd vms-99f): soreadable/sowritable re-sensed on a kpause tick. */
 int  exec_socket_wait_ready(exec_socket_t *s, uint32_t n, const uint32_t *want,
                             uint32_t *got, long timeout_ms);

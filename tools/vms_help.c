@@ -85,6 +85,15 @@ static int help_qio_read(const char *prompt, char *buf, size_t bufsz)
  * answered %HELP-E-OPENIN on the runtime even though HELPLIB.HLP is mastered
  * on the volume.
  */
+/* HELP.EXE still writes its display to stdio (a libc-drop of its own, not
+ * DCL's: DCL's HELP verb renders into SYS$OUTPUT's sink, rd vms-d1a) */
+static int file_write(void *arg, const char *p, size_t n)
+{
+    return fwrite(p, 1, n, (FILE *)arg) == n ? 0 : -1;
+}
+
+static int file_flush(void *arg) { return fflush((FILE *)arg); }
+
 int main(int argc, char *argv[])
 {
     /* Bootstrap the VMS namespace so SYS$HELP resolves. */
@@ -110,12 +119,14 @@ int main(int argc, char *argv[])
         int n = 0;
         for (int i = 1; i < argc && n < 16; i++)
             path[n++] = argv[i];
-        int st = help_render(lib, path, n, stdout);
+        const help_out_t out = { file_write, file_flush, stdout };
+        int st = help_render(lib, path, n, &out);
         rc = $VMS_STATUS_SUCCESS(st) ? 0 : 1;
     } else {
         /* Interactive: Topic? / <path> Subtopic? loop from SYS$INPUT. */
+        const help_out_t out = { file_write, file_flush, stdout };
         help_set_reader(help_qio_read);
-        help_interactive(lib, NULL, 0, stdout);
+        help_interactive(lib, NULL, 0, &out);
         help_set_reader(NULL);
     }
 

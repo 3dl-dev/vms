@@ -273,7 +273,7 @@ RUN cd /src/repo && \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
         -DOVMX_CRTL_FD_STATIC=ON \
-    && cmake --build build-static --target qemu_syssvc_tests qemu_corpus_rt vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vmslink_image vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests qemu_corpus_rt vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vmslink_image vms_tcpip_daytime vms_install --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
     echo "--- PIPESTAGE.EXE (the stage image test_syssvc_spawn_pipeline drives, vms-e9a B2) ---" && \
@@ -356,6 +356,10 @@ RUN cd /src/repo && \
     # decnetd_exe). Absence is FATAL, as for every subject above.
     echo "--- DECNETD.EXE (the NETACP test_syssvc_decnetd_syscall_audit traces) ---" && \
     ls -la build-static/bin/DECNETD.EXE && \
+    # INSTALL.EXE (rd vms-d41): the image test_syssvc_dcl_install has DCL run,
+    # whose output and messages that suite reads from DCL's SYS$OUTPUT.
+    echo "--- INSTALL.EXE (the image test_syssvc_dcl_install has DCL run, vms-d41) ---" && \
+    ls -la build-static/bin/INSTALL.EXE && \
     # RTPAD.EXE (rd vms-0a7 S2): the SET HOST client DCL activates, the subject
     # of test_syssvc_sethost_syscall_audit.c. Absence is FATAL.
     echo "--- RTPAD.EXE (the SET HOST client test_syssvc_sethost_syscall_audit traces) ---" && \
@@ -993,6 +997,11 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
            /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/ || \
         { echo "FATAL: $f was not staged into the initramfs -- F\$IDENTIFIER reads the rights database now, and every identifier assertion would silently become a miss"; exit 1; }; \
     done && \
+    # INSTALL.EXE at SYS$SYSTEM (rd vms-d41): the image DCL's INSTALL verb runs
+    # in test_syssvc_dcl_install. Absence is FATAL: that suite would prove nothing.
+    { cp /src/repo/build-static/bin/INSTALL.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+      chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/INSTALL.EXE; } || \
+    { echo "FATAL: INSTALL.EXE was not staged -- test_syssvc_dcl_install would go unproven"; exit 1; } && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

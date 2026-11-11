@@ -1,0 +1,28 @@
+# install-msg-to-substrate-stderr -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "INSTALL.EXE writes its messages as \$PUTMSG does -- to SYS\$ERROR and, when that is another file, SYS\$OUTPUT -- over a \$QIO channel to the process-permanent file's device (src/install/install.c msg_put, rd vms-d41)";;
+        targets)      echo "install/install.c";;
+        suites_red)   echo "test_syssvc_dcl_install";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation writes each INSTALL message to the substrate's stderr only, the pre-vms-d41 fprintf(stderr) shape. Under a DCL whose SYS\$OUTPUT/SYS\$ERROR are a mailbox the image's fd 2 is the null device, so every %INSTALL-E/W-FAIL and its reason vanish and the msgs assertions redden; the successful ADD/LIST/REMOVE case prints no message and stays green.";;
+        require_fail) cat <<'EOT'
+msgs: REMOVE's %INSTALL-E-FAIL is a record of SYS$OUTPUT, once
+msgs: LIST's %INSTALL-W-FAIL is a record of SYS$OUTPUT, once
+msgs: each failure's reason (-INSTALL-E-NOKFEFND) follows it in SYS$OUTPUT
+msgs: with SYS$ERROR elsewhere, the message is still a record of SYS$OUTPUT, once
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i '/NEGCTL-ANCHORED (install-msg-to-substrate-stderr)/{n;s|^    ppf_put(1, line);$|    fprintf(stderr, "%s\\n", line); return; /* NEGCTL install-msg-to-substrate-stderr */|}' "$_file"
+    :
+}

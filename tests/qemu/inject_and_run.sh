@@ -184,6 +184,13 @@ echo "--- rebuilding RTPAD.EXE (the subject test_syssvc_sethost_syscall_audit tr
 ( cd /src/repo && cmake --build build-static --target rtpad_exe \
                         --parallel "$(nproc)" ) || exit 4
 
+# INSTALL.EXE is the SUBJECT test_syssvc_dcl_install has DCL run (rd vms-d41),
+# and install-msg-to-substrate-stderr targets src/install/install.c. Rebuilt
+# unconditionally, same reason as the subjects above.
+echo "--- rebuilding INSTALL.EXE (the subject test_syssvc_dcl_install drives) ---"
+( cd /src/repo && cmake --build build-static --target vms_install \
+                        --parallel "$(nproc)" ) || exit 4
+
 # IMGACT.EXE is the activator of every IMGACT-activated subject (MMK.EXE,
 # RMHOLD.EXE, CRTLSHR.EXE, ...), and crtl-shr-layer-not-started (rd vms-569)
 # targets src/imgact/imgact.c -- the call that starts an activated image's C RTL
@@ -309,6 +316,11 @@ chmod +x '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' || exit 4
 cp /src/repo/build-static/bin/DECNETD.EXE \
    /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE || exit 4
 chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE || exit 4
+# INSTALL.EXE at SYS$SYSTEM (rd vms-d41): refreshed so a defect in install.c
+# reaches the image DCL's INSTALL verb runs.
+cp /src/repo/build-static/bin/INSTALL.EXE \
+   /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/INSTALL.EXE || exit 4
+chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/INSTALL.EXE || exit 4
 cp /src/repo/build-static/bin/RTPAD.EXE \
    /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RTPAD.EXE || exit 4
 chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RTPAD.EXE || exit 4

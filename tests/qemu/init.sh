@@ -23,10 +23,14 @@ mount -t devpts none /dev/pts -o mode=0620,ptmxmode=0666 2>/dev/null || \
 # root 0755, and its per-process staging parent u/ sticky 1733, where a process
 # under its executive-given unprivileged uid makes its own 0700 directory
 # (ovmx_boot_stage_user_dir). This harness boots no ovmx_init, so it lays the
-# tree down itself, as the Alpha syssvc rig does.
-mkdir -p /run/ovmx-boot/u
+# tree down itself, as the Alpha syssvc rig does. k/ is the executive's own
+# directory of installed-image copies (rd vms-220; ovmx_boot_prepare_stage_dir
+# makes it 0711): without it INSTALL ADD fails NOSUCHFILE, the executive having
+# nowhere to put its copy of the image (rd vms-d41).
+mkdir -p /run/ovmx-boot/u /run/ovmx-boot/k
 chmod 0755 /run/ovmx-boot
 chmod 1733 /run/ovmx-boot/u
+chmod 0711 /run/ovmx-boot/k
 
 echo ""
 echo "=== OVMX Kernel Module Test Suite ==="

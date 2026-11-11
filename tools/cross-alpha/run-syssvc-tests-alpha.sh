@@ -176,10 +176,11 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # cross-build via the same glibc-static toolchain the tests use.
     echo "== build subject images (DCL/INITIALIZE/AUTHORIZE + best-effort MMK/TCC) =="
     # decnetd_exe: DECNETD.EXE, the NETACP test_syssvc_decnetd_syscall_audit
-    # traces at SYS$SYSTEM (rd vms-d3cd). rtpad_exe: RTPAD.EXE, the image
+    # traces at SYS$SYSTEM (rd vms-d3cd). vms_install: INSTALL.EXE, the image
+    # test_syssvc_dcl_install has DCL run (rd vms-d41). rtpad_exe: RTPAD.EXE, the image
     # SET HOST activates from SYS$SYSTEM, which
     # test_syssvc_sethost_syscall_audit traces (rd vms-0a7 S2).
-    for tgt in vmsdcl vms_initialize vms_authorize decnetd_exe rtpad_exe; do
+    for tgt in vmsdcl vms_initialize vms_authorize decnetd_exe vms_install rtpad_exe; do
         cmake --build /work/cmake-alpha --target "$tgt" -j"$(nproc)" >>/work/cmake-subj.log 2>&1 \
             || echo "WARN: subject target $tgt did not build for alpha"
     done
@@ -296,6 +297,10 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
       # the ovmx_init boot makes it 1733 root before STARTUP drops root; this rig
       # boots no ovmx_init, so it ships it as the boot would have left it.
       echo "dir /run/ovmx-boot/u 1733 0 0"
+      # The executive directory of installed-image copies (VMS_KFE_DIR, rd
+      # vms-220), 0711 as ovmx_boot_prepare_stage_dir makes it: the INSTALL ADD
+      # copy lands there (rd vms-d41).
+      echo "dir /run/ovmx-boot/k 711 0 0"
       # SUBJECT IMAGES at the exact paths the suites exec (guarded by build
       # success; a target absent on alpha leaves its suites to fail honestly).
       B=/work/cmake-alpha/bin
@@ -312,6 +317,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
       [ -f "$B/AUTHORIZE.EXE" ]  && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/AUTHORIZE.EXE $B/AUTHORIZE.EXE 755 0 0"
       [ -f "$B/MMK.EXE" ]        && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE $B/MMK.EXE 755 0 0"
       [ -f "$B/TCC.EXE" ]        && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE $B/TCC.EXE 755 0 0"
+      [ -f "$B/INSTALL.EXE" ]    && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/INSTALL.EXE $B/INSTALL.EXE 755 0 0"
       [ -f "$B/DECNETD.EXE" ]    && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE $B/DECNETD.EXE 755 0 0"
       [ -f "$B/RTPAD.EXE" ]      && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/RTPAD.EXE $B/RTPAD.EXE 755 0 0"
     } > /work/syssvc.list

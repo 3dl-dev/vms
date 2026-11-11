@@ -314,6 +314,8 @@ static pid_t client_start(struct client *c, int *rfd)
     return p;
 }
 
+enum { NETACP_HELLO_SPAN_MS = 20000 };   /* T3 15 s + margin */
+
 /* Runs until every traced task is gone. Returns the root's (DCL's) status. */
 static int trace_all(pid_t root, struct verdict *v, struct sink *out, struct client *cl,
                      int *netacp_status)
@@ -323,7 +325,7 @@ static int trace_all(pid_t root, struct verdict *v, struct sink *out, struct cli
     enum { MAXT = 128 };
     pid_t tids[MAXT]; int insys[MAXT]; int newborn[MAXT]; int nt = 0;
     int root_status = -1, live = 1, stopped = 0;
-    uint64_t t0 = now_ms(), t_stop = 0;
+    uint64_t t0 = now_ms(), t_stop = 0, t_pub = 0;
 
     if (ptrace(PTRACE_SETOPTIONS, root, 0, (void *)opts) != 0)
         return -1;
@@ -354,10 +356,16 @@ static int trace_all(pid_t root, struct verdict *v, struct sink *out, struct cli
         if (!cl->pid && root_status >= 0 && v->netacp_pid > 0 && netacp_published()) {
             int rfd = -1;
             cl->pid = client_start(cl, &rfd);
+            t_pub = t;
             cl->out.fd = rfd;
             if (cl->pid <= 0) { cl->done = 1; cl->pid = -1; }
         }
-        if (!stopped && (cl->done || t - t0 > 420000u) && v->netacp_pid > 0) {
+        /* NETACP serves until the client is done AND one hello period has
+         * passed: its first endnode hello is due T3 (the executor's Hello
+         * timer, 15 s) after the circuit came up, and the e2e asserts that
+         * hello on the wire. */
+        if (!stopped && ((cl->done && t - t_pub > NETACP_HELLO_SPAN_MS) || t - t0 > 420000u) &&
+            v->netacp_pid > 0) {
             /* Diagnostics: where every traced task is when the client ends. */
             for (int i = 0; i < nt; i++) {
                 char pth[64], buf[256] = "", wch[64] = "";

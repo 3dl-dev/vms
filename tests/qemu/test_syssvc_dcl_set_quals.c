@@ -112,6 +112,37 @@ int main(void)
     CHECK(strstr(out2, "\\ZQSEVEN\\") != NULL && strstr(out2, "%X00038240") != NULL,
           "an unknown qualifier leaves $STATUS = %X00038240 (CLI$_IVQUAL)");
 
+    /* SET VOLUME asks the EXECUTIVE whether a volume is mounted ($GETDVI
+     * DVI$_DEVCHAR, DEV$M_MNT), not the substrate's /proc/mounts (rd vms-0504):
+     * an ACP-$MOUNTed volume never appears in /proc/mounts, so the old check
+     * called every real volume DEVNOTMNT. Mount VDA0: through the ACP, then:
+     * the mounted unit is accepted (SS$_NORMAL), an existing unit with no
+     * volume is %SET-E-DEVNOTMNT (SS$_DEVNOTMOUNT, %X0000007C), and a unit the
+     * executive does not have is %SYSTEM-W-NOSUCHDEV (%X00000908). */
+    uint32_t mst = vms_kif_acp_mount("VDA0:");
+    CHECK((mst & 1) || mst == SS$_DEVMOUNT,
+          "VDA0: is mounted through the ACP");
+    static char out3[8192];
+    CHECK(run_dcl("SET VOLUME VDA0:\nSHOW SYMBOL $STATUS\n", out3, sizeof out3) == 0,
+          "DCL ran SET VOLUME on the mounted unit");
+    printf("  ---- SET VOLUME VDA0: ----\n%s  ---- end ----\n", out3);
+    /* negctl: dcl-set-volume-mnt-ignored */
+    CHECK(strstr(out3, "$STATUS == \"%X00000001\"") != NULL && strstr(out3, "DEVNOTMNT") == NULL,
+          "SET VOLUME on an ACP-mounted volume succeeds (DEV$M_MNT from $GETDVI)");
+    static char out4[8192];
+    CHECK(run_dcl("SET VOLUME OPA0:\nSHOW SYMBOL $STATUS\n", out4, sizeof out4) == 0,
+          "DCL ran SET VOLUME on a unit with no volume");
+    printf("  ---- SET VOLUME OPA0: ----\n%s  ---- end ----\n", out4);
+    CHECK(strstr(out4, "%SET-E-DEVNOTMNT, device is not mounted - _OPA0:") != NULL &&
+          strstr(out4, "%X0000007C") != NULL,
+          "SET VOLUME OPA0: is %SET-E-DEVNOTMNT (SS$_DEVNOTMOUNT)");
+    static char out5[8192];
+    CHECK(run_dcl("SET VOLUME ZZA9:\nSHOW SYMBOL $STATUS\n", out5, sizeof out5) == 0,
+          "DCL ran SET VOLUME on a unit the executive does not have");
+    printf("  ---- SET VOLUME ZZA9: ----\n%s  ---- end ----\n", out5);
+    CHECK(strstr(out5, "NOSUCHDEV") != NULL && strstr(out5, "%X00000908") != NULL,
+          "SET VOLUME ZZA9: is %SYSTEM-W-NOSUCHDEV (the $GETDVI status)");
+
     printf("=== test_syssvc_dcl_set_quals: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

@@ -31,11 +31,9 @@
 #endif
 #include <arpa/inet.h>
 #include <limits.h>
-/* NOTE: no <mntent.h>. The mount table is parsed by hand from /proc/mounts with
- * fopen/fgets (dcl_unit_is_mounted below) -- getmntent(3)/setmntent(3) are a
- * glibc-only convenience with no musl-static symbol, and <mntent.h> does not
- * exist at all in the NetBSD/vax sysroot (netbsd-vax cross gate, vms-1cb2). The
- * include was vestigial: no mntent symbol, struct, or macro is referenced. */
+/* NOTE: no <mntent.h> and no /proc/mounts: whether a volume is mounted is the
+ * executive's DEV$M_MNT ($GETDVI DVI$_DEVCHAR), never the substrate's mount
+ * table (rd vms-0504). */
 #include <sys/statvfs.h>
 
 #include "dcl/context.h"
@@ -2455,34 +2453,6 @@ static int tcpip_host_already_shown(const struct tcpip_host_entry *shown,
     return 0;
 }
 
-static int tcpip_print_hosts_from_file(const char *path,
-                                        struct tcpip_host_entry *shown,
-                                        int count)
-{
-    FILE *fp = fopen(path, "r");
-    if (!fp) return count;
-
-    char line[512];
-    while (fgets(line, sizeof(line), fp)) {
-        char *p = line;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == '#' || *p == '\n' || *p == '\0') continue;
-
-        char addr[128], hostname[256];
-        if (sscanf(p, "%127s %255s", addr, hostname) >= 2) {
-            if (count < TCPIP_MAX_HOST_ENTRIES &&
-                !tcpip_host_already_shown(shown, count, addr, hostname)) {
-                dcl_out_printf("%-16s%s\n", addr, hostname);
-                strncpy(shown[count].addr, addr, sizeof(shown[count].addr) - 1);
-                strncpy(shown[count].name, hostname, sizeof(shown[count].name) - 1);
-                count++;
-            }
-        }
-    }
-    fclose(fp);
-    return count;
-}
-
 /* Read the VMS host database (TCPIP$HOST.DAT) the VMS way: RMS record reads
  * through the Files-11 ACP (rms_textfile, vms-274), NOT a fopen() of the retired
  * /vms passthrough (VMS_SYSTEM_DIR = SYSDISK_MOUNT "/vms", vms-37e) which reaches
@@ -2529,7 +2499,9 @@ static int cmd_tcpip_show_host(struct dcl_command *cmd)
                                              sizeof(struct tcpip_host_entry));
     int count = 0;
     if (shown) {
-        count = tcpip_print_hosts_from_file("/etc/hosts", shown, count);
+        /* The VMS host database only -- never the substrate's /etc/hosts
+         * (rd vms-0504): TCPIP$HOST.DAT is the table SET HOST writes and the
+         * resolver (tcpip_resolve.h) reads. */
         tcpip_print_hosts_from_vms_store(shown, count);
         free(shown);
     }
@@ -2550,7 +2522,8 @@ static int cmd_tcpip_show_version(struct dcl_command *cmd)
 
 /*
  * TCPIP SET HOST hostname /ADDRESS=ip
- * Adds an entry to TCPIP$HOST.DAT and /etc/hosts.
+ * Adds an entry to the VMS host database, TCPIP$HOST.DAT (only -- the
+ * substrate's /etc/hosts is not OVMX's, rd vms-0504).
  */
 static int cmd_tcpip_set_host(struct dcl_command *cmd)
 {
@@ -2592,14 +2565,6 @@ static int cmd_tcpip_set_host(struct dcl_command *cmd)
      * record can never truncate. */
     snprintf(rec, sizeof(rec), "%-16s%.255s", address, hostname);
     int host_db_ok = (rms_textfile_append_line("SYS$SYSTEM:TCPIP$HOST.DAT", rec) == 0);
-
-    /* Best-effort substrate-side resolver convenience (root-only file; unrelated
-     * to the VMS host database above). */
-    FILE *fp = fopen("/etc/hosts", "a");
-    if (fp) {
-        fprintf(fp, "%-16s%s\n", address, hostname);
-        fclose(fp);
-    }
 
     if (!host_db_ok) {
         /* The VMS host database could not be written (no executive / no mounted
@@ -2658,14 +2623,10 @@ static int cmd_tcpip_set_name_service(struct dcl_command *cmd)
         }
     }
 
-    /* APPLY: update the substrate resolver (best-effort; root-only file). */
-    FILE *fp = fopen("/etc/resolv.conf", "w");
-    if (fp) {
-        if (domain)
-            fprintf(fp, "domain %s\n", domain);
-        fprintf(fp, "nameserver %s\n", server);
-        fclose(fp);
-    }
+    /* APPLY: nothing more to do. The resolver OVMX's TCP/IP clients use
+     * (tcpip_resolve.h) reads TCPIP$NAMESERVICE.DAT itself on every lookup, so
+     * the record above IS the live configuration; the substrate's
+     * /etc/resolv.conf is not OVMX's and is never written (rd vms-0504). */
 
     if (!ns_db_ok) {
         dcl_out_printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$NAMESERVICE.DAT not "
@@ -3449,67 +3410,6 @@ int cmd_tcpip(struct dcl_command *cmd)
 /* ================================================================== */
 
 /*
- * Compute the mount point a device name uses. A PURE FUNCTION of the name --
- * any process can compute it without asking anyone, exactly like
- * SYSDISK_MOUNT is a compile-time constant for DKA0: (ovmx_layout.h). This is
- * what lets "is this unit mounted" be answered from /proc/mounts (real,
- * global, kernel-reported truth) instead of a per-process table entry.
- * "/mnt/<devnam>" matches the vmsfs mount-point convention the QEMU kernel
- * tests already use (tests/qemu/test_kmod_vmsfs*.c).
- */
-void mount_point_for_device(const char *log_name, char *buf, size_t sz)
-{
-    char lower[16];
-    size_t i;
-    for (i = 0; log_name[i] && i < sizeof(lower) - 1; i++)
-        lower[i] = (char)tolower((unsigned char)log_name[i]);
-    lower[i] = '\0';
-    snprintf(buf, sz, "/mnt/%s", lower);
-}
-
-/*
- * Is `mount_point` present in the kernel's own mount table right now?
- * Cross-process, kernel-reported truth -- not a field only this process
- * could see.
- *
- * Parsed by hand with fopen/fgets rather than glibc's getmntent(3):
- * DECC$SHR's symbol vector (src/vmslink/mk_decc_shr.sh) exports the plain
- * stdio family DCL already links against everywhere, but not
- * setmntent/getmntent/endmntent -- those are a glibc-only convenience this
- * tree has never needed before, and pulling them in here broke the
- * VMS-native LINK.EXE build of DCL.EXE (%LINK-F-ERROR, unresolved external
- * symbol 'setmntent'; measured building distro/Dockerfile.bootable).
- */
-int mount_point_is_mounted(const char *mount_point)
-{
-    FILE *fp = fopen("/proc/mounts", "r");
-    if (!fp)
-        return 0;
-
-    /* /proc/mounts format: "<source> <mount_point> <fstype> <opts> <freq>
-     * <passno>\n", space-separated. Compare the SECOND field's exact
-     * extent, not a substring -- "/mnt/dka1" must not match
-     * "/mnt/dka100". */
-    char line[512];
-    size_t mp_len = strlen(mount_point);
-    int found = 0;
-    while (fgets(line, sizeof(line), fp)) {
-        char *field2 = strchr(line, ' ');
-        if (!field2) continue;
-        field2++;
-        char *after = strchr(field2, ' ');
-        if (!after) continue;
-        size_t flen = (size_t)(after - field2);
-        if (flen == mp_len && strncmp(field2, mount_point, flen) == 0) {
-            found = 1;
-            break;
-        }
-    }
-    fclose(fp);
-    return found;
-}
-
-/*
  * MOUNT - $MOUNT a VMS disk unit's ODS-2 volume through the executive ACP
  * (vms-651; vms-481 retired the old setuid mount(2)-as-vmsfs path).
  *
@@ -3530,8 +3430,8 @@ int mount_point_is_mounted(const char *mount_point)
  *   - The unit is resolved to its backing Linux block device through the
  *     executive (vms_kif_disk_resolve, vms-3e8) -- this process never
  *     scans /sys/block itself (Rule 11).
- *   - "Already mounted" is answered by the kernel's OWN mount table
- *     (/proc/mounts), not a struct field only this process could see.
+ *   - "Already mounted" is answered by the executive's $MOUNT (SS$_DEVMOUNT /
+ *     VOLALRMNT), not a struct field only this process could see.
  *   - The unit is claimed in the executive's device table (vms_kif_alloc,
  *     wired here for the first time) so a second process cannot mount the
  *     same unit out from under this one.
@@ -3582,9 +3482,6 @@ int cmd_mount(struct dcl_command *cmd)
     size_t lnlen = strlen(log_name);
     if (lnlen > 0 && log_name[lnlen - 1] == ':')
         log_name[lnlen - 1] = '\0';
-
-    char mount_point[64];
-    mount_point_for_device(log_name, mount_point, sizeof(mount_point));
 
     (void)vms_kif_open();
 
@@ -3681,7 +3578,7 @@ int cmd_mount(struct dcl_command *cmd)
  * Syntax: DISMOUNT device:
  *
  * Mirrors cmd_mount(): PRV$M_MOUNT through the executive, "is it mounted"
- * from /proc/mounts, umount(2), then release the executive's claim
+ * from the executive's $DISMOU (SS$_DEVNOTMOUNT), then release the executive's claim
  * (vms_kif_dalloc) and the filespec-translator entry.
  */
 int cmd_dismount(struct dcl_command *cmd)

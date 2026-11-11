@@ -2405,6 +2405,42 @@ void vms_devtab_note_io_error(uint32_t major, uint32_t minor)
 }
 
 /*
+ * vms_devtab_set_mounted - set or clear DEV$M_MNT ("a volume is mounted on
+ * this unit", DEVCHAR bit 19, devdef.h) in the unit's device characteristics
+ * -- the UCB$L_DEVCHAR bit VMS's MOUNT sets and DISMOUNT clears, which
+ * $GETDVI DVI$_DEVCHAR, SET VOLUME and SHOW DEVICE read (rd vms-0504).
+ *
+ * INTERNAL (non-ioctl): called ONLY by the Files-11 ACP (kernel-core/
+ * vmsfs_acp.c) when it publishes a volume into, or removes one from, the
+ * executive-global mounted-volume table, under vms_acp_vol_lock -- so the bit
+ * and the table change together and a racing MOUNT/DISMOUNT cannot leave them
+ * disagreeing. Lock order: vms_acp_vol_lock, then the device list lock, then
+ * the row lock (nothing in this file takes the ACP table lock). `devnam` is
+ * the ACP's canonical "DDCU:" name. A unit with no row is ignored: there is
+ * nothing to mark, and the ACP mounts only units vms_devtab_disk_backing()
+ * found. Substrate-agnostic, outside the disk-resolve guard.
+ */
+#define VMS_DEVTAB_DEV_M_MNT 0x00080000u   /* DEV$M_MNT, DEVCHAR bit 19 */
+void vms_devtab_set_mounted(const char *devnam, int mounted)
+{
+    struct vms_device *dev;
+
+    if (!devnam)
+        return;
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (dev) {
+        exec_lock(&dev->lock);
+        if (mounted)
+            dev->devchar_dev |= VMS_DEVTAB_DEV_M_MNT;
+        else
+            dev->devchar_dev &= ~VMS_DEVTAB_DEV_M_MNT;
+        exec_unlock(&dev->lock);
+    }
+    exec_unlock(&vms_device_list_lock);
+}
+
+/*
  * vms_devtab_name_present - does the executive's device table hold a unit by
  * this name? `name`/`len` is a counted (not NUL-terminated) device name as a
  * peer sent it -- e.g. "_$2$DUA1:" from a cluster member's remote MOUNT/

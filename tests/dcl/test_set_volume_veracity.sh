@@ -1,15 +1,15 @@
 #!/bin/bash
 # TEST: vms-309 INV-DCL veracity gate - SET VOLUME no longer fakes success
 #       for every invocation; it validates the device is a MOUNTED volume
-#       (a real, cross-process /proc/mounts check, the same one MOUNT/
-#       DISMOUNT use) and rejects a bogus qualifier structurally
-#       (%DCL-W-IVQUAL), instead of the old unconditional SS$_NORMAL.
+#       (the executive's DEV$M_MNT through $GETDVI -- with no executive the
+#       $GETDVI itself fails and SET VOLUME returns its status) and rejects a bogus qualifier
+#       structurally (%DCL-W-IVQUAL), instead of the old unconditional SS$_NORMAL.
 # EXPECT: contains:DCL-ALIVE
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
 # EXPECT: contains: \BOGUS\
 # EXPECT: contains:$STATUS == "%X00038240"
-# EXPECT: contains:%SET-E-DEVNOTMNT, device is not mounted - _VDA300:
-# EXPECT: contains:$STATUS == "%X0000007C"
+# EXPECT: contains:$STATUS == "%X000002A4"
+# EXPECT_NOT: contains:$STATUS == "%X00000001"
 # EXPECT_NOT: contains:%SET-I-NOTIMPL
 # EXPECT_NOT: contains:SET VOLUME requires a mounted VMSFS volume
 #
@@ -27,6 +27,16 @@
 # SET VOLUME VDA300: is 1 (SS$_NORMAL), not 2688 (SS$_DEVNOTMOUNT) --
 # VDA300: is never mounted anywhere this suite runs (CLAUDE.md Rule 9: no
 # /dev/vms on host ctest), so a real "is it mounted" check MUST fail here.
+#
+# (rd vms-0504) The mount check is now the executive's DEV$M_MNT via $GETDVI,
+# not /proc/mounts (an ACP mount never appears there). Host ctest has no
+# executive, so every ioctl fails EBADF, which vms_kif_kerr_to_ss() maps to
+# SS$_BUGCHECK (676, %X000002A4) -- the same host anchor tests/dcl/test_mount.sh
+# and test_show_device.sh pin. SET VOLUME returns that $GETDVI status; it can
+# never be the old SS$_NORMAL or a /proc/mounts DEVNOTMNT.
+# The mounted / unmounted-unit cases are proved against a real executive in
+# tests/qemu/test_syssvc_dcl_set_quals.c (negctl dcl-set-volume-mnt-ignored).
+# The paragraph below is the original vms-309 reasoning, kept for history.
 #
 # WHY THIS IS HOST-TESTABLE WITHOUT /dev/vms (unlike tests/dcl/test_mount.sh's
 # own reasoning, which this mirrors): mount_point_is_mounted() -- shared

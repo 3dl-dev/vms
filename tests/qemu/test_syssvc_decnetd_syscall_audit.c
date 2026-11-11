@@ -413,6 +413,7 @@ int main(void)
     /* negctl: decnetd-lan-lookup-via-libc */
     CHECK(v.bad_socket == 0 && v.bad_ifioctl == 0,
           "NO host interface lookup: no socket(AF_INET/INET6/PACKET/NETLINK), no SIOCGIF* ioctl");
+    /* negctl: netacp-wait-via-poll */
     CHECK(v.bad_wait == 0, "NO poll/ppoll/select/epoll wait on a host descriptor");
     CHECK(v.bad_thread == 0, "NO thread (clone CLONE_THREAD / clone3)");
     CHECK(v.bad_pipe == 0, "NO host pipe (pipe / pipe2)");

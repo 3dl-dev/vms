@@ -134,6 +134,20 @@ rm -f "$DISK" "$LOG1" "$LOG2" "$PCAP1" "$PCAP2" "$FIFO"
 cp "$DISTRIB_IMG" "$DISK"
 mkfifo "$FIFO"
 rm -rf "$AUDIT_TREE" "$AUDIT_DISK"; mkdir -p "$AUDIT_TREE"
+# STARTNETAUDIT's two DCL procedures ride the same volume: DCL opens a procedure
+# through RMS + the Files-11 ACP only, never a host path (rd vms-0a7 S3). The
+# traced one starts the network as the system does; the untraced client copies
+# through 0:: as a user does.
+printf '%s\n' '$ @SYS$MANAGER:STARTNET' '$ EXIT $STATUS' >"$AUDIT_TREE/SNAUDIT_SN.COM"
+printf '%s\n' \
+    '$ SET NOON' \
+    '$ COPY SYS$MANAGER:STARTNET.COM 0"SYSTEM MANAGER"::SYS$SYSROOT:[SYSMGR]SNAUDIT_A.TMP' \
+    '$ IF .NOT. $STATUS THEN WRITE SYS$OUTPUT "SNAUDIT-FAIL COPY-TO"' \
+    '$ COPY 0"SYSTEM MANAGER"::SYS$SYSROOT:[SYSMGR]SNAUDIT_A.TMP SYS$SYSROOT:[SYSMGR]SNAUDIT_B.TMP' \
+    '$ IF .NOT. $STATUS THEN WRITE SYS$OUTPUT "SNAUDIT-FAIL COPY-FROM"' \
+    '$ TYPE SYS$SYSROOT:[SYSMGR]SNAUDIT_B.TMP' \
+    '$ DELETE SYS$SYSROOT:[SYSMGR]SNAUDIT_A.TMP;*,SNAUDIT_B.TMP;*' \
+    '$ WRITE SYS$OUTPUT "SNAUDIT-CLIENT-END"' >"$AUDIT_TREE/SNAUDIT_CL.COM"
 if [ -f "$AUDIT_SRC" ] && cp "$AUDIT_SRC" "$AUDIT_TREE/DCLNETAUDIT.EXE" \
    && [ -f "$NETTEST_SRC" ] && cp "$NETTEST_SRC" "$AUDIT_TREE/NETACP_TEST.EXE" \
    && [ -f "$SNAUDIT_SRC" ] && cp "$SNAUDIT_SRC" "$AUDIT_TREE/STARTNETAUDIT.EXE" \

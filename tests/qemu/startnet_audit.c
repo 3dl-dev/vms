@@ -289,6 +289,9 @@ static int netacp_published(void)
                                  sizeof dev - 1, &len, NULL, NULL) == 1 && len > 0;
 }
 
+/* The audit's two DCL procedures on the mastered test volume (set in main). */
+static char g_proc_sn[512], g_proc_cl[512];
+
 struct client { const char *image; const char *dcl; pid_t pid; int st; int done; struct sink out; };
 
 static pid_t client_start(struct client *c, int *rfd)
@@ -301,7 +304,7 @@ static pid_t client_start(struct client *c, int *rfd)
         dup2(o[1], 1); dup2(o[1], 2);
         close(o[0]); close(o[1]);
         /* a foreign command off the mounted test volume, as a user runs it */
-        execl(c->dcl, "DCL.EXE", "/tmp/startnet_audit_client.com", (char *)NULL);
+        execl(c->dcl, "DCL.EXE", g_proc_cl, (char *)NULL);
         _exit(127);
     }
     close(o[1]);
@@ -497,25 +500,22 @@ int main(int argc, char **argv)
     const char *dcl = pick("OVMX_DCL", "DCL.EXE");
     static char client_img[512];
     snprintf(client_img, sizeof client_img, "%s", argv[1]);
-    /* Two DCL procedures (DCL script mode): the traced one starts the network
-     * exactly as the system does; the untraced one runs the test image as a
-     * foreign command off the mounted volume. */
+    /* Two DCL procedures (DCL script mode), MASTERED on the test volume beside
+     * this image (test_decnet_startnet_boot_e2e.sh): DCL opens a procedure
+     * the VMS way only -- RMS through the Files-11 ACP (dcl_script.c, libc-drop
+     * vms-20c94) -- so a host /tmp path is %DCL-E-OPENIN. The traced one starts
+     * the network exactly as the system does; the untraced one copies through
+     * 0:: as a user does. Both are named off argv[1]'s device:[directory]. */
     {
-        FILE *f = fopen("/tmp/startnet_audit_sn.com", "w");
-        FILE *g = fopen("/tmp/startnet_audit_client.com", "w");
-        if (!f || !g) { printf("  FAIL: cannot write the audit's procedures in /tmp\n"); return 1; }
-        fprintf(f, "$ @SYS$MANAGER:STARTNET\n$ EXIT $STATUS\n");
-        (void)client_img;
-        fprintf(g,
-            "$ SET NOON\n"
-            "$ COPY SYS$MANAGER:STARTNET.COM 0\"SYSTEM MANAGER\"::SYS$SYSROOT:[SYSMGR]SNAUDIT_A.TMP\n"
-            "$ IF .NOT. $STATUS THEN WRITE SYS$OUTPUT \"SNAUDIT-FAIL COPY-TO\"\n"
-            "$ COPY 0\"SYSTEM MANAGER\"::SYS$SYSROOT:[SYSMGR]SNAUDIT_A.TMP SYS$SYSROOT:[SYSMGR]SNAUDIT_B.TMP\n"
-            "$ IF .NOT. $STATUS THEN WRITE SYS$OUTPUT \"SNAUDIT-FAIL COPY-FROM\"\n"
-            "$ TYPE SYS$SYSROOT:[SYSMGR]SNAUDIT_B.TMP\n"
-            "$ DELETE SYS$SYSROOT:[SYSMGR]SNAUDIT_A.TMP;*,SNAUDIT_B.TMP;*\n"
-            "$ WRITE SYS$OUTPUT \"SNAUDIT-CLIENT-END\"\n");
-        fclose(f); fclose(g);
+        const char *rb = strchr(client_img, ']');
+        size_t dl = rb ? (size_t)(rb - client_img) + 1 : 0;
+        if (!dl || dl + sizeof "SNAUDIT_CL.COM" > sizeof g_proc_cl) {
+            printf("  FAIL: argv[1] '%s' names no device:[directory] for the audit's procedures\n",
+                   client_img);
+            return 1;
+        }
+        snprintf(g_proc_sn, sizeof g_proc_sn, "%.*sSNAUDIT_SN.COM", (int)dl, client_img);
+        snprintf(g_proc_cl, sizeof g_proc_cl, "%.*sSNAUDIT_CL.COM", (int)dl, client_img);
     }
 
     /* ---- 1. trace DCL @SYS$MANAGER:STARTNET and what it makes ----------- */
@@ -530,7 +530,7 @@ int main(int argc, char **argv)
         unsetenv("OVMX$CLI_FD");
         ptrace(PTRACE_TRACEME, 0, 0, 0);
         raise(SIGSTOP);
-        execl(dcl, "DCL.EXE", "/tmp/startnet_audit_sn.com", (char *)NULL);
+        execl(dcl, "DCL.EXE", g_proc_sn, (char *)NULL);
         _exit(127);
     }
     close(o[1]);

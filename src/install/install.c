@@ -23,6 +23,7 @@
  * adds the entry access count and the privileges.
  */
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -37,12 +38,18 @@
 #include "vms_kif.h"
 #include "vms/privs.h"
 
+#include "starlet.h"
+#include "descrip.h"
+#include "lnmdef.h"
+#include "iodef.h"
+#include "dvidef.h"
+#include "dcdef.h"
+
 /* SS$_ values the executive returns (ssdef.h numbers, kept local: this
  * utility includes no VMS headers beyond the kif). */
 #define ST_NOPRIV     0x24u
 #define ST_DUPLNAM    148u
 #define ST_NOSUCHFILE 2320u
-#define ST_ACCONFLICT 2048u
 
 static const struct { const char *name; uint64_t bit; } priv_names[] = {
     { "CMKRNL", PRV$M_CMKRNL }, { "CMEXEC", PRV$M_CMEXEC }, { "SYSNAM", PRV$M_SYSNAM },
@@ -53,19 +60,219 @@ static const struct { const char *name; uint64_t bit; } priv_names[] = {
     { "ALTPRI", PRV$M_ALTPRI }, { "SETPRI", PRV$M_SETPRI },
 };
 
+/* ------------------------------------------------------------------ */
+/* SYS$OUTPUT and SYS$ERROR (rd vms-d41)                               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * WHAT VMS DOES. INSTALL is an image DCL runs in the user's process; what it
+ * writes goes to the process-permanent files. LIST's display is SYS$OUTPUT
+ * records; a message ($PUTMSG) goes to SYS$ERROR and, when SYS$OUTPUT is a
+ * different file, to SYS$OUTPUT as well -- so a failure is never lost when one
+ * of them is the null device.
+ *
+ * WHAT OVMX DOES. At image start each name is translated (a process-permanent
+ * file's ESC NUL IFI header dropped) to its device; a MAILBOX (a parent driving
+ * this DCL, SPAWN, the QEMU harness) or a TERMINAL gets a channel ($ASSIGN), and
+ * every record is one $QIOW IO$_WRITEVBLK on it -- a terminal's with carriage
+ * control, as DCL writes its own. The substrate stream (stdout/stderr) carries
+ * a record only where there is no such channel: no executive (the host), a
+ * disk-file SYS$OUTPUT, or a terminal stream the substrate has redirected
+ * underneath (a DCL PIPE segment) -- the same rule as the C RTL's standard
+ * streams (src/vmsrms/crtl_devfd.c) and DCL's sink (src/vmsdcl/dcl_io.c).
+ * Before this, INSTALL's messages went to the substrate's fd 2 only, which is
+ * the null device under a DCL whose SYS$ERROR is a mailbox: INSTALL ADD failed
+ * with no message at all.
+ */
+enum { PPF_SUBSTRATE = 0, PPF_MBX, PPF_TT };
+struct ppf {
+    int      kind;
+    uint16_t chan;
+    char     dev[64];        /* the device ("" for the substrate stream) */
+};
+static struct ppf g_ppf[2];  /* [0] SYS$OUTPUT, [1] SYS$ERROR */
+
+static void mkdesc(struct dsc$descriptor_s *d, const char *s, size_t n)
+{
+    d->dsc$w_length = (uint16_t)n;
+    d->dsc$b_dtype = DSC$K_DTYPE_T;
+    d->dsc$b_class = DSC$K_CLASS_S;
+    d->dsc$a_pointer = (char *)s;
+}
+
+/* `lognam`'s device: translated iteratively, as RMS does for a device, with a
+ * process-permanent file's ESC NUL IFI header dropped. 0 when it is not a bare
+ * device ("ddcu:"), e.g. a disk file, or cannot be translated. */
+static int ppf_device(const char *lognam, char *out, size_t outsz)
+{
+    char cur[256];
+    snprintf(cur, sizeof cur, "%s", lognam);
+    for (int depth = 0; depth < 10; depth++) {
+        struct dsc$descriptor_s d;
+        struct item_list_3 il[2];
+        uint16_t rl = 0;
+        char eq[256];
+        size_t cl = strlen(cur);
+        if (cl && cur[cl - 1] == ':')
+            cl--;
+        mkdesc(&d, cur, cl);
+        memset(il, 0, sizeof il);
+        il[0].buflen = sizeof eq - 1;
+        il[0].item_code = LNM$_STRING;
+        il[0].bufaddr = eq;
+        il[0].retlen = &rl;
+        if (!(sys$trnlnm(NULL, NULL, &d, NULL, il) & 1))
+            break;                          /* not a logical name: a device */
+        if (rl >= sizeof eq)
+            rl = sizeof eq - 1;
+        eq[rl] = '\0';
+        const char *v = eq;
+        if (rl >= 4 && eq[0] == 0x1B && eq[1] == 0) {
+            v = eq + 4;                     /* process-permanent file */
+            rl = (uint16_t)(rl - 4);
+        }
+        if (!rl || rl >= sizeof cur || v[0] == '/')
+            return 0;                       /* no VMS name behind it */
+        memmove(cur, v, (size_t)rl);
+        cur[rl] = '\0';
+    }
+    const char *col = strchr(cur, ':');
+    if (!col || col[1] != '\0' || strlen(cur) >= outsz)
+        return 0;
+    snprintf(out, outsz, "%s", cur);
+    return 1;
+}
+
+static uint32_t ppf_devclass(uint16_t chan)
+{
+    struct item_list_3 il[2];
+    uint32_t cls = 0;
+    uint16_t iosb[4] = { 0, 0, 0, 0 };
+    memset(il, 0, sizeof il);
+    il[0].buflen = sizeof cls;
+    il[0].item_code = DVI$_DEVCLASS;
+    il[0].bufaddr = &cls;
+    if (sys$getdviw(0, chan, NULL, il, (void *)iosb, NULL, 0, 0) & 1)
+        return cls;
+    return 0;
+}
+
+static void ppf_bind(void)
+{
+    static const char *const names[2] = { "SYS$OUTPUT", "SYS$ERROR" };
+    for (int which = 0; which < 2; which++) {
+        struct ppf *p = &g_ppf[which];
+        char dev[64];
+        uint16_t chan = 0;
+        struct dsc$descriptor_s d;
+        memset(p, 0, sizeof *p);
+        if (!ppf_device(names[which], dev, sizeof dev))
+            continue;
+        mkdesc(&d, dev, strlen(dev));
+        if (!(sys$assign(&d, &chan, 0, NULL, 0) & 1))
+            continue;
+        uint32_t cls = ppf_devclass(chan);
+        int kind = cls == DC$_MAILBOX ? PPF_MBX :
+                   cls == DC$_TERM && isatty(which ? STDERR_FILENO : STDOUT_FILENO)
+                       ? PPF_TT : PPF_SUBSTRATE;
+        if (kind == PPF_SUBSTRATE) {
+            (void)sys$dassgn(chan);
+            continue;
+        }
+        p->kind = kind;
+        p->chan = chan;
+        snprintf(p->dev, sizeof p->dev, "%s", dev);
+    }
+}
+
+/* One record to SYS$OUTPUT (which 0) or SYS$ERROR (1). */
+static void ppf_put(int which, const char *rec)
+{
+    const struct ppf *p = &g_ppf[which];
+    size_t n = strlen(rec);
+    if (p->kind == PPF_MBX || p->kind == PPF_TT) {
+        char msg[1024];
+        uint16_t iosb[4] = { 0, 0, 0, 0 };
+        uint32_t cc = 0;
+        if (n > sizeof msg - 2)
+            n = sizeof msg - 2;
+        memcpy(msg, rec, n);
+        if (p->kind == PPF_MBX)
+            msg[n++] = '\n';         /* one line per message, as DCL's own records */
+        else
+            cc = ' ';                /* terminal: LF before, CR after */
+        uint32_t st = sys$qiow(0, p->chan, IO$_WRITEVBLK, iosb, NULL, 0,
+                               msg, n, 0, cc, 0, 0);
+        if ((st & 1) && (iosb[0] & 1))
+            return;
+    }
+    FILE *f = which ? stderr : stdout;   /* no channel: the substrate stream */
+    fputs(rec, f);
+    fputc('\n', f);
+    fflush(f);
+}
+
+/* A message, as $PUTMSG writes it: SYS$ERROR, and SYS$OUTPUT too when that is
+ * another file. */
+static void msg_put(const char *line)
+{
+    /* NEGCTL-ANCHORED (install-msg-to-substrate-stderr) */
+    ppf_put(1, line);
+    if (strcasecmp(g_ppf[0].dev, g_ppf[1].dev) != 0)
+        ppf_put(0, line);
+}
+
+static void msg_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void msg_printf(const char *fmt, ...)
+{
+    char line[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    msg_put(line);
+}
+
+static void out_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void out_printf(const char *fmt, ...)
+{
+    char line[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    ppf_put(0, line);
+}
+
+/* The secondary line for a status the executive returned: INSTALL's own
+ * reasons, else the system message ($GETMSG) as "-FAC-S-IDENT, text".
+ * NOSUCHFILE is "Known File Entry not found" only where an entry was looked
+ * up: on CREATE no entry is, and the status is the executive's copy of the
+ * image failing (its directory absent) -- reported as itself, not as a
+ * missing entry, which is what hid that cause (rd vms-d41). */
 static void report_failure(const char *what, const char *spec, uint32_t st)
 {
     const char *why =
         st == ST_NOPRIV     ? "-SYSTEM-F-NOCMKRNL, operation requires CMKRNL privilege" :
         st == ST_DUPLNAM    ? "-INSTALL-E-DUPLICATE, Known File Entry already exists" :
-        st == ST_NOSUCHFILE ? "-INSTALL-E-NOKFEFND, Known File Entry not found" :
-        st == ST_ACCONFLICT ? "-SYSTEM-W-ACCONFLICT, file access conflict" :
-        st == 0x908u        ? "-SYSTEM-W-NOSUCHDEV, no such device available (no executive)" : NULL;
-    fprintf(stderr, "%%INSTALL-E-FAIL, failed to %s entry for %s\n", what, spec);
-    if (why)
-        fprintf(stderr, "%s\n", why);
-    else
-        fprintf(stderr, "-SYSTEM-F-ABORT, status %%X%08X\n", (unsigned)st);
+        st == ST_NOSUCHFILE && strcmp(what, "CREATE") != 0
+                            ? "-INSTALL-E-NOKFEFND, Known File Entry not found" : NULL;
+    msg_printf("%%INSTALL-E-FAIL, failed to %s entry for %s", what, spec);
+    if (why) {
+        msg_put(why);
+        return;
+    }
+    char text[256];
+    uint16_t len = 0;
+    struct dsc$descriptor_s buf;
+    mkdesc(&buf, text, sizeof text - 1);
+    if ((sys$getmsg(st, &len, &buf, 0, NULL) & 1) && len > 0) {
+        text[len] = '\0';
+        text[0] = '-';                      /* a secondary message */
+        msg_put(text);
+    } else {
+        msg_printf("-SYSTEM-F-ABORT, status %%X%08X", (unsigned)st);
+    }
 }
 
 #define KNOWN_IMAGES_DB  VMS_SYSTEM_DIR "/VMS$KNOWN_IMAGES.DAT"
@@ -157,7 +364,7 @@ static int resolve_filespec(const char *filespec, char *soname, size_t soname_le
 static int add_or_replace(int replace, int argc, char *argv[])
 {
     if (argc < 1) {
-        fprintf(stderr, "%%INSTALL-E-NOFILE, no image filespec specified\n");
+        msg_printf("%%INSTALL-E-NOFILE, no image filespec specified");
         return 1;
     }
     struct vms_kfe_args a;
@@ -181,18 +388,18 @@ static int add_or_replace(int replace, int argc, char *argv[])
             a.privs = parse_privilege_string(list);
             a.flags |= VMS_KFE_F_PRIV;
         } else {
-            fprintf(stderr, "%%INSTALL-E-IVQUAL, unrecognized qualifier \"%s\"\n", argv[i]);
+            msg_printf("%%INSTALL-E-IVQUAL, unrecognized qualifier \"%s\"", argv[i]);
             return 1;
         }
     }
     char soname[64] = {0}, path[256] = {0};
     if (resolve_filespec(argv[0], soname, sizeof soname, path, sizeof path) != 0) {
-        fprintf(stderr, "%%INSTALL-E-BADFILE, cannot resolve \"%s\"\n", argv[0]);
+        msg_printf("%%INSTALL-E-BADFILE, cannot resolve \"%s\"", argv[0]);
         return 1;
     }
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        fprintf(stderr, "%%INSTALL-E-FILNOTFND, file %s not found\n", path);
+        msg_printf("%%INSTALL-E-FILNOTFND, file %s not found", path);
         return 1;
     }
     a.fd = fd;
@@ -212,12 +419,12 @@ static int cmd_replace(int argc, char *argv[]) { return add_or_replace(1, argc, 
 static int cmd_remove(int argc, char *argv[])
 {
     if (argc < 1) {
-        fprintf(stderr, "%%INSTALL-E-NOFILE, no image filespec specified\n");
+        msg_printf("%%INSTALL-E-NOFILE, no image filespec specified");
         return 1;
     }
     char soname[64] = {0}, path[256] = {0};
     if (resolve_filespec(argv[0], soname, sizeof soname, path, sizeof path) != 0) {
-        fprintf(stderr, "%%INSTALL-E-BADFILE, cannot resolve \"%s\"\n", argv[0]);
+        msg_printf("%%INSTALL-E-BADFILE, cannot resolve \"%s\"", argv[0]);
         return 1;
     }
     struct vms_kfe_args a;
@@ -235,22 +442,25 @@ static int cmd_remove(int argc, char *argv[])
 
 static void print_entry(const struct vms_kfe_args *e, int full)
 {
-    printf("   %-30s %s%s%s%s\n", e->name,
-           (e->flags & VMS_KFE_F_OPEN) ? "Open " : "",
-           (e->flags & VMS_KFE_F_HDRRES) ? "Hdr " : "",
-           (e->flags & VMS_KFE_F_SHARED) ? "Shar " : "",
-           (e->flags & VMS_KFE_F_PRIV) ? "Prv " : "");
+    out_printf("   %-30s %s%s%s%s", e->name,
+               (e->flags & VMS_KFE_F_OPEN) ? "Open " : "",
+               (e->flags & VMS_KFE_F_HDRRES) ? "Hdr " : "",
+               (e->flags & VMS_KFE_F_SHARED) ? "Shar " : "",
+               (e->flags & VMS_KFE_F_PRIV) ? "Prv " : "");
     if (!full)
         return;
-    printf("        Entry access count         = %u\n", (unsigned)e->access);
+    out_printf("        Entry access count         = %u", (unsigned)e->access);
     if (e->flags & VMS_KFE_F_PRIV) {
-        printf("        Privileges =");
+        char line[512];
+        size_t n = (size_t)snprintf(line, sizeof line, "        Privileges =");
         for (size_t k = 0; k < sizeof priv_names / sizeof priv_names[0]; k++)
-            if (e->privs & priv_names[k].bit)
-                printf(" %s", priv_names[k].name);
-        printf(" \n");
+            if ((e->privs & priv_names[k].bit) && n < sizeof line)
+                n += (size_t)snprintf(line + n, sizeof line - n, " %s", priv_names[k].name);
+        if (n < sizeof line)
+            snprintf(line + n, sizeof line - n, " ");
+        ppf_put(0, line);
     }
-    printf("\n");
+    ppf_put(0, "");
 }
 
 static int cmd_list(int argc, char *argv[])
@@ -263,7 +473,7 @@ static int cmd_list(int argc, char *argv[])
         else if (argv[i][0] != '/' && !only)
             only = argv[i];
         else {
-            fprintf(stderr, "%%INSTALL-E-IVQUAL, unrecognized qualifier \"%s\"\n", argv[i]);
+            msg_printf("%%INSTALL-E-IVQUAL, unrecognized qualifier \"%s\"", argv[i]);
             return 1;
         }
     }
@@ -271,7 +481,7 @@ static int cmd_list(int argc, char *argv[])
     if (only) {
         char soname[64] = {0}, path[256] = {0};
         if (resolve_filespec(only, soname, sizeof soname, path, sizeof path) != 0) {
-            fprintf(stderr, "%%INSTALL-E-BADFILE, cannot resolve \"%s\"\n", only);
+            msg_printf("%%INSTALL-E-BADFILE, cannot resolve \"%s\"", only);
             return 1;
         }
         memset(&a, 0, sizeof a);
@@ -280,17 +490,17 @@ static int cmd_list(int argc, char *argv[])
         snprintf(a.name, sizeof a.name, "%s", soname);
         uint32_t st = vms_kif_kfe(&a);
         if (!(st & 1)) {
-            fprintf(stderr, "%%INSTALL-W-FAIL, failed to LIST entry for %s\n", only);
-            fprintf(stderr, "-INSTALL-E-NOKFEFND, Known File Entry not found\n");
+            msg_printf("%%INSTALL-W-FAIL, failed to LIST entry for %s", only);
+            msg_printf("-INSTALL-E-NOKFEFND, Known File Entry not found");
             return 1;
         }
-        printf("\n");
+        ppf_put(0, "");
         print_entry(&a, full);
         return 0;
     }
     uint32_t idx = 0;
     int n = 0;
-    printf("\n");
+    ppf_put(0, "");
     for (int guard = 0; guard < VMS_KFE_MAX; guard++) {
         memset(&a, 0, sizeof a);
         a.op = VMS_KFE_OP_LIST;
@@ -308,22 +518,22 @@ static int cmd_list(int argc, char *argv[])
         n++;
     }
     if (n == 0)
-        printf("%%INSTALL-I-NOIMAGES, no images installed\n");
+        msg_put("%INSTALL-I-NOIMAGES, no images installed");
     return 0;
 }
 
 static void usage(void)
 {
-    fprintf(stderr,
-        "Usage:\n"
-        "  INSTALL ADD     <image-filespec> [/OPEN] [/SHARED] [/HEADER_RESIDENT] [/PRIVILEGED=(...)]\n"
-        "  INSTALL REPLACE <image-filespec> [qualifiers as ADD]\n"
-        "  INSTALL LIST    [<image-filespec>] [/FULL]\n"
-        "  INSTALL REMOVE  <image-filespec>\n");
+    out_printf("Usage:");
+    out_printf("  INSTALL ADD     <image-filespec> [/OPEN] [/SHARED] [/HEADER_RESIDENT] [/PRIVILEGED=(...)]");
+    out_printf("  INSTALL REPLACE <image-filespec> [qualifiers as ADD]");
+    out_printf("  INSTALL LIST    [<image-filespec>] [/FULL]");
+    out_printf("  INSTALL REMOVE  <image-filespec>");
 }
 
 int main(int argc, char *argv[])
 {
+    ppf_bind();
     if (argc < 2) {
         usage();
         return 1;
@@ -339,7 +549,7 @@ int main(int argc, char *argv[])
     if (strcasecmp(verb, "REMOVE") == 0)
         return cmd_remove(argc - 2, argv + 2);
 
-    fprintf(stderr, "%%INSTALL-E-SYNTAX, unrecognized command \"%s\"\n", verb);
+    msg_printf("%%INSTALL-E-SYNTAX, unrecognized command \"%s\"", verb);
     usage();
     return 1;
 }

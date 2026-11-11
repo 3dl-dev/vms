@@ -1730,6 +1730,13 @@ uint32_t vms_devtab_disk_backing(const char *devnam,
  */
 void vms_devtab_note_io_error(uint32_t major, uint32_t minor);
 /*
+ * Set (mounted != 0) or clear DEV$M_MNT in a unit's DEVCHAR -- the bit VMS's
+ * MOUNT sets and DISMOUNT clears (rd vms-0504). Called only by the Files-11
+ * ACP under vms_acp_vol_lock as it publishes/removes a mounted volume.
+ * Defined in kernel-core, on every substrate.
+ */
+void vms_devtab_set_mounted(const char *devnam, int mounted);
+/*
  * FC-P0.9: PEA0:'s discovery of the same NIC ETH0: was already bound to at
  * boot, and PEA0:'s entry into the device table once the port glue has
  * actually opened it. Both internal (non-ioctl): `netif` is INV-4 and never

@@ -53,6 +53,9 @@
 #include "starlet.h"
 #include "descrip.h"
 #include "ssdef.h"
+#include "dvidef.h"
+#include "devdef.h"
+#include "lnmdef.h"      /* struct item_list_3 */
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
 #include "vms/pcb.h"
@@ -91,6 +94,29 @@ static struct dsc$descriptor_s mkdsc(const char *s)
     d.dsc$b_class   = DSC$K_CLASS_S;
     d.dsc$a_pointer = (char *)s;
     return d;
+}
+
+/* $GETDVIW DVI$_DEVCHAR for `unit`: the executive's DEV$M_* word for it
+ * (rd vms-0504). Returns the $GETDVI status; *chars is 0 on failure. */
+static uint32_t devchar_of(const char *unit, uint32_t *chars)
+{
+    struct dsc$descriptor_s d = mkdsc(unit);
+    struct item_list_3 il[2];
+    struct _iosb iosb;
+    uint16_t rl = 0;
+    uint32_t st;
+
+    *chars = 0;
+    memset(il, 0, sizeof il);
+    memset(&iosb, 0, sizeof iosb);
+    il[0].buflen    = (uint16_t)sizeof *chars;
+    il[0].item_code = DVI$_DEVCHAR;
+    il[0].bufaddr   = chars;
+    il[0].retlen    = &rl;
+    st = sys$getdviw(0, 0, &d, il, &iosb, NULL, 0, 0);
+    if ($VMS_STATUS_SUCCESS(st) && iosb.iosb$w_status != 0)
+        st = iosb.iosb$w_status;
+    return st;
 }
 
 static int executive_present(void)
@@ -203,6 +229,19 @@ int main(int argc, char **argv)
     check($VMS_STATUS_SUCCESS(st),
           "$MOUNT of the genuine ODS-2 " ODS2_UNIT " validates (home block + SCB) and records it");
 
+    /* MOUNT sets DEV$M_MNT in the unit's DEVCHAR, as VMS's MOUNT sets
+     * UCB$L_DEVCHAR MNT: $GETDVI DVI$_DEVCHAR (what SET VOLUME and F$GETDVI
+     * read) now reports the volume mounted, still AVL (rd vms-0504). */
+    {
+        uint32_t chars = 0;
+        uint32_t gst = devchar_of(ODS2_UNIT, &chars);
+        printf("  info: $GETDVI " ODS2_UNIT " DEVCHAR after $MOUNT = %%X%08X (status %%X%08X)\n",
+               (unsigned)chars, (unsigned)gst);
+        /* negctl: acp-mount-devchar-mnt-unset */
+        check($VMS_STATUS_SUCCESS(gst) && (chars & DEV$M_MNT) && (chars & DEV$M_AVL),
+              "after $MOUNT, $GETDVI DVI$_DEVCHAR of VDA0: has DEV$M_MNT (and DEV$M_AVL)");
+    }
+
     /* Idempotent: a second mount of an already-mounted (validated) unit is
      * success and does not re-read the disk. */
     st = vms_kif_acp_mount(ODS2_UNIT);
@@ -224,6 +263,12 @@ int main(int argc, char **argv)
     st = vms_kif_acp_dmount(BLANK_UNIT);
     check(st == SS$_NOSUCHDEV,
           "$DISMOUNT of the rejected VDA100: is SS$_NOSUCHDEV (the reject recorded nothing)");
+    {
+        uint32_t chars = 0;
+        uint32_t gst = devchar_of(BLANK_UNIT, &chars);
+        check($VMS_STATUS_SUCCESS(gst) && !(chars & DEV$M_MNT),
+              "the rejected VDA100: has no DEV$M_MNT in its $GETDVI DVI$_DEVCHAR");
+    }
 
     /* --- (3) the mount is EXECUTIVE-GLOBAL: a second process sees it ------ */
     if (pipe(a2b) < 0 || pipe(b2a) < 0) {
@@ -274,6 +319,17 @@ int main(int argc, char **argv)
     /* --- cleanup: $DISMOUNT the ODS-2 volume ----------------------------- */
     st = vms_kif_acp_dmount(ODS2_UNIT);
     check($VMS_STATUS_SUCCESS(st), "$DISMOUNT removes the ODS-2 volume from the executive table");
+
+    /* DISMOUNT clears DEV$M_MNT again (rd vms-0504). */
+    {
+        uint32_t chars = 0;
+        uint32_t gst = devchar_of(ODS2_UNIT, &chars);
+        printf("  info: $GETDVI " ODS2_UNIT " DEVCHAR after $DISMOUNT = %%X%08X (status %%X%08X)\n",
+               (unsigned)chars, (unsigned)gst);
+        /* negctl: acp-dismount-devchar-mnt-kept */
+        check($VMS_STATUS_SUCCESS(gst) && !(chars & DEV$M_MNT) && (chars & DEV$M_AVL),
+              "after $DISMOUNT, $GETDVI DVI$_DEVCHAR of VDA0: no longer has DEV$M_MNT");
+    }
 
     /* After dismount, $ASSIGN of the ODS-2 unit is fail-honest again. */
     {

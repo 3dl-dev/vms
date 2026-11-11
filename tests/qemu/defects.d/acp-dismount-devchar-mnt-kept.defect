@@ -1,0 +1,26 @@
+# acp-dismount-devchar-mnt-kept -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the Files-11 ACP \$DISMOUNT clears DEV\$M_MNT in the unit's DEVCHAR, as VMS's DISMOUNT does (vms-0504)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_mount";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_acp_dmount() removes the volume but leaves the unit marked mounted: \$GETDVI DVI\$_DEVCHAR of a dismounted VDA0: still has DEV\$M_MNT.";;
+        require_fail) cat <<'EOF2'
+after $DISMOUNT, $GETDVI DVI$_DEVCHAR of VDA0: no longer has DEV$M_MNT
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    vms_devtab_set_mounted(vol->devnam, 0);.*$|    /* NEGCTL acp-dismount-devchar-mnt-kept */|' "$_file"
+    :
+}

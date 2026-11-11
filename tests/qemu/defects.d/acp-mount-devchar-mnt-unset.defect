@@ -1,0 +1,29 @@
+# acp-mount-devchar-mnt-unset -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the Files-11 ACP \$MOUNT sets DEV\$M_MNT in the unit's DEVCHAR, as VMS's MOUNT sets UCB\$L_DEVCHAR MNT (vms-0504)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_mount test_syssvc_dcl_set_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_acp_mount() publishes the volume but no longer marks the unit mounted: \$GETDVI DVI\$_DEVCHAR of an ACP-mounted VDA0: lacks DEV\$M_MNT.";;
+        require_fail) cat <<'EOF2'
+after $MOUNT, $GETDVI DVI$_DEVCHAR of VDA0: has DEV$M_MNT (and DEV$M_AVL)
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+SET VOLUME on an ACP-mounted volume succeeds (DEV$M_MNT from $GETDVI)
+EOF2
+                      ;;
+        knock_on_why)  echo "SET VOLUME's mount check IS the \$GETDVI DEV\$M_MNT bit this defect stops setting: the same missing bit, read by DCL instead of the test.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    vms_devtab_set_mounted(vol->devnam, 1);.*$|    /* NEGCTL acp-mount-devchar-mnt-unset */|' "$_file"
+    :
+}

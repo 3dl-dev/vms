@@ -1466,8 +1466,12 @@ if(BUILD_TOOLS)
         vms_initialize       # INITIALIZE.EXE
         vms_sysgen           # SYSGEN.EXE
         vms_cnxtrace         # CNXTRACE.EXE
-        decnetd_exe          # DECNETD.EXE (retired: exits SS$_UNSUPPORTED until S4 -- vms-0a7)
-        netacp_exe           # NETACP.EXE (rd vms-0a7 S3)
+        # DECNETD.EXE is retired by rd vms-0a7 S3: it exits SS$_UNSUPPORTED
+        # until S4; NETACP.EXE is the ACP that replaces it. Keep every entry
+        # in `target  # NAME` form with no parentheses on any line of this
+        # list: tools/parity/image_parity.py reads it to derive the VAX set.
+        decnetd_exe          # DECNETD.EXE
+        netacp_exe           # NETACP.EXE
         fal_exe              # FAL.EXE
         rtpad_exe            # RTPAD.EXE
         mail_server_exe      # MAIL_SERVER.EXE

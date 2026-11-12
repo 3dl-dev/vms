@@ -74,8 +74,6 @@ static int run_dcl(const char *script, char *out, size_t outsz)
     return 0;
 }
 
-int main(void)
-
 static long long llabs_diff(long long a, long long b) { return a > b ? a - b : b - a; }
 
 int main(void)
@@ -109,6 +107,7 @@ int main(void)
     CHECK(sysinfo(&si) == 0, "sysinfo(2) reads the guest's memory size");
     long long real_pages = (long long)si.totalram * si.mem_unit / 512;
     long long exec_pages = (long long)(mi.total_bytes / 512ULL);
+    /* negctl: exec-getsyimem-fabricated-total */
     CHECK(real_pages > 0 && llabs_diff(exec_pages, real_pages) <= real_pages / 50,
           "the executive's total matches the guest's memory size within 2%");
 
@@ -124,6 +123,7 @@ int main(void)
             total = -1;
     }
     CHECK(row != NULL && total > 0, "SHOW MEMORY prints a Main Memory row with a page total");
+    /* negctl: exec-getsyimem-fabricated-total */
     CHECK(total > 0 && llabs_diff(total, real_pages) <= real_pages / 50,
           "the Main Memory total is the guest's memory size within 2% (vms-fe21)");
     CHECK(total > 0 && inuse == total - freep && freep > 0,

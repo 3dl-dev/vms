@@ -1565,25 +1565,15 @@ run_dcl_acceptance_battery() {
             "DECnet config [vms-1f69]: NCP SET EXECUTOR ADDRESS 1.42 persists (no %NCP-E-CFGWRERR -- written through RMS over the ACP, not a Linux path)"
         run_cmd 'NCP SET EXECUTOR NAME OVMX'
         must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR NAME OVMX persists"
-        run_cmd 'NCP SET EXECUTOR STATE ON'
-        must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR STATE ON persists"
-        # LIST reads the PERMANENT database -- the file NCP just wrote (rd vms-30e:
-        # SHOW now reads the RUNNING NETACP, the VMS split).
-        run_cmd 'NCP LIST EXECUTOR'
-        must_have "$SEG" 'Executor node = 1.42 (OVMX)' \
-            "DECnet config [vms-1f69]: a FRESH NCP image reads back 1.42 (OVMX) -- all three SETs landed in the one executor database"
-        must_match "$SEG" 'State +=  *on' "DECnet config [vms-1f69]: LIST EXECUTOR reads back State = on"
-        negctl "$SEG" 'Executor node' "NCP LIST EXECUTOR"
-        # NCP SHOW / SHOW NETWORK READ THE RUNNING NETWORK (rd vms-30e). This VM
-        # has no NIC, so no _NET: device and no NETACP: SHOW EXECUTOR must FAIL
-        # honestly (no volatile database -- never the configured file passed off
-        # as the running network), and SHOW NETWORK must carry NO DECNET product
-        # line (VMS prints one only while NETACP serves). The POSITIVE half --
-        # SHOW EXECUTOR / CHARACTERISTICS / COUNTERS / KNOWN NODES / KNOWN LINKS
-        # and the DECNET line read from a RUNNING NETACP in the oracle layout --
-        # needs a NIC and a boot-time NETACP: test_decnet_startnet_boot_e2e.sh
-        # boot 2 (same CI job); the layout is diffed against the real VAX
-        # transcripts by decnetd_netacp_show_selftest (ctest).
+        # NCP SHOW / SHOW NETWORK READ THE RUNNING NETWORK (rd vms-30e). The
+        # node is CONFIGURED now (address + name in the permanent database) but
+        # the network is not started: no SET EXECUTOR STATE ON yet, so no
+        # NETACP on ANY rail. SHOW EXECUTOR must FAIL honestly (no volatile
+        # database -- never the configured file passed off as the running
+        # network), and SHOW NETWORK must carry NO DECNET product line (VMS
+        # prints one only while NETACP serves). STATE ON below starts NETACP;
+        # where the node has a LAN adapter it then SERVES (the VAX rail, qt0),
+        # so the running-network half is asserted after it, per rail.
         run_cmd 'NCP SHOW EXECUTOR'
         must_have "$SEG" '%NCP-F-OPEFAI' \
             "NCP SHOW [vms-30e]: with no NETACP serving, NCP SHOW EXECUTOR fails %NCP-F-OPEFAI (no volatile database to read)"
@@ -1595,6 +1585,36 @@ run_dcl_acceptance_battery() {
         must_not_have "$SEG" 'Product:  DECNET' \
             "SHOW NETWORK [vms-30e]: no DECNET product line while no NETACP serves"
         negctl "$SEG" 'Product:' "SHOW NETWORK"
+        run_cmd 'NCP SET EXECUTOR STATE ON'
+        must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR STATE ON persists"
+        # LIST reads the PERMANENT database -- the file NCP just wrote (rd vms-30e:
+        # SHOW now reads the RUNNING NETACP, the VMS split).
+        run_cmd 'NCP LIST EXECUTOR'
+        must_have "$SEG" 'Executor node = 1.42 (OVMX)' \
+            "DECnet config [vms-1f69]: a FRESH NCP image reads back 1.42 (OVMX) -- all three SETs landed in the one executor database"
+        must_match "$SEG" 'State +=  *on' "DECnet config [vms-1f69]: LIST EXECUTOR reads back State = on"
+        negctl "$SEG" 'Executor node' "NCP LIST EXECUTOR"
+        # STATE ON created NETACP. Does this node have a LAN adapter (the
+        # executive's ETH0:, INV-6)? Without one (-nic none: x86_64/Alpha)
+        # NETACP logs its honest no-circuit refusal and exits (rd vms-bc6), so
+        # the network is STILL not running and SHOW must still say so. With
+        # one (the VAX rail's DELQA) NETACP serves, and SHOW reads it -- that
+        # positive half is asserted at the end of this block, once NETACP has
+        # had the intervening commands to open its datalink.
+        local DN_NIC=0 NIC_OFF; NIC_OFF=$(wc -c <"$LOG")
+        run_cmd 'IF F$GETDVI("ETH0:","EXISTS") THEN WRITE SYS$OUTPUT "[DNNIC:", "YES:]"'
+        if tail -c "+$((NIC_OFF + 1))" "$LOG" | tr -d '\r' | grep -qF '[DNNIC:YES:]'; then
+            DN_NIC=1
+        else
+            run_cmd 'NCP SHOW EXECUTOR'
+            must_have "$SEG" '%NCP-F-OPEFAI' \
+                "NCP SHOW [vms-30e]: no LAN adapter -- the NETACP STATE ON created could not serve, NCP SHOW EXECUTOR fails %NCP-F-OPEFAI"
+            must_not_have "$SEG" 'Node Volatile Summary' \
+                "NCP SHOW [vms-30e]: no LAN adapter -- no volatile summary (the permanent file is not shown as the running network)"
+            run_cmd 'SHOW NETWORK'
+            must_not_have "$SEG" 'Product:  DECNET' \
+                "SHOW NETWORK [vms-30e]: no LAN adapter -- no DECNET product line while no NETACP serves"
+        fi
         run_cmd 'WRITE SYS$OUTPUT "[DNCFG:" + F$SEARCH("SYS$SYSTEM:NETNODE_LOCAL.DAT") + ":]"'
         must_match "$SEG" '\[DNCFG:[^"]*NETNODE_LOCAL\.DAT[^"]*:\]' \
             "DECnet config [vms-1f69]: SYS\$SYSTEM:NETNODE_LOCAL.DAT now EXISTS on the system disk (F\$SEARCH, STARTNET's own gate, sees what NCP wrote)"
@@ -1679,6 +1699,21 @@ run_dcl_acceptance_battery() {
             "STARTNET [vms-1f69]: on the CONFIGURED node @SYS\$MANAGER:STARTNET passes its gate and NCP SET EXECUTOR STATE ON creates NETACP (the procedure exits with NCP's success status)"
         must_not_have "$SN_SEG" '%NCP-F-' \
             "STARTNET [vms-1f69]: NCP did not refuse the NETACP launch (no %NCP-F- line)"
+        if [ "$DN_NIC" = 1 ]; then
+            # The node has a LAN adapter: the NETACP that STATE ON created
+            # SERVES, and SHOW reads the RUNNING network from it (rd vms-30e).
+            run_cmd 'NCP SHOW EXECUTOR'
+            must_have "$SEG" 'Node Volatile Summary' \
+                "NCP SHOW [vms-30e]: with a LAN adapter the NETACP STATE ON created serves -- NCP SHOW EXECUTOR reads its volatile summary"
+            must_have "$SEG" 'Executor node = 1.42 (OVMX)' \
+                "NCP SHOW [vms-30e]: the running NETACP's executor is 1.42 (OVMX), the node NCP configured"
+            must_not_have "$SEG" '%NCP-F-' \
+                "NCP SHOW [vms-30e]: NCP SHOW EXECUTOR does not fail while NETACP serves"
+            run_cmd 'SHOW NETWORK'
+            must_match "$SEG" 'Product:  DECNET +Node:  OVMX +Address\(es\):  1\.42' \
+                "SHOW NETWORK [vms-30e]: while NETACP serves, the DECNET product line names node OVMX at 1.42"
+            negctl "$SEG" 'Product:' "SHOW NETWORK (running)"
+        fi
     fi
     wait_for '$ ' 20 "$DN_OFF"
 

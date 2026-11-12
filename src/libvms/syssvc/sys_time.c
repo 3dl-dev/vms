@@ -348,7 +348,6 @@ struct timer_entry {
     uint32_t    astprm;          /* AST parameter */
     timer_t     timerid;         /* POSIX timer ID */
     int         active;          /* Entry in use */
-    int         created;         /* timerid is a live POSIX timer (see below) */
 };
 
 static struct timer_entry timer_table[MAX_TIMERS];
@@ -694,10 +693,6 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
     }
 
     struct timer_entry *te = &timer_table[slot];
-    if (te->created) {               /* the timer of an expired request */
-        timer_delete(te->timerid);
-        te->created = 0;
-    }
     te->reqidt = reqidt;
     te->efn = efn;
     te->astadr = astadr;
@@ -717,7 +712,6 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
         timer_sig_restore(&sig_old);
         return SS$_INSFMEM;
     }
-    te->created = 1;
 
     /* Convert VMS time to timespec for timer_settime */
     struct itimerspec its;
@@ -748,7 +742,6 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
     int timer_flags = (signed_time >= 0) ? TIMER_ABSTIME : 0;
     if (timer_settime(te->timerid, timer_flags, &its, NULL) < 0) {
         timer_delete(te->timerid);
-        te->created = 0;
         te->active = 0;
         pthread_mutex_unlock(&timer_mutex);
         timer_sig_restore(&sig_old);
@@ -778,7 +771,6 @@ uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
         if (timer_table[i].active &&
             (reqidt == 0 || timer_table[i].reqidt == reqidt)) {
             timer_delete(timer_table[i].timerid);
-            timer_table[i].created = 0;
             timer_table[i].active = 0;
         }
     }

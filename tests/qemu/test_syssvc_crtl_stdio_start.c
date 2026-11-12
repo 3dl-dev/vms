@@ -10,7 +10,7 @@
  * THE DECISIVE SHAPE. The subject is the shipped SYSGEN.EXE, a static utility
  * image whose main() reads commands with fgets(stdin) and calls no C RTL
  * install of its own. Its substrate descriptor 0 is /dev/null (no command at
- * all there); its SYS$INPUT is a mailbox holding "SHOW SCSNODE" then end of
+ * all there); its SYS$INPUT is a mailbox holding "USE DEFAULT", "SHOW SCSNODE", then end of
  * file. Only an image whose start-up bound stdin to SYS$INPUT
  * (src/vmsrms/crtl_stdio_start.c, linked into every static product image by
  * CMakeLists.txt) can print the SCSNODE parameter; one reading descriptor 0
@@ -81,9 +81,10 @@ int main(void)
     check((sys$getdviw(0, chan, NULL, il, NULL, NULL, 0, 0) & 1) && dl, "$GETDVI names the mailbox");
     dev[dl] = '\0';
     uint16_t iosb[4] = { 0, 0, 0, 0 };
-    check(mbx_put(chan, "SHOW SCSNODE\n") && mbx_put(chan, "EXIT\n") &&
+    check(mbx_put(chan, "USE DEFAULT\n") && mbx_put(chan, "SHOW SCSNODE\n") &&
+          mbx_put(chan, "EXIT\n") &&
           (sys$qiow(0, chan, IO$_WRITEOF | IO$M_NOW, (void *)iosb, 0, 0, 0, 0, 0, 0, 0, 0) & 1),
-          "SHOW SCSNODE and EXIT, then end of file, are queued on the mailbox");
+          "USE DEFAULT, SHOW SCSNODE and EXIT, then end of file, are queued on the mailbox");
 
     int p[2];
     if (pipe(p) != 0) {

@@ -22,6 +22,6 @@ EOF
 }
 
 defect_apply() {
-        sed -i 's|^    ovmx_crtl_devfd_bind_stdio();$|    /* NEGCTL crtl-static-stdio-not-bound */|' "$_file"
+        sed -i 's|^    ovmx_crtl_devfd_bind_stdio_mailbox();$|    /* NEGCTL crtl-static-stdio-not-bound */|' "$_file"
     :
 }

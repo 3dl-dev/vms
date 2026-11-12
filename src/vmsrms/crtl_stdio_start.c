@@ -14,13 +14,25 @@
  * WHAT THIS DOES. Linked into every static image of a build whose C RTL base
  * has the system-call funnel (src/crtl-musl-x86_64; top-level CMakeLists.txt,
  * OVMX_CRTL_STDIO_START), its constructor binds descriptors 0, 1 and 2 through
- * the C RTL device layer -- the SAME ovmx_crtl_devfd_bind_stdio the DECC$SHR
- * images run (crtl_devfd.c): a terminal or a mailbox SYS$ stream becomes a
- * channel $ASSIGNed to it, served by $QIO; a file, or a stream the substrate
- * has redirected underneath the VMS name, is left as it is (crtl_devfd.c head
- * comment). It installs the device layer alone: the static image's files stay
- * where its own code puts them (the RMS file layer is a static image's to turn
- * on, ovmx_crtl_fd_install, as tests/qemu/corpus_rt_start.c does).
+ * the C RTL device layer (crtl_devfd.c), the binding a DECC$SHR image's start
+ * makes, for the MAILBOX streams: a mailbox SYS$ stream becomes a channel
+ * $ASSIGNed to it, served by $QIO; a file, or a stream the substrate has
+ * redirected underneath the VMS name (a host pipe DCL relays), is left as it
+ * is (crtl_devfd.c head comment). It installs the device layer alone: the
+ * static image's files stay where its own code puts them (the RMS file layer
+ * is a static image's to turn on, ovmx_crtl_fd_install, as
+ * tests/qemu/corpus_rt_start.c does).
+ *
+ * A TERMINAL stream is left as it is here. Telling a terminal line from one
+ * redirected underneath it takes a substrate terminal probe (crtl_devfd.c,
+ * line_is_terminal), and the interactive static images (RTPAD, AUTHORIZE...)
+ * drive their terminal by $QIO themselves; binding it is its own step.
+ *
+ * IMAGE RUNDOWN IS NOT STREAM END. The image's SYS$ streams are the PROCESS's
+ * (process-permanent files): DCL keeps writing SYS$OUTPUT after the image it
+ * RAN exits. So at exit only a terminal line is flushed; no end-of-file is
+ * written to a SYS$OUTPUT/SYS$ERROR mailbox (ovmx_crtl_devfd_flush_lines, not
+ * ovmx_crtl_devfd_rundown). Ending the stream is its creator's business.
  *
  * NO EXECUTIVE. $ASSIGN of SYS$INPUT fails (SS$_NOSUCHDEV, no /dev/vms) and the
  * stream is not bound: descriptor 0/1/2 stay the substrate's, exactly as a
@@ -37,9 +49,9 @@ typedef long long (*ovmx_sys_hook_fn)(long long, long long, long long, long long
                                       long long, long long, long long, int *);
 extern ovmx_sys_hook_fn __ovmx_sys_hook;            /* the musl funnel's cell */
 
-extern void ovmx_crtl_devfd_bind_stdio(void);       /* crtl_devfd.c */
+extern void ovmx_crtl_devfd_bind_stdio_mailbox(void);   /* crtl_devfd.c */
 extern int ovmx_crtl_devfd_is(long long fd);
-extern void ovmx_crtl_devfd_rundown(void);
+extern void ovmx_crtl_devfd_flush_lines(void);
 extern long long ovmx_crtl_devfd_call(long long, long long, long long, long long,
                                       long long, long long, int *);
 /* LIBVMS: nonzero while a system service does the substrate's own work. */
@@ -76,7 +88,7 @@ static long long stdio_hook(long long n, long long a1, long long a2, long long a
     int saved = errno;
     long long r = 0;
     if (n == SYS_exit_group)
-        ovmx_crtl_devfd_rundown();              /* a pipe's mailbox ends */
+        ovmx_crtl_devfd_flush_lines();          /* the streams stay the process's */
     else
         r = ovmx_crtl_devfd_call(n, a1, a2, a3, a4, a5, handled);
     errno = saved;
@@ -89,7 +101,7 @@ void ovmx_crtl_stdio_install(void)
     if (__ovmx_sys_hook)
         return;                                 /* a C RTL layer is already on */
     busy = 1;
-    ovmx_crtl_devfd_bind_stdio();
+    ovmx_crtl_devfd_bind_stdio_mailbox();
     busy = 0;
     if (ovmx_crtl_devfd_is(0) || ovmx_crtl_devfd_is(1) || ovmx_crtl_devfd_is(2))
         __ovmx_sys_hook = stdio_hook;

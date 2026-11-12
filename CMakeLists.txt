@@ -1635,8 +1635,8 @@ add_custom_target(release
 
 # ---------------------------------------------------------------------------
 # vms-07ae: a static image's stdin/stdout/stderr are SYS$INPUT/SYS$OUTPUT/
-# SYS$ERROR from image start-up, through the C RTL device layer -- the same
-# ovmx_crtl_devfd_bind_stdio a DECC$SHR image runs (src/vmsrms/crtl_devfd.c),
+# SYS$ERROR from image start-up when they are mailboxes, through the C RTL
+# device layer a DECC$SHR image binds them with (src/vmsrms/crtl_devfd.c),
 # turned on by src/vmsrms/crtl_stdio_start.c's constructor. It needs the C RTL
 # base with the system-call funnel (src/crtl-musl-x86_64, which tests/qemu/
 # Dockerfile and distro/Dockerfile.bootable install); a stock libc has nowhere

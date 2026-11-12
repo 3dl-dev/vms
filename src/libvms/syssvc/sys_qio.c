@@ -603,6 +603,33 @@ void vms$$qio_cancel_uring(uint16_t chan)
  * protection check); consumed and cleared by qio_service_status. */
 static __thread int qio_refused_before_iosb;
 
+/*
+ * vms$$mbx_read_wait - a blocking mailbox read during which the process runs
+ * its ASTs, as a process waiting in $QIOW does on VMS (rd vms-b24). When the
+ * executive ends the wait for a deliverable AST (VMS_MBX_RDO_ASTPEND) the read
+ * has not completed: deliver, then issue it again -- the terminal read's
+ * VMS_TT_RDO_ASTPEND resume, for a mailbox. Inside an AST routine the read
+ * waits without delivering: on VMS an AST of a mode does not interrupt another
+ * of the same mode. Also DCL's own image wait (dcl_cli_wait).
+ */
+extern uint32_t lib$ast_in_prog(void);
+uint32_t vms$$mbx_read_wait(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                            uint32_t *actlen, uint32_t *sender)
+{
+    uint32_t st;
+    int astpend = 0;
+
+    if (lib$ast_in_prog())
+        return vms_kif_mbx_read_ex(exec_chan, buf, bufsz, actlen, 0, sender);
+    for (;;) {
+        st = vms_kif_mbx_read_ast(exec_chan, buf, bufsz, actlen, sender,
+                                  &astpend);
+        if (!astpend)
+            return st;
+        vms$$deliver_pending_asts();
+    }
+}
+
 static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                                 void *p1, uint32_t p2, uint32_t efn,
                                 void (*astadr)(uint32_t), uint32_t astprm) {
@@ -639,8 +666,9 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
              * default (modifier absent) keeps the documented blocking read
              * that MMK's send_cmd_and_wait and the wrtattn tests rely on.
              */
-            st = vms_kif_mbx_read_ex(exec_chan, p1, p2, &actlen,
-                                     (func & IO$M_NOW) != 0, &sender);
+            st = (func & IO$M_NOW)
+                     ? vms_kif_mbx_read_ex(exec_chan, p1, p2, &actlen, 1, &sender)
+                     : vms$$mbx_read_wait(exec_chan, p1, p2, &actlen, &sender);
             /* the vms_kif layer reports the WHOLE message length; a request
              * shorter than the message gets its bytes, that count, and
              * SS$_BUFFEROVF (rd vms-542) */
@@ -676,14 +704,23 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
              * it is delivered at the caller's access mode (PSL_C_USER for a
              * normal image's $QIO). The executive registers it and fires it
              * cross-process on the next write (src/kernel-core/vms_mbx.c) --
-             * the notification MMK's send_cmd_and_wait waits on. IO$M_READATTN
-             * (the read-attention counterpart) is not implemented; a SETMODE
-             * without a recognized attention modifier is refused honestly.
+             * the notification MMK's send_cmd_and_wait waits on.
+             * IO$M_READATTN (rd vms-b24) arms the read-attention AST: fired
+             * when a read is queued to the empty mailbox, or at once if one is
+             * already waiting. Both modifiers arm both. A SETMODE without a
+             * recognized attention modifier is refused honestly.
              */
-            if (func & IO$M_WRTATTN) {
-                st = vms_kif_mbx_set_wrtattn(exec_chan, (uint8_t)PSL_C_USER,
-                                             (uint64_t)(uintptr_t)p1,
-                                             (uint64_t)p2);
+            if (func & (IO$M_WRTATTN | IO$M_READATTN)) {
+                st = SS$_NORMAL;
+                if (func & IO$M_WRTATTN)
+                    st = vms_kif_mbx_set_wrtattn(exec_chan, (uint8_t)PSL_C_USER,
+                                              (uint64_t)(uintptr_t)p1,
+                                              (uint64_t)p2);
+                if ((st & 1) && (func & IO$M_READATTN))
+                    st = vms_kif_mbx_set_attn(exec_chan, VMS_MBX_ATTN_READ,
+                                              (uint8_t)PSL_C_USER,
+                                              (uint64_t)(uintptr_t)p1,
+                                              (uint64_t)p2);
             } else {
                 st = SS$_ILLIOFUNC;
             }

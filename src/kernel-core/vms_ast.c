@@ -380,3 +380,74 @@ void vms_ast_notify_arrival(struct vms_proc *proc)
     exec_cv_broadcast(&proc->hiber_wq);
     exec_unlock(&proc->hiber_lock);
 }
+
+/*
+ * vms_ast_wait / vms_ast_waiter_wake - an executive wait that a deliverable AST
+ * ends, the read it serves staying outstanding (rd vms-b24).
+ *
+ * On VMS a process waiting for an I/O to complete ($QIOW = $QIO + $WAITFR on
+ * its event flag) runs its ASTs while it waits; the wait then goes on. A driver
+ * wait that blocked on its own object's queue could not see an AST queued to
+ * the process: vms_ast_notify_arrival wakes only the process's own hiber_wq.
+ * So the wait is made ON the process's own hiber_wq, under its hiber_lock:
+ *
+ *   - the object (a mailbox, vms_mbx.c) links a vms_ast_waiter under ITS lock,
+ *     drops that lock and calls vms_ast_wait();
+ *   - the object's completion side (a write), still under the object lock,
+ *     calls vms_ast_waiter_wake() for each linked waiter: it sets `woken` and
+ *     broadcasts hiber_wq under hiber_lock;
+ *   - an AST arrival broadcasts the same hiber_wq (vms_ast_notify_arrival).
+ *
+ * `woken` is written and read only under hiber_lock, so neither wake can be
+ * lost against a waiter that has already dropped hiber_lock inside
+ * exec_cv_wait. Lock order: object lock -> hiber_lock -> ast_state->lock, the
+ * order every AST-queueing path already uses (the mailbox write path fires its
+ * attention ASTs under mbx->lock and takes hiber_lock inside it). vms_ast_wait
+ * itself holds only hiber_lock, never an object lock.
+ *
+ * Deliverable means what $HIBER uses: an entry on an enabled queue at a mode
+ * >= the process's current mode. A spurious wake of a $HIBER in the same
+ * process re-tests its own predicate, so sharing hiber_wq costs nothing.
+ *
+ * Returns 0 (woken by the object), VMS_AST_WAIT_ASTPEND (an AST is deliverable
+ * and the object has not completed), or -ERESTARTSYS (a signal, neither true).
+ * The object is re-tested by the caller under its own lock in every case: a
+ * completion that raced the AST wins.
+ */
+int vms_ast_wait(struct vms_ast_waiter *w)
+{
+    struct vms_proc *proc = w->proc;
+    uint8_t cur_mode;
+    int rc = 0;
+
+    exec_lock(&proc->mode_lock);
+    cur_mode = proc->current_mode;
+    exec_unlock(&proc->mode_lock);
+
+    exec_lock(&proc->hiber_lock);
+    for (;;) {
+        if (w->woken)
+            break;
+        if (vms_ast_has_deliverable(proc, cur_mode)) {
+            rc = VMS_AST_WAIT_ASTPEND;
+            break;
+        }
+        if (exec_cv_wait(&proc->hiber_wq, &proc->hiber_lock)) {
+            if (w->woken)
+                break;
+            rc = vms_ast_has_deliverable(proc, cur_mode) ? VMS_AST_WAIT_ASTPEND
+                                                         : -ERESTARTSYS;
+            break;
+        }
+    }
+    exec_unlock(&proc->hiber_lock);
+    return rc;
+}
+
+void vms_ast_waiter_wake(struct vms_ast_waiter *w)
+{
+    exec_lock(&w->proc->hiber_lock);
+    w->woken = 1;
+    exec_cv_broadcast(&w->proc->hiber_wq);
+    exec_unlock(&w->proc->hiber_lock);
+}

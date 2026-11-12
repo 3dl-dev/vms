@@ -232,15 +232,16 @@ struct tcpip_timeval32 {            /* the RCVTIMEO value: two 32-bit fields */
  *
  * IO$M_WRTATTN sets a WRITE-ATTENTION AST on a mailbox channel: when another
  * process writes a message to the mailbox, the process that set the AST is
- * notified. IO$M_READATTN is the read-attention counterpart (notify when the
- * mailbox is read). Both are ONE-SHOT: the AST is delivered once and must be
- * re-established by another IO$_SETMODE|IO$M_WRTATTN to be notified again.
+ * notified. IO$M_READATTN is the read-attention counterpart: notified when a
+ * read is queued to the EMPTY mailbox, or at once if a read is already waiting
+ * when it is set (rd vms-b24). Both are ONE-SHOT: the AST is delivered once and
+ * must be re-established by another IO$_SETMODE to be notified again.
  * P1 carries the AST routine address, P2 the AST parameter.
  *
  * CLEAN-ROOM (CLAUDE.md Rule 8): these bit values and the one-shot,
  * re-arm-on-SETMODE semantics are from the public VSI OpenVMS I/O User's
  * Reference Manual (mailbox driver, "Setting Mailbox Attention ASTs") and the
- * public $IODEF ($EQU IO$M_WRTATTN ^X100, IO$M_READATTN ^X200) -- never from
+ * public $IODEF ($EQU IO$M_WRTATTN ^X100, IO$M_READATTN ^X80) -- never from
  * disassembly. The same two values are used by the tier-4 VMS example source
  * carried under tests/corpus/ (sp_mgr.b32) and the MMK compat shim
  * (tests/corpus/tier3-mmk/ovmx/ovmx_mmk_compat.h).

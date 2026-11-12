@@ -3776,8 +3776,10 @@ uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len)
  * rd vms-4a69). An end-of-file message (IO$_WRITEOF) completes with
  * SS$_ENDOFFILE and no data (rd vms-262a).
  */
-uint32_t vms_kif_mbx_read_ex(uint32_t exec_chan, void *buf, uint32_t bufsz,
-                             uint32_t *actlen, int nowait, uint32_t *sender_pid)
+/* The one read round trip both entry points below share. */
+static uint32_t kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                             uint32_t *actlen, uint32_t flags,
+                             uint32_t *sender_pid, int *astpend)
 {
     struct vms_mbx_read_args args;
     uint32_t n;
@@ -3790,10 +3792,14 @@ uint32_t vms_kif_mbx_read_ex(uint32_t exec_chan, void *buf, uint32_t bufsz,
     vms_memset(&args, 0, sizeof(args));
     args.chan = exec_chan;
     args.bufsz = (bufsz > VMS_MBX_IOCTL_MAXLEN) ? VMS_MBX_IOCTL_MAXLEN : bufsz;
-    args.flags = nowait ? VMS_MBX_READ_NOW : 0u;
+    args.flags = flags;
 
     KIF_WAIT_CALL(VMS_IOCTL_MBX_READ, &args);
 
+    if (astpend)
+        *astpend = (args.oflags & VMS_MBX_RDO_ASTPEND) != 0;
+    if (args.oflags & VMS_MBX_RDO_ASTPEND)
+        return args.status;     /* not completed: no data, no sender */
     if (sender_pid && args.status != 0 && args.status != SS$_IVCHAN)
         *sender_pid = args.sender_pid;
     if (args.status & 1) {
@@ -3803,6 +3809,27 @@ uint32_t vms_kif_mbx_read_ex(uint32_t exec_chan, void *buf, uint32_t bufsz,
         if (actlen) *actlen = args.len;
     }
     return args.status;
+}
+
+uint32_t vms_kif_mbx_read_ex(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                             uint32_t *actlen, int nowait, uint32_t *sender_pid)
+{
+    return kif_mbx_read(exec_chan, buf, bufsz, actlen,
+                        nowait ? VMS_MBX_READ_NOW : 0u, sender_pid, 0);
+}
+
+/*
+ * vms_kif_mbx_read_ast - a blocking mailbox read that a deliverable AST
+ * interrupts (rd vms-b24, VMS_MBX_READ_ASTWAIT). *astpend = 1 means the read
+ * has NOT completed: the caller runs its ASTs and issues the read again, as a
+ * process in $QIOW runs its ASTs on VMS. Otherwise as vms_kif_mbx_read_ex.
+ */
+uint32_t vms_kif_mbx_read_ast(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                              uint32_t *actlen, uint32_t *sender_pid,
+                              int *astpend)
+{
+    return kif_mbx_read(exec_chan, buf, bufsz, actlen, VMS_MBX_READ_ASTWAIT,
+                        sender_pid, astpend);
 }
 uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
                           uint32_t *actlen, int nowait)
@@ -3820,6 +3847,19 @@ uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
 uint32_t vms_kif_mbx_set_wrtattn(uint32_t exec_chan, uint8_t acmode,
                                  uint64_t astadr, uint64_t astprm)
 {
+    return vms_kif_mbx_set_attn(exec_chan, VMS_MBX_ATTN_WRITE, acmode, astadr,
+                                astprm);
+}
+
+/*
+ * vms_kif_mbx_set_attn - arm a write- (VMS_MBX_ATTN_WRITE) or read-attention
+ * (VMS_MBX_ATTN_READ, IO$_SETMODE|IO$M_READATTN, rd vms-b24) AST on a mailbox
+ * channel. Read-attention fires when a read is queued to the empty mailbox, or
+ * at once if a reader is already waiting. One-shot.
+ */
+uint32_t vms_kif_mbx_set_attn(uint32_t exec_chan, uint32_t kind, uint8_t acmode,
+                              uint64_t astadr, uint64_t astprm)
+{
     struct vms_mbx_wrtattn_args args;
 
     if (!mbx_bind_ok())
@@ -3830,6 +3870,7 @@ uint32_t vms_kif_mbx_set_wrtattn(uint32_t exec_chan, uint8_t acmode,
     args.acmode = acmode;
     args.astadr = astadr;
     args.astprm = astprm;
+    args.kind = kind;
 
     KIF_CALL(VMS_IOCTL_MBX_SET_WRTATTN, &args);
 

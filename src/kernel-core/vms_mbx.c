@@ -126,7 +126,9 @@ struct vms_mailbox {
     uint32_t owner_uic;
     uint16_t prot;
     exec_list_head_t msgq;      /* struct vms_mbx_msg, FIFO */
-    exec_list_head_t wrtattn;   /* struct vms_mbx_wrtattn_reg, write-attention ASTs */
+    exec_list_head_t wrtattn;   /* struct vms_mbx_wrtattn_reg, write- AND read-attention ASTs */
+    exec_list_head_t rdwaiters; /* struct vms_mbx_rdwait: reads waiting AST-interruptibly (vms-b24) */
+    uint32_t rd_waiting;        /* reads waiting for a message, either kind (READATTN at arm) */
     exec_cv_t read_wq;
     exec_cv_t write_wq;         /* writers waiting for bufquo to free up (vms-d26f) */
     exec_lock_t lock;           /* guards everything above except `list` */
@@ -149,8 +151,20 @@ struct vms_mbx_wrtattn_reg {
     struct vms_proc *proc;      /* the process to deliver the AST to */
     uint32_t chan;              /* the registering process's channel number */
     uint8_t  acmode;            /* access mode to deliver the AST at (0-3) */
+    uint8_t  kind;              /* VMS_MBX_ATTN_WRITE or VMS_MBX_ATTN_READ (vms-b24) */
     uint64_t astadr;            /* AST routine (opaque userspace address) */
     uint64_t astprm;            /* parameter to the AST routine */
+};
+
+/*
+ * A read waiting for a message that a deliverable AST may interrupt (rd
+ * vms-b24; VMS_MBX_READ_ASTWAIT). Lives on the reading thread's stack; linked
+ * in mbx->rdwaiters and touched by a writer only under mbx->lock, and unlinked
+ * under mbx->lock before the read returns, so it never outlives the wait.
+ */
+struct vms_mbx_rdwait {
+    exec_list_node_t list;      /* in vms_mailbox->rdwaiters */
+    struct vms_ast_waiter w;
 };
 
 /* One process's channel to a mailbox. */
@@ -316,13 +330,16 @@ static struct vms_mbx_chan *mbxchan_find_locked(struct vms_proc *proc, uint32_t 
  * outlives the channel it belongs to, and its `proc` back-pointer is dropped
  * before the process can be freed.
  */
+#define MBX_ATTN_ALL (-1)       /* strip every kind: the channel is going */
 static void mbx_wrtattn_strip_locked(struct vms_mailbox *mbx,
-                                     struct vms_proc *proc, uint32_t chan)
+                                     struct vms_proc *proc, uint32_t chan,
+                                     int kind)
 {
     struct vms_mbx_wrtattn_reg *w, *tmp;
 
     exec_list_for_each_entry_safe(w, tmp, &mbx->wrtattn, list) {
-        if (w->proc == proc && w->chan == chan) {
+        if (w->proc == proc && w->chan == chan &&
+            (kind == MBX_ATTN_ALL || w->kind == (uint8_t)kind)) {
             exec_list_del(&w->list);
             exec_free(w);
         }
@@ -429,6 +446,7 @@ long vms_ioctl_mbx_create(struct vms_proc *proc, unsigned long arg)
 
     exec_list_head_init(&mbx->msgq);
     exec_list_head_init(&mbx->wrtattn);
+    exec_list_head_init(&mbx->rdwaiters);
     exec_cv_init(&mbx->read_wq);
     exec_cv_init(&mbx->write_wq);
     exec_lock_init(&mbx->lock);
@@ -582,10 +600,25 @@ out:
  * allocate then re-check), so two concurrent writers on the same mailbox
  * cannot both pass the quota check for bytes only one of them can have.
  */
-/* Fire every write-attention AST armed on `mbx` (vms-9003; see the write
- * path below). Caller holds mbx->lock. Shared by a process's write and the
- * executive's own (vms_mbx_exec_post, rd vms-6d9). */
-static void mbx_fire_wrtattn_locked(struct vms_mailbox *mbx)
+/* A message was queued: wake every waiting reader -- the plain waiters on
+ * read_wq and the AST-interruptible ones through their process's hiber_wq
+ * (vms_ast_waiter_wake). Caller holds mbx->lock, the lock each waiter re-tests
+ * the queue under, so no wake is lost. */
+static void mbx_wake_readers_locked(struct vms_mailbox *mbx)
+{
+    struct vms_mbx_rdwait *rw;
+
+    exec_cv_broadcast(&mbx->read_wq);
+    exec_list_for_each_entry(rw, &mbx->rdwaiters, list)
+        vms_ast_waiter_wake(&rw->w);
+}
+
+/* Fire every attention AST of `kind` armed on `mbx`: write-attention on a
+ * write (vms-9003; see the write path below), read-attention on a read queued
+ * to the empty mailbox or an arm that finds a reader waiting (vms-b24). Caller
+ * holds mbx->lock. Shared by a process's write and the executive's own
+ * (vms_mbx_exec_post, rd vms-6d9). */
+static void mbx_fire_attn_locked(struct vms_mailbox *mbx, uint8_t kind)
 {
     struct vms_mbx_wrtattn_reg *w, *wtmp;
 
@@ -593,6 +626,8 @@ static void mbx_fire_wrtattn_locked(struct vms_mailbox *mbx)
         struct vms_ast_entry *ast;
         struct vms_ast_state *ast_state;
 
+        if (w->kind != kind)
+            continue;
         exec_list_del(&w->list);
 
         ast = exec_zalloc_atomic(sizeof(*ast));
@@ -745,7 +780,7 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
      */
     exec_lock(&mbx->lock);
     exec_list_add_tail(&m->list, &mbx->msgq);
-    exec_cv_broadcast(&mbx->read_wq);
+    mbx_wake_readers_locked(mbx);
 
     /*
      * WRITE-ATTENTION ASTs (vms-9003). A write to the mailbox notifies every
@@ -766,7 +801,7 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
      * lock-order edge is introduced. A full AST queue drops the notification
      * (the quota is the reader's, exactly as the lock manager treats it).
      */
-    mbx_fire_wrtattn_locked(mbx);
+    mbx_fire_attn_locked(mbx, VMS_MBX_ATTN_WRITE);
     exec_unlock(&mbx->lock);
 
     a->status = SS__NORMAL;
@@ -811,6 +846,8 @@ long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg)
     struct vms_mbx_msg *m;
     long ret = 0;
     uint32_t n;
+    int rd_fired = 0;     /* READATTN fired for this read (vms-b24) */
+    int wait_rc;
 
     a = exec_zalloc(sizeof(*a));
     if (!a)
@@ -819,6 +856,8 @@ long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg)
         ret = -EFAULT;
         goto out_free;
     }
+
+    a->oflags = 0;        /* out only */
 
     exec_lock(&proc->chan_lock);
     ch = mbxchan_find_locked(proc, a->chan);
@@ -860,7 +899,61 @@ long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg)
             a->status = SS__ENDOFFILE;
             goto out_copy;
         }
-        if (exec_cv_wait(&mbx->read_wq, &mbx->lock)) {
+        /*
+         * READ-ATTENTION (rd vms-b24): this read is being queued to an EMPTY
+         * mailbox -- fire the read-attention ASTs armed on it (one-shot; VSI
+         * OpenVMS I/O User's Reference, Mailbox Driver). Only once per entry
+         * here, not on a wake that found another reader took the message.
+         */
+        if (!rd_fired) {
+            mbx_fire_attn_locked(mbx, VMS_MBX_ATTN_READ); /* read queued to the empty mailbox */
+            rd_fired = 1;
+        }
+        if (a->flags & VMS_MBX_READ_ASTWAIT) {
+            /*
+             * AST-interruptible wait (rd vms-b24): wait on the process's own
+             * hiber_wq (vms_ast_wait), so an AST queued to it ends the wait as
+             * on VMS, where a process in $QIOW runs its ASTs. The read is not
+             * completed: the caller delivers and reads again.
+             */
+            struct vms_mbx_rdwait rw;
+            int wrc;
+
+            rw.w.proc = proc;
+            rw.w.woken = 0;
+            exec_list_add_tail(&rw.list, &mbx->rdwaiters);
+            mbx->rd_waiting++;
+            exec_unlock(&mbx->lock);
+            wrc = vms_ast_wait(&rw.w);
+            exec_lock(&mbx->lock);
+            exec_list_del(&rw.list);
+            mbx->rd_waiting--;
+            /* a message that arrived has priority over the AST and a signal */
+            m = exec_list_first_entry_or_null(&mbx->msgq, struct vms_mbx_msg, list);
+            if (m) {
+                exec_list_del(&m->list);
+                mbx->bufquo_used -= m->len;
+                break;
+            }
+            if (wrc == VMS_AST_WAIT_ASTPEND) {
+                exec_unlock(&mbx->lock);
+                a->oflags = VMS_MBX_RDO_ASTPEND;
+                a->len = 0;
+                a->sender_pid = 0;
+                a->status = SS__NORMAL;
+                goto out_copy;
+            }
+            if (wrc < 0) {
+                exec_unlock(&mbx->lock);
+                ret = -ERESTARTSYS;
+                goto out_free;
+            }
+            continue;           /* woken, but another reader took it */
+        }
+        mbx->rd_waiting++;
+        wait_rc = exec_cv_wait(&mbx->read_wq, &mbx->lock);
+        mbx->rd_waiting--;
+        if (wait_rc) {
             /* Interrupted. The predicate still has priority: a message that
              * arrived is taken; otherwise the wait ends with no status and
              * libvmssys re-enters it. */
@@ -933,6 +1026,10 @@ long vms_ioctl_mbx_set_wrtattn(struct vms_proc *proc, unsigned long arg)
         args.status = SS__BADPARAM;
         goto out;
     }
+    if (args.kind != VMS_MBX_ATTN_WRITE && args.kind != VMS_MBX_ATTN_READ) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
 
     exec_lock(&proc->chan_lock);
     ch = mbxchan_find_locked(proc, args.chan);
@@ -953,13 +1050,19 @@ long vms_ioctl_mbx_set_wrtattn(struct vms_proc *proc, unsigned long arg)
     reg->proc = proc;
     reg->chan = args.chan;
     reg->acmode = (uint8_t)args.acmode;
+    reg->kind = (uint8_t)args.kind;
     reg->astadr = args.astadr;
     reg->astprm = args.astprm;
 
     exec_lock(&mbx->lock);
     /* Re-arm replaces: drop any registration this channel still had armed. */
-    mbx_wrtattn_strip_locked(mbx, proc, args.chan);
+    mbx_wrtattn_strip_locked(mbx, proc, args.chan, (int)args.kind);
     exec_list_add_tail(&reg->list, &mbx->wrtattn);
+    /* READ-ATTENTION armed while a read is already waiting on the mailbox:
+     * delivered at once (VSI OpenVMS I/O User's Reference, Mailbox Driver),
+     * through the same one-shot firing a queued read uses (rd vms-b24). */
+    if (reg->kind == VMS_MBX_ATTN_READ && mbx->rd_waiting > 0)
+        mbx_fire_attn_locked(mbx, VMS_MBX_ATTN_READ);
     exec_unlock(&mbx->lock);
 
     args.status = SS__NORMAL;
@@ -1057,7 +1160,7 @@ int vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan)
      * releasing the channel's mailbox reference -- so the registration's proc
      * back-pointer never outlives the channel it belonged to. */
     exec_lock(&ch->mbx->lock);
-    mbx_wrtattn_strip_locked(ch->mbx, proc, chan);
+    mbx_wrtattn_strip_locked(ch->mbx, proc, chan, MBX_ATTN_ALL);
     exec_unlock(&ch->mbx->lock);
 
     mbx_put(ch->mbx);
@@ -1082,7 +1185,7 @@ void vms_mbx_release_all(struct vms_proc *proc)
          * its `proc` back-pointer must not survive in any mailbox's wrtattn
          * list. Done before mbx_put(), which may free the mailbox outright. */
         exec_lock(&ch->mbx->lock);
-        mbx_wrtattn_strip_locked(ch->mbx, proc, ch->chan);
+        mbx_wrtattn_strip_locked(ch->mbx, proc, ch->chan, MBX_ATTN_ALL);
         exec_unlock(&ch->mbx->lock);
         mbx_put(ch->mbx);
         exec_free(ch);
@@ -1190,8 +1293,8 @@ void vms_mbx_exec_post(uint32_t unit, uint32_t owner_vms_pid, const void *msg,
         if (len <= mbx->maxmsg) {
             mbx->bufquo_used += len;
             exec_list_add_tail(&m->list, &mbx->msgq);
-            exec_cv_broadcast(&mbx->read_wq);
-            mbx_fire_wrtattn_locked(mbx);
+            mbx_wake_readers_locked(mbx);
+            mbx_fire_attn_locked(mbx, VMS_MBX_ATTN_WRITE);
             queued = 1;
         }
         exec_unlock(&mbx->lock);

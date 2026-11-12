@@ -3601,19 +3601,25 @@ static int run_netacp_pool_selftest(void)
         dnet_engine_init(&fe, 1, 300, "PEER", "EWA0", NULL, fhw, 0, 0, 0);
         r = pool_connect_obj(&fe, &node, slots, &next_lla, 0x3e01, &why,
                              DNET_FAL_OBJECT, "GUEST", "GUEST");
-        int ok = 0;
+        /* rd vms-0a7 S3: the link is HELD for the FAL.EXE server process
+         * NETACP created as the user -- no Connect Confirm goes until that
+         * process accepts it through SYS$NET (netacp_accept; the accept itself
+         * is proven by the S3 broker test and the booted persona proof). So
+         * the peer has nothing yet (r == -1) and the slot waits. */
+        int held = 0;
         for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
-            if (slots[i].used && slots[i].object == DNET_FAL_OBJECT &&
-                slots[i].fal.uic == ((128u << 16) | 129u) && dnet_fal_proc_alive(&slots[i].fal))
-                ok = 1;
-        PL_CHECK(r == 1 && ok,
-                 "an inbound FAL connect GUEST/GUEST is accepted onto a live FAL.EXE server process running as [128,129]");
-        uint8_t f[DNET_FRAME_MAX]; size_t fl = 0;
-        if (dnet_engine_link_close(&fe, DNET_LINK_REASON_NORMAL, f, sizeof f, &fl, 12) == 0)
-            netacp_dispatch_frame(slots, &node, -1, 0, f, fl, 12, &next_lla);
+            if (slots[i].used && slots[i].object == DNET_FAL_OBJECT && slots[i].accept_wait &&
+                slots[i].owner_pid != 0 && slots[i].fal.uic == ((128u << 16) | 129u))
+                held = 1;
+        PL_CHECK(r == -1 && held,
+                 "an inbound FAL connect GUEST/GUEST takes a pool slot held for a FAL.EXE server process created as [128,129], with no Connect Confirm before that process accepts (rd vms-0a7 S3)");
+        /* No NETACP serves this selftest's accept requests: the link is never
+         * accepted, and once its server is gone or the incoming timer runs out
+         * the session tick refuses it and frees the slot. */
+        (void)netacp_service_sessions(slots, -1, 0, (dnet_tick_t)(10 + NETACP_ACCEPT_SECS + 1));
         int used = 0;
         for (int i = 0; i < NETACP_MAX_SESSIONS; i++) used += slots[i].used;
-        PL_CHECK(used == 0, "the FAL session ends when the remote disconnects (slot freed)");
+        PL_CHECK(used == 0, "a FAL link its server process never accepts is refused and its slot freed (process gone / incoming timer)");
     }
 
     /* Peer i is node 1.(100 + i/NETACP_MAX_PER_SOURCE): a full share each. */

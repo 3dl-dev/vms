@@ -1314,8 +1314,8 @@ run_dcl_acceptance_battery() {
             "NETACP pool [vms-277a]: a node may hold three concurrent sessions -- a VMS DELETE node::file;* opens three links to the FAL (VAX<->VAX capture)"
         must_have "$POOLSEG" 'is REFUSED another (reason 1) while other nodes are admitted' \
             "NETACP pool [vms-6af1]: a node already holding its share is refused while other nodes are admitted"
-        must_have "$POOLSEG" 'running as [128,129]' \
-            "NETACP pool [vms-6af1/vms-d85]: an inbound FAL connect lands on a FAL.EXE server process running as the authenticated user"
+        must_have "$POOLSEG" 'PASS: an inbound FAL connect GUEST/GUEST takes a pool slot held for a FAL.EXE server process created as [128,129]' \
+            "NETACP pool [vms-6af1/vms-d85/vms-0a7 S3]: an inbound FAL connect takes a pool slot held for a FAL.EXE server process created as the authenticated user (no Connect Confirm before it accepts)"
         must_not_have "$POOLSEG" 'DECNETD-POOL-SELFTEST: FAIL' \
             "NETACP pool [vms-6af1]: no assertion in the session-pool proof failed"
         negctl "$POOLSEG" 'DECNETD-I-POOL' "DECnet NETACP session pool"

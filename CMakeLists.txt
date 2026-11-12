@@ -763,6 +763,13 @@ if(BUILD_TESTS)
     set_tests_properties(fast_sh_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 120)
 
+    # vms-fb0b: the keystroke-oracle runner removes every container it starts.
+    add_test(NAME keystroke_oracle_container_cleanup
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_keystroke_oracle_cleanup.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(keystroke_oracle_container_cleanup PROPERTIES
+        LABELS "integration;release" TIMEOUT 120)
+
     # Negative controls for the above -- proves the checker actually goes red
     # on an oversized workflow file and respects the threshold boundary,
     # rather than reporting OK no matter what it is handed.

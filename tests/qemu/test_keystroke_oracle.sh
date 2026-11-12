@@ -38,7 +38,22 @@ if [ -n "${KS_BOOT_DIR:-}" ]; then
 else
     # The container's own scratch copy of the distribution disk; KVM when the
     # runner passes /dev/kvm through (.github/actions/enable-kvm), TCG if not.
-    set -- docker run --rm -i --entrypoint sh "$IMAGE" -c \
+    #
+    # The container outlives the docker CLIENT: ksplay ends a run (and every
+    # guest restart) by SIGKILLing the client, which cannot proxy the signal,
+    # so `--rm` alone left the guest running for hours (vms-fb0b). Each guest
+    # gets a unique name under this run's own prefix, and every exit path
+    # (success, failure, timeout, interrupt) removes whatever carries it.
+    KSPFX="${KS_CONTAINER_PREFIX:-ovmx-ksoracle}-$$-$(date +%s)"
+    ks_cleanup() {
+        for c in $(docker ps -a --filter "name=^${KSPFX}-" --format '{{.Names}}' 2>/dev/null); do
+            docker rm -f "$c" >/dev/null 2>&1
+        done
+    }
+    trap ks_cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    set -- sh -c 'exec docker run --rm -i --name "$0-$$" --entrypoint sh "$@"' "$KSPFX" "$IMAGE" -c \
         "cp /boot/ovmx-distrib.img /tmp/disk.img && A='' && { [ -w /dev/kvm ] && A='-enable-kvm -cpu host'; } ; \
          exec qemu-system-x86_64 \$A -kernel /boot/vmlinuz -initrd /boot/initramfs-ovmx-slim.cpio.gz $QEMU_ARGS \
          -drive file=/tmp/disk.img,format=raw,if=virtio,cache=writethrough"

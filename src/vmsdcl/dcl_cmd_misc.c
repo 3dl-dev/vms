@@ -14,7 +14,6 @@
 #include <ctype.h>
 #include <time.h>
 #include <unistd.h>
-#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -2224,58 +2223,6 @@ static int tcpip_build_ifmap(struct tcpip_ifmap *map, int max_entries,
     return n;
 }
 
-/*
- * SHOW ROUTE's name map (UNCHANGED by rd vms-99f, which moved only SHOW/SET
- * INTERFACE onto the executive's list): SHOW ROUTE still reads the substrate's
- * /proc/net/route and maps its interface names by a /sys/class/net scan --
- * Linux-substrate introspection, disclosed in the dcl-tcpip-verb register row.
- * Moving the routing table into the executive is a separate follow-on.
- */
-#define TCPIP_ROUTE_MAX_IFACES 32
-
-static int tcpip_build_route_ifmap(struct tcpip_ifmap *map, int max_entries)
-{
-    DIR *d = opendir("/sys/class/net");
-    if (!d) return 0;
-
-    char names[TCPIP_ROUTE_MAX_IFACES][IFNAMSIZ];
-    int count = 0;
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL && count < TCPIP_ROUTE_MAX_IFACES) {
-        if (ent->d_name[0] == '.') continue;
-        strncpy(names[count], ent->d_name, IFNAMSIZ - 1);
-        names[count][IFNAMSIZ - 1] = '\0';
-        count++;
-    }
-    closedir(d);
-
-    qsort(names, (size_t)count, IFNAMSIZ, (int(*)(const void *, const void *))strcmp);
-
-    int se_idx = 0, ew_idx = 0, tn_idx = 0, xx_idx = 0;
-    int n = (count < max_entries) ? count : max_entries;
-    for (int i = 0; i < n; i++) {
-        memset(&map[i].ent, 0, sizeof(map[i].ent));
-        strncpy(map[i].linux_name, names[i], IFNAMSIZ - 1);
-        map[i].linux_name[IFNAMSIZ - 1] = '\0';
-        const char *vn = tcpip_map_interface(names[i], &se_idx, &ew_idx,
-                                              &tn_idx, &xx_idx);
-        strncpy(map[i].vms_name, vn, sizeof(map[i].vms_name) - 1);
-        map[i].vms_name[sizeof(map[i].vms_name) - 1] = '\0';
-    }
-    return n;
-}
-
-/* Look up VMS name for a Linux interface name in the map */
-static const char *tcpip_lookup_vms_name(const struct tcpip_ifmap *map,
-                                          int count, const char *linux_name)
-{
-    for (int i = 0; i < count; i++) {
-        if (strcmp(map[i].linux_name, linux_name) == 0)
-            return map[i].vms_name;
-    }
-    return linux_name; /* fallback — should not happen */
-}
-
 /* Reverse lookup: VMS device name → Linux interface name */
 static const char *tcpip_lookup_linux_name(const struct tcpip_ifmap *map,
                                             int count, const char *vms_name)
@@ -2351,81 +2298,118 @@ static int cmd_tcpip_show_interface(struct dcl_command *cmd)
 }
 
 /*
- * TCPIP SHOW ROUTE - Display routing table with VMS device names.
+ * The EXECUTIVE'S routing table (rd vms-6d6c): $ASSIGN a BGn: channel, create
+ * its socket (IO$_SETMODE) and issue the IO$_SENSEMODE route-list request
+ * (IO$K_BG_SENSE_ROUTES) -- the TCP/IP Services way: the routing table lives in
+ * the TCP/IP kernel component and is read through a socket channel, never
+ * /proc/net/route. Returns the count; *status gets the VMS status
+ * (SS$_NOSUCHDEV with no executive -- no listing).
+ */
+static int tcpip_read_routes(struct vms_bg_rtent *rt, uint32_t max,
+                             uint32_t *status)
+{
+    static const char devname[] = "TCPIP$DEVICE:";
+    struct dsc$descriptor_s dev;
+    struct _iosb iosb;
+    uint16_t chan = 0;
+    uint32_t count = 0, st;
+
+    dev.dsc$w_length  = (uint16_t)(sizeof(devname) - 1);
+    dev.dsc$b_dtype   = DSC$K_DTYPE_T;
+    dev.dsc$b_class   = DSC$K_CLASS_S;
+    dev.dsc$a_pointer = (char *)devname;
+    st = sys$assign(&dev, &chan, 0, NULL);                 /* $ASSIGN TCPIP$DEVICE: */
+    if (st & 1) {
+        memset(&iosb, 0, sizeof(iosb));
+        uint32_t st2 = tcpip_qiow(chan, IO$_SETMODE, &iosb, NULL, 0, 0);
+        if (st2 & 1) {
+            memset(&iosb, 0, sizeof(iosb));
+            st2 = tcpip_qiow(chan, IO$_SENSEMODE, &iosb, rt,
+                             max * (uint32_t)sizeof(rt[0]), IO$K_BG_SENSE_ROUTES);
+            if (st2 & 1)
+                count = iosb.iosb$w_bcnt;
+        }
+        (void)sys$dassgn(chan);
+        st = st2;
+    }
+    if (status) *status = st;
+    if (!(st & 1))
+        return 0;
+    return (int)((count < max) ? count : max);
+}
+
+/*
+ * TCPIP SHOW ROUTE - Display the routing table with VMS device names.
+ * Every route is the executive's (tcpip_read_routes); the output interface is
+ * named through the executive's interface list (tcpip_build_ifmap), so a route
+ * shows SE0 / LO0, never the substrate's eth0. With no executive the command
+ * fails honestly (%TCPIP-E-NOEXEC, SS$_NOSUCHDEV) -- it never falls back to
+ * the host's routing table.
  */
 static int cmd_tcpip_show_route(struct dcl_command *cmd)
 {
     (void)cmd;
 
-    struct tcpip_ifmap ifmap[TCPIP_ROUTE_MAX_IFACES];
-    int ifcount = tcpip_build_route_ifmap(ifmap, TCPIP_ROUTE_MAX_IFACES);
+    struct vms_bg_rtent rt[VMS_BG_ROUTES_MAX];
+    uint32_t st = 0;
+    memset(rt, 0, sizeof(rt));
+    int rtcount = tcpip_read_routes(rt, VMS_BG_ROUTES_MAX, &st);
 
-    FILE *fp = fopen("/proc/net/route", "r");
-    if (!fp) {
-        dcl_out_printf("%%TCPIP-E-NOROUTE, cannot read routing table\n");
-        return SS$_BADPARAM;
+    if (st == SS$_NOSUCHDEV) {
+        dcl_out_printf("%%TCPIP-E-NOEXEC, executive absent -- the routing table cannot be read\n");
+        return SS$_NOSUCHDEV;
+    }
+    if (!(st & 1)) {
+        dcl_out_printf("%%TCPIP-E-NOROUTE, cannot read the routing table from the executive (status %u)\n",
+               (unsigned)st);
+        return (int)st;
+    }
+
+    struct tcpip_ifmap ifmap[TCPIP_MAX_IFACES];
+    uint32_t ifst = 0;
+    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES, &ifst);
+    if (!(ifst & 1)) {
+        dcl_out_printf("%%TCPIP-E-IFLIST, cannot read the interface list from the executive (status %u)\n",
+               (unsigned)ifst);
+        return (int)ifst;
     }
 
     dcl_out_printf("\n");
     dcl_out_printf("%-17s%-17s%-17s%s\n",
            "Destination", "Gateway", "Mask", "Interface");
 
-    char line[256];
-    /* Skip header */
-    if (fgets(line, sizeof(line), fp) == NULL) {
-        fclose(fp);
-        return SS$_NORMAL;
-    }
+    for (int i = 0; i < rtcount; i++) {
+        const struct vms_bg_rtent *r = &rt[i];
+        struct in_addr a;
 
-    while (fgets(line, sizeof(line), fp)) {
-        char iface[IFNAMSIZ];
-        unsigned long dest, gw, mask;
-        unsigned int flags;
-        int refs, use, metric, mtu, window, irtt;
+        if (!(r->flags & VMS_BG_RTF_UP)) continue;     /* usable routes only */
 
-        if (sscanf(line, "%s %lx %lx %x %d %d %d %lx %d %d %d",
-                   iface, &dest, &gw, &flags, &refs, &use, &metric,
-                   &mask, &mtu, &window, &irtt) < 8)
-            continue;
-
-        /* Skip non-UP routes */
-        if (!(flags & 0x0001)) continue;
-
-        /* Destination */
-        char dest_str[32];
-        if (dest == 0) {
-            strcpy(dest_str, "default");
-        } else {
-            struct in_addr a;
-            a.s_addr = (in_addr_t)dest;
+        char dest_str[INET_ADDRSTRLEN] = "default";
+        if (r->dest != 0) {
+            a.s_addr = r->dest;
             inet_ntop(AF_INET, &a, dest_str, sizeof(dest_str));
         }
-
-        /* Gateway */
-        char gw_str[32];
-        if (gw == 0) {
-            strcpy(gw_str, "*");
-        } else {
-            struct in_addr a;
-            a.s_addr = (in_addr_t)gw;
+        char gw_str[INET_ADDRSTRLEN] = "*";
+        if (r->gw != 0) {
+            a.s_addr = r->gw;
             inet_ntop(AF_INET, &a, gw_str, sizeof(gw_str));
         }
+        char mask_str[INET_ADDRSTRLEN];
+        a.s_addr = r->mask;
+        inet_ntop(AF_INET, &a, mask_str, sizeof(mask_str));
 
-        /* Mask */
-        char mask_str[32];
-        {
-            struct in_addr a;
-            a.s_addr = (in_addr_t)mask;
-            inet_ntop(AF_INET, &a, mask_str, sizeof(mask_str));
-        }
-
-        /* VMS interface name */
-        const char *vms_iface = tcpip_lookup_vms_name(ifmap, ifcount, iface);
+        char ifn[sizeof(r->ifname)];
+        memcpy(ifn, r->ifname, sizeof(ifn));
+        ifn[sizeof(ifn) - 1] = '\0';
+        /* An interface the executive's list does not name (it went away
+         * between the two reads) shows as "*", never its substrate name. */
+        const char *vms_iface = "*";
+        for (int k = 0; k < ifcount; k++)
+            if (strcmp(ifmap[k].linux_name, ifn) == 0) { vms_iface = ifmap[k].vms_name; break; }
 
         dcl_out_printf("%-17s%-17s%-17s%s\n", dest_str, gw_str, mask_str, vms_iface);
     }
 
-    fclose(fp);
     dcl_out_printf("\n");
     return SS$_NORMAL;
 }

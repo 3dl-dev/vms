@@ -319,6 +319,44 @@ struct vms_bg_iflist_args {
     struct vms_bg_ifent ent[VMS_BG_IFLIST_MAX];   /* out */
 };
 
+/*
+ * IO$_SENSEMODE (route-list subfunction, rd vms-6d6c) -- the executive's own
+ * IPv4 routing table, the TCP/IP Services view behind TCPIP SHOW ROUTE (on VMS
+ * the routing table lives in the TCP/IP kernel component and is read through a
+ * BGn: socket channel). Issued on a BG channel whose socket exists (IO$_SETMODE
+ * first); the executive reads the MAIN unicast routing table of the network
+ * stack the CHANNEL'S SOCKET lives in and copies, per route, the destination,
+ * gateway and mask (network order; gateway 0 for an on-link route), the
+ * VMS_BG_RTF_* flags and the output interface's substrate name (mapping it to a
+ * VMS device name -- SE0, LO0 ... -- is the caller's presentation, exactly as
+ * for the interface list). Every value is READ FROM THE EXECUTIVE'S OWN
+ * NETWORK STACK at the time of the call, never synthesized. At most
+ * VMS_BG_ROUTES_MAX entries; `count` is the number filled. A backend that
+ * cannot read its routing table says so (SS$_UNSUPPORTED). OVMX design choice
+ * (Rule 8): the fixed-array wire form is ours.
+ */
+#define VMS_BG_ROUTES_MAX 32u
+
+#define VMS_BG_RTF_UP      0x1u   /* the route is usable */
+#define VMS_BG_RTF_GATEWAY 0x2u   /* reached through `gw` */
+#define VMS_BG_RTF_HOST    0x4u   /* a host route (mask 255.255.255.255) */
+
+struct vms_bg_rtent {
+    uint32_t dest;          /* destination, network order (0 = default) */
+    uint32_t gw;            /* gateway, network order (0 = on-link) */
+    uint32_t mask;          /* destination mask, network order */
+    uint32_t flags;         /* VMS_BG_RTF_* */
+    char     ifname[16];    /* substrate output-interface name, NUL-terminated */
+};
+
+struct vms_bg_routes_args {
+    uint32_t chan;          /* in */
+    uint32_t status;        /* out */
+    uint32_t max;           /* in: entries the caller can take (<= VMS_BG_ROUTES_MAX) */
+    uint32_t count;         /* out: entries filled */
+    struct vms_bg_rtent ent[VMS_BG_ROUTES_MAX];   /* out */
+};
+
 #define VMS_IOCTL_BG_CREATE   _IOWR(VMS_IOC_MAGIC, 0x80, struct vms_bg_create_args)
 #define VMS_IOCTL_BG_SETMODE  _IOWR(VMS_IOC_MAGIC, 0x81, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_CONNECT  _IOWR(VMS_IOC_MAGIC, 0x82, struct vms_bg_connect_args)
@@ -392,6 +430,8 @@ struct vms_bg_iflist_args {
 #define VMS_IOCTL_BG_IFLIST       _IOWR(VMS_IOC_MAGIC, 0x9b, struct vms_bg_iflist_args)
 /* IO$_SENSEMODE readiness wait (see struct vms_bg_select_args). */
 #define VMS_IOCTL_BG_SELECT       _IOWR(VMS_IOC_MAGIC, 0x9c, struct vms_bg_select_args)
+/* IO$_SENSEMODE route list (see struct vms_bg_routes_args, rd vms-6d6c). */
+#define VMS_IOCTL_BG_ROUTES       _IOWR(VMS_IOC_MAGIC, 0x9d, struct vms_bg_routes_args)
 
 /*
  * Freeze the shared layouts -- see vms_mbx.h's identical note for why this
@@ -425,6 +465,10 @@ _Static_assert(sizeof(struct vms_bg_ifent) == 40,
                "vms_bg_ifent changed size -- VMS_IOCTL_BG_IFLIST ABI break");
 _Static_assert(sizeof(struct vms_bg_iflist_args) == 16 + 40 * VMS_BG_IFLIST_MAX,
                "vms_bg_iflist_args changed size -- VMS_IOCTL_BG_IFLIST ABI break");
+_Static_assert(sizeof(struct vms_bg_rtent) == 32,
+               "vms_bg_rtent changed size -- VMS_IOCTL_BG_ROUTES ABI break");
+_Static_assert(sizeof(struct vms_bg_routes_args) == 16 + 32 * VMS_BG_ROUTES_MAX,
+               "vms_bg_routes_args changed size -- VMS_IOCTL_BG_ROUTES ABI break");
 _Static_assert(sizeof(struct vms_bg_selent) == 8,
                "vms_bg_selent changed size -- VMS_IOCTL_BG_SELECT ABI break");
 _Static_assert(sizeof(struct vms_bg_select_args) == 16 + 8 * VMS_BG_SELECT_MAX,

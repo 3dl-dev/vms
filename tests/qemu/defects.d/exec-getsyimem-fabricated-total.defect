@@ -1,0 +1,27 @@
+# exec-getsyimem-fabricated-total -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$GETSYI physical-memory reply in Linux vms.ko (src/kernel/vms_module.c vms_ioctl_getsyimem, rd vms-b14e4) read by SHOW MEMORY";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_dcl_show_memory";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The executive answers GETSYIMEM with a hardcoded 64 MB total instead of si_meminfo's: SHOW MEMORY would print a plausible constant unrelated to the machine.";;
+        require_fail) cat <<'EOF2'
+the executive's total matches the guest's memory size within 2%
+the Main Memory total is the guest's memory size within 2% (vms-fe21)
+EOF2
+                      ;;
+        knock_on_fail) echo "free memory is nonzero and below total";;
+        knock_on_why)  echo "the guest's real free memory exceeds the fabricated 64 MB total";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        ma.info.total_bytes  = (uint64_t)si.totalram \* si.mem_unit;$|        ma.info.total_bytes  = 64ULL << 20; /* NEGCTL exec-getsyimem-fabricated-total */|' "$_file"
+    :
+}

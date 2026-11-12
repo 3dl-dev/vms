@@ -55,9 +55,9 @@ infb=$(awk '/THE STDIO FALLBACK/{f=1} f&&/^ \* =+ \*\/$|^\/\* =+ \*\/$/{n++; if(
 [ -n "$infb" ] && { echo "dcl_in.c: stdin used outside its marked fallback block: $infb"; bad=1; }
 # Files whose libc I/O reached 0 stay at 0 (hard pin; the ratchet alone would
 # accept a baseline edit back up).
-for z in dcl_io.c dcl_main.c dcl_cmd_misc.c; do
+for z in dcl_io.c dcl_main.c dcl_cmd_misc.c dcl_cmd_show.c; do
     n=$(bash "$ROOT/tests/dcl/libc_io_census.sh" "$ROOT" | awk -v f="$z" '$1==f{print $2}')
-    [ -n "$n" ] && { echo "$z: $n libc I/O sites; it is pinned at 0 (rd vms-4d27, vms-67a, vms-6d6c)"; bad=1; }
+    [ -n "$n" ] && { echo "$z: $n libc I/O sites; it is pinned at 0 (rd vms-4d27, vms-67a, vms-6d6c, vms-b14e4)"; bad=1; }
 done
 base="$ROOT/tests/dcl/libc_io_baseline.txt"
 now=$(bash "$ROOT/tests/dcl/libc_io_census.sh" "$ROOT")

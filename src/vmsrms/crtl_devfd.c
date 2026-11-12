@@ -862,10 +862,11 @@ static int line_is_host_pipe(int fd)
 
 /*
  * Bind descriptors 0, 1 and 2 to SYS$INPUT, SYS$OUTPUT and SYS$ERROR when each
- * is a terminal or a mailbox (see the head comment for what stays as it is).
- * Called once, from the C RTL's image start, before main().
+ * is a terminal (with_tt) or a mailbox (see the head comment for what stays as
+ * it is). Without with_tt a terminal stream is left as it is and its line is
+ * never probed: no substrate terminal call is made at all.
  */
-void ovmx_crtl_devfd_bind_stdio(void)
+static void bind_std(int with_tt)
 {
     if (!sys$assign || !sys$trnlnm || !sys$qiow || !sys$getdviw)
         return;                         /* a static image without LIBVMS */
@@ -889,7 +890,7 @@ void ovmx_crtl_devfd_bind_stdio(void)
             cls = ((st & 1) && (iosb[0] & 1)) ? b[0] : 0;
         }
         if (cls == DC_TERM) {
-            if (!line_is_terminal(fd))
+            if (!with_tt || !line_is_terminal(fd))
                 cls = 0;                        /* redirected underneath */
         } else if (cls == DC_MAILBOX) {
             if (line_is_host_pipe(fd))
@@ -922,6 +923,18 @@ void ovmx_crtl_devfd_bind_stdio(void)
         dfd_cloexec[fd] = 0;
         df->refs = 1;
     }
+}
+
+/* The C RTL's image start, before main(): every terminal and mailbox stream. */
+void ovmx_crtl_devfd_bind_stdio(void)
+{
+    bind_std(1);
+}
+
+/* A static image's start-up (crtl_stdio_start.c): the mailbox streams only. */
+void ovmx_crtl_devfd_bind_stdio_mailbox(void)
+{
+    bind_std(0);
 }
 
 /* ------------------------------------------------------ name, handing ---- */
@@ -959,15 +972,22 @@ int ovmx_crtl_devfd_give(long long fd, char *dev, size_t devsz)
  * file, the way the DEC C RTL closes its files at exit. A mailbox SYS$OUTPUT a
  * DCL pumps from a host pipe is never bound, so never ended here.
  */
+/* Image rundown: a terminal descriptor's last line goes out as a record. The
+ * streams themselves stay open -- they are the process's, not the image's. */
+void ovmx_crtl_devfd_flush_lines(void)
+{
+    for (int fd = 0; fd < DFD_MAX; fd++)
+        if (dfd[fd] && dfd[fd]->kind == DF_TT)
+            tt_flush_line(dfd[fd], 1);  /* the last line, as a record */
+}
+
 void ovmx_crtl_devfd_rundown(void)
 {
     static int done;
     if (done)
         return;
     done = 1;
-    for (int fd = 0; fd < DFD_MAX; fd++)
-        if (dfd[fd] && dfd[fd]->kind == DF_TT)
-            tt_flush_line(dfd[fd], 1);  /* the last line, as a record */
+    ovmx_crtl_devfd_flush_lines();
     for (int fd = 1; fd < 3; fd++) {
         struct dfile *df = dfd[fd];
         if (!df || df->kind != DF_MBX || !df->stdbound || df->handed)

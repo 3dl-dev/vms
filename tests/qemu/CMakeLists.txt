@@ -124,6 +124,13 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
        AND NOT OVMX_CRTL_FD_STATIC)
         continue()
     endif()
+    # test_syssvc_crtl_stdio_start (vms-07ae) proves a static product image's
+    # start-up binds stdin to SYS$INPUT; that start-up exists only where the C
+    # RTL base has the system-call funnel (OVMX_CRTL_STDIO_START, top-level
+    # CMakeLists.txt), so elsewhere there is nothing for it to test.
+    if(_name STREQUAL "test_syssvc_crtl_stdio_start" AND NOT OVMX_CRTL_STDIO_START)
+        continue()
+    endif()
     # test_syssvc_ci6_evacwl drives EVACWL.EXE, a VMS-native image TCC.EXE
     # compiles and LINK.EXE links --use the OVMX shareables (tests/lab/ci6/
     # mk_evacwl_native.sh). LINK.EXE's native backend exists for x86_64 and

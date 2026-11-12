@@ -1,0 +1,27 @@
+# crtl-static-stdio-not-bound -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "C RTL standard streams of a static image (crtl_stdio_start.c)";;
+        targets)      echo "vmsrms/crtl_stdio_start.c";;
+        suites_red)   echo "test_syssvc_crtl_stdio_start";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "A static image's start-up no longer binds its standard streams to SYS\$: SYSGEN.EXE's stdin stays the substrate's descriptor 0 and its SYS\$INPUT mailbox is never read. One call removed.";;
+        require_fail) cat <<'EOF'
+SYSGEN.EXE read SHOW SCSNODE from the SYS$INPUT mailbox, not from descriptor 0
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why) echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    ovmx_crtl_devfd_bind_stdio_mailbox();$|    /* NEGCTL crtl-static-stdio-not-bound */|' "$_file"
+    :
+}

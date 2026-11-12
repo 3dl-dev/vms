@@ -698,6 +698,17 @@ RUN KVER=$(cat /tmp/kver) && \
     done && \
     echo "OK: vms.ko in-tree against OVMX kernel $KVER (vermagic matches, intree=Y, signed)"
 
+# The C RTL base (vms-003b, vms-07ae): on x86_64 the container's musl is rebuilt
+# with the OVMX system-call funnel (src/crtl-musl-x86_64), exactly as the QEMU
+# harness's (tests/qemu/Dockerfile), so every static product image binds its
+# stdin/stdout/stderr to SYS$INPUT/SYS$OUTPUT/SYS$ERROR at start-up through the
+# C RTL device layer (src/vmsrms/crtl_stdio_start.c; CMakeLists.txt detects the
+# funnel and turns OVMX_CRTL_STDIO_START on). No funnel exists for other arches
+# yet: there the configure finds none and links no start-up.
+RUN if [ "$(uname -m)" = x86_64 ]; then \
+        sh src/crtl-musl-x86_64/build-musl.sh /usr/lib/x86_64-linux-musl; \
+    fi
+
 # Build OVMX userspace — static musl (no glibc dependency)
 RUN cmake -B build-static \
     -DCMAKE_C_COMPILER=musl-gcc \

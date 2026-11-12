@@ -1493,6 +1493,17 @@ long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg);
  * must NOT hold it, and must not hold an ast_state->lock across the call.
  */
 void vms_ast_notify_arrival(struct vms_proc *proc);
+/* An executive wait a deliverable AST ends, the I/O it serves staying
+ * outstanding (rd vms-b24; vms_ast.c). The waiter lives on the waiting
+ * thread's stack; the object that will complete it links it under the
+ * object's lock and calls vms_ast_waiter_wake() under that lock. */
+struct vms_ast_waiter {
+    struct vms_proc *proc;      /* the waiting process */
+    int              woken;     /* the object completed; under proc->hiber_lock */
+};
+#define VMS_AST_WAIT_ASTPEND 1
+int  vms_ast_wait(struct vms_ast_waiter *w);
+void vms_ast_waiter_wake(struct vms_ast_waiter *w);
 
 /*
  * Is an AST deliverable to `proc` at or outside `cur_mode`? Same bound as

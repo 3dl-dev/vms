@@ -1120,6 +1120,17 @@ void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 int  vms_ast_has_deliverable(struct vms_proc *proc, uint8_t cur_mode);
 void vms_ast_notify_arrival(struct vms_proc *proc);
+/* An executive wait a deliverable AST ends, the I/O it serves staying
+ * outstanding (rd vms-b24; vms_ast.c). The waiter lives on the waiting
+ * thread's stack; the object that will complete it links it under the
+ * object's lock and calls vms_ast_waiter_wake() under that lock. */
+struct vms_ast_waiter {
+    struct vms_proc *proc;      /* the waiting process */
+    int              woken;     /* the object completed; under proc->hiber_lock */
+};
+#define VMS_AST_WAIT_ASTPEND 1
+int  vms_ast_wait(struct vms_ast_waiter *w);
+void vms_ast_waiter_wake(struct vms_ast_waiter *w);
 
 /* ----------------------------------------------------------------
  * Access-mode facility (P4-A) -- DEFINED in src/kernel-core/vms_access.c.

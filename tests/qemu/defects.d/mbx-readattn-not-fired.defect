@@ -1,0 +1,48 @@
+# mbx-readattn-not-fired -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "mailbox READ-ATTENTION ASTs (IO\$_SETMODE|IO\$M_READATTN, executive-resident MBAn:), rd vms-b24 -- fired when a read is queued to the empty mailbox; the AST-driven data feeder rd vms-07ae builds on it";;
+        targets)      echo "kernel-core/vms_mbx.c";;
+        suites_red)   echo "test_syssvc_mbx_readattn";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_mbx_read() fires the read-attention ASTs armed on a mailbox when a read finds it empty and is about to wait. The mutation removes that one firing call, so a read queued to the empty mailbox never notifies the process that armed IO\$M_READATTN -- while the arm itself (SETMODE still registers it), the immediate fire when a reader is ALREADY waiting at arm time (a separate call in vms_ioctl_mbx_set_wrtattn), the reads and the writes are all untouched.";;
+        require_fail) cat <<'EOF2'
+an unrelated process's read queued to the EMPTY mailbox fires A's read-attention AST
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+the read-attention AST ran with the parameter A passed in P2
+A's own read on the empty mailbox fires A's read-attention AST, which runs while the read is outstanding
+the read completes normally with the record the AST wrote (the AST-driven feeder)
+EOF2
+                      ;;
+        knock_on_why)  cat <<'EOF2'
+SAME ONE ROOT (a read queued to the empty mailbox fires nothing), seen at each
+place the suite samples it. Cross-process: no AST runs, so the recorder never
+stores A's P2 either. In-process: A's own read is the read that should fire the
+feeder; with nothing fired, the feeder never runs and the read waits until the
+suite's SIGALRM guard writes "TIMEOUT", so the read completes with that record,
+not the feeder's. What STAYS GREEN pins the mutation to the read-side firing:
+arming is accepted, nothing fires on an arm with no reader, on a read that finds
+a message, on an IO$M_NOW read or on a write; the one-shot check (counted
+relative to step 3) holds; and an arm made while B's read is ALREADY waiting
+still fires at once with the new parameter -- that path is a different call.
+EOF2
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the read path's firing call is the only line in vms_mbx.c
+        # carrying the comment "read queued to the empty mailbox"; the arm path's
+        # call to the same function has no such comment and is untouched. After
+        # substitution the text no longer matches, so a second apply is a no-op.
+        sed -i 's|mbx_fire_attn_locked(mbx, VMS_MBX_ATTN_READ); /\* read queued to the empty mailbox \*/|/* NEGCTL mbx-readattn-not-fired */|' "$_file"
+
+    :
+}

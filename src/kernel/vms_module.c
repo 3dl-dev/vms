@@ -1762,6 +1762,34 @@ void vms_proc_free(struct vms_proc *proc)
     vms_proc_free_claimed(proc);
 }
 
+/*
+ * System memory statistics ($GETSYI-style; SHOW MEMORY's "Physical Memory
+ * Usage" section, rd vms-a3cd). The Linux executive's half of the same ioctl
+ * the NetBSD executive answers from uvm (vms_netbsd.c): system-wide, so no
+ * process lookup. si_meminfo() is the kernel's own accounting of managed
+ * physical memory; both figures cross the wire in BYTES (the kernel converts
+ * with its own mem_unit), so no host/VMS page-size skew. Nothing else VMS
+ * shows (the Modified page list, pool, paging files) is carried: the renderer
+ * omits what the executive does not source (INV-6).
+ */
+static long vms_ioctl_getsyimem(unsigned long arg)
+{
+    struct vms_getsyi_mem_args ma;
+    struct sysinfo si;
+
+    memset(&ma, 0, sizeof(ma));
+    si_meminfo(&si);
+    if (si.totalram) {
+        ma.info.total_bytes  = (uint64_t)si.totalram * si.mem_unit;
+        ma.info.free_bytes   = (uint64_t)si.freeram  * si.mem_unit;
+        ma.info.fields_valid = VMS_SYIMEM_V_PHYS;
+    }
+    ma.status = SS__NORMAL;
+    if (copy_to_user((void __user *)arg, &ma, sizeof(ma)))
+        return -EFAULT;
+    return 0;
+}
+
 /* ================================================================
  * ioctl dispatch
  * ================================================================ */
@@ -2019,6 +2047,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_procscan(proc, arg);
     case VMS_IOCTL_SETIDENT:
         return vms_ioctl_setident(proc, arg);
+    case VMS_IOCTL_GETSYIMEM:
+        return vms_ioctl_getsyimem(arg);
 
     /* Hibernate / wake, executive-resident + AST-interruptible (vms-feb) */
     case VMS_IOCTL_HIBER:

@@ -529,8 +529,8 @@ run_dcl_acceptance_battery() {
     run_cmd 'SHOW MEMORY'
     must_have "$SEG" 'System Memory Resources on' "SHOW MEMORY [vms-050]: prints the report banner"
     must_have "$SEG" 'Physical Memory Usage (pages):     Total        Free      In Use    Modified' "SHOW MEMORY [vms-050]: Physical Memory Usage header matches the live VAX V7.3 column geometry (Total right edge on col 40, 5 leading spaces -- not the retired 7)"
-    # The Main Memory data row is real (/proc/meminfo): a nonzero page total.
-    must_match "$SEG" 'Main Memory \(.*Mb\) +[1-9][0-9]{3,}' "SHOW MEMORY [vms-050]: Main Memory row shows a real nonzero page total (from /proc/meminfo, not a fabricated constant)"
+    # The Main Memory data row is real (the executive's $GETSYI memory reply, rd vms-b14e4): a nonzero page total.
+    must_match "$SEG" 'Main Memory \(.*Mb\) +[1-9][0-9]{3,}' "SHOW MEMORY [vms-050]: Main Memory row shows a real nonzero page total (from the executive's \$GETSYI memory reply, not a fabricated constant)"
     # Sections OVMX has no faithful source for are HONESTLY OMITTED (INV-6):
     # the substrate has no VMS XFC cache and no balance-set slot table.
     must_not_have "$SEG" 'Virtual I/O Cache Usage' "SHOW MEMORY [vms-050]: no fabricated Virtual I/O Cache section (honestly omitted -- no XFC on the substrate)"

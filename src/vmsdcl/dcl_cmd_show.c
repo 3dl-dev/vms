@@ -19,9 +19,9 @@
 #include <grp.h>
 #include <limits.h>
 #include <fnmatch.h>   /* SHOW SYMBOL wildcard matching (vms-9344c) */
-/* No <mntent.h>: this file reads /proc/{mounts,meminfo,swaps} by hand with
- * fopen/fgets and references no mntent symbol. The include was vestigial and
- * absent from the NetBSD/vax sysroot (netbsd-vax cross gate, vms-1cb2). */
+/* No <mntent.h>: this file references no mntent symbol (it reads no host
+ * mount, memory or CPU table). The include was vestigial and absent from the
+ * NetBSD/vax sysroot (netbsd-vax cross gate, vms-1cb2). */
 #include <errno.h>
 
 #include "prvdef.h"     /* PRV$M_* -- the single privilege bit table */
@@ -62,6 +62,7 @@
  * separately -- it is not resolvable here without deleting host coverage,
  * which this item is explicitly forbidden to do. */
 #include "vms_kif.h"
+#include "prcdef.h"     /* SYI$_AVAILCPU_CNT / SYI$_ACTIVECPU_CNT (SHOW CPU) */
 
 /*
  * The VMS condition-value renderer ("%FACILITY-S-IDENT, text"), from
@@ -2625,17 +2626,16 @@ static int cmd_show_device(struct dcl_command *cmd)
  * REAL memory state are printed; a section with no real source is OMITTED,
  * never fabricated (Rule 10 / INV-6):
  *
- *   Physical Memory Usage  -- /proc/meminfo. Total = MemTotal, Free =
- *       MemFree, In Use = Total - Free, and Modified = Dirty. Dirty is the
- *       correct source for the modified column: it is the kernel's count of
- *       memory that has been modified and is waiting to be written back to
- *       its backing store -- the same thing the VMS modified page list holds.
+ *   Physical Memory Usage  -- the executive's $GETSYI memory reply
+ *       (vms_kif_getsyi_memory: si_meminfo on Linux, uvm on NetBSD). Total
+ *       and Free are the executive's figures, In Use = Total - Free. VMS's
+ *       Modified column is shown with its data cell BLANK: the executive
+ *       carries no modified-page count yet (rd vms-0d0). With no executive
+ *       the section is omitted -- DCL never reads the host's /proc instead.
  *
- *   Paging File Usage      -- /proc/swaps, one row per REAL swap area (the
- *       Linux swap device/file IS the system's page/swap backing store).
- *       Total and Used come straight from the kernel's own accounting;
- *       Free = Total - Used. If the system has no swap configured, no rows
- *       exist and the section is honestly omitted.
+ *   Paging File Usage      -- OMITTED: the executive keeps no page-file
+ *       accounting yet (rd vms-0d0), and the host's swap table is not a VMS
+ *       paging file DCL may read behind the executive's back.
  *
  * OMITTED, because OVMX keeps no such executive bookkeeping yet (printing
  * Linux slab/process counts under these VMS headings would be a second
@@ -2652,25 +2652,6 @@ static int cmd_show_device(struct dcl_command *cmd)
  * recognised but have no real source, so they select nothing to print --
  * an honest empty report rather than a fabricated one.
  */
-static long meminfo_kb(const char *key)
-{
-    /* Return the value (in KiB) of a /proc/meminfo key, or -1 if absent. */
-    long result = -1;
-    FILE *fp = fopen("/proc/meminfo", "r");
-    if (fp) {
-        char line[256];
-        size_t keylen = strlen(key);
-        while (fgets(line, sizeof(line), fp)) {
-            if (strncmp(line, key, keylen) == 0 && line[keylen] == ':') {
-                result = strtol(line + keylen + 1, NULL, 10);
-                break;
-            }
-        }
-        fclose(fp);
-    }
-    return result;
-}
-
 static int cmd_show_memory(struct dcl_command *cmd)
 {
     /* Section selection. Default (no specific qualifier) == /FULL: every
@@ -2698,17 +2679,14 @@ static int cmd_show_memory(struct dcl_command *cmd)
 
     /* ---- Physical Memory Usage (pages) -------------------------------- */
     if (show_phys) {
-#if defined(__NetBSD__)
         /*
-         * NetBSD/VAX (rd vms-a3cd): the physical-memory figures come from the
-         * executive's uvm counters via $GETSYI (vms_kif_getsyi_memory), NOT
-         * Linux /proc/meminfo -- that file is absent here, and the old
-         * unconditional meminfo_kb() path returned all zeros (INV-6
-         * lie-of-absence). The executive sources Total and Free honestly
-         * (uvmexp.npages / uvm_availmem(true), converted to 512-byte VMS pages);
-         * In Use is their difference. VMS's "Modified" page-list column has NO
-         * maintained NetBSD analogue, so it is honestly OMITTED rather than
-         * fabricated. If the executive cannot source the figures at all
+         * Every substrate (rd vms-a3cd, vms-b14e4): the physical-memory figures
+         * come from the executive via $GETSYI (vms_kif_getsyi_memory) -- Linux
+         * vms.ko answers from si_meminfo, NetBSD from uvm -- NEVER the host's
+         * /proc/meminfo. Total and Free are converted to 512-byte VMS pages;
+         * In Use is their difference. VMS's "Modified" page-list column has no
+         * executive source yet (rd vms-0d0), so its cell is left blank rather
+         * than fabricated. If the executive cannot source the figures at all
          * (fields_valid clear, or the call could not be delivered), the whole
          * section is omitted -- never a fabricated all-zero row.
          */
@@ -2741,75 +2719,14 @@ static int cmd_show_memory(struct dcl_command *cmd)
                    label, total_pages, free_pages, inuse_pages, "");
         }
         /* else: no real executive source -> section honestly omitted. */
-#else
-        long total_kb    = meminfo_kb("MemTotal");
-        long free_kb     = meminfo_kb("MemFree");
-        long modified_kb = meminfo_kb("Dirty");
-        if (total_kb < 0) total_kb = 0;
-        if (free_kb  < 0) free_kb  = 0;
-        if (modified_kb < 0) modified_kb = 0;   /* older kernels: absent */
-
-        /* KiB -> VMS 512-byte pages (1 KiB = 2 pages). */
-        long total_pages    = total_kb    * 2L;
-        long free_pages     = free_kb      * 2L;
-        long modified_pages = modified_kb  * 2L;
-        long inuse_pages    = total_pages - free_pages;
-        double total_mb     = (double)total_kb / 1024.0;
-
-        char label[48];
-        snprintf(label, sizeof(label), "  Main Memory (%.2fMb)", total_mb);
-
-        /* Column widths grounded in a LIVE OpenVMS VAX V7.3 SHOW MEMORY
-         * capture (docs/oracle/vax73-show-memory.md, 2026-08-29), which
-         * supersedes the earlier guess: the value columns right-justify to
-         * cols 40/52/64/76. VMS pads the HEADER label to 30 and its first
-         * value field to 10 (30+10=40); the DATA label to 28 and every value
-         * field to 12 (28+12=40) -- so both rows land Total's right edge on
-         * col 40 despite the "Physical Memory Usage (pages):" header being two
-         * columns longer than the "  Main Memory (...)" data label. */
-        dcl_out_printf("%-30s%10s%12s%12s%12s\n",
-               "Physical Memory Usage (pages):",
-               "Total", "Free", "In Use", "Modified");
-        dcl_out_printf("%-28s%12ld%12ld%12ld%12ld\n",
-               label, total_pages, free_pages, inuse_pages, modified_pages);
-#endif
     }
 
     /* ---- Paging File Usage (pages) ------------------------------------ */
-    if (show_files) {
-        FILE *sf = fopen("/proc/swaps", "r");
-        if (sf) {
-            char line[512];
-            int header_shown = 0;
-            /* First line of /proc/swaps is a column header; skip it. */
-            if (fgets(line, sizeof(line), sf)) {
-                while (fgets(line, sizeof(line), sf)) {
-                    char fname[256];
-                    char type[64];
-                    long size_kb = 0, used_kb = 0;
-                    /* Filename Type Size Used Priority (Size/Used in KiB). */
-                    if (sscanf(line, "%255s %63s %ld %ld",
-                               fname, type, &size_kb, &used_kb) >= 4) {
-                        long total_pages = size_kb * 2L;
-                        long used_pages  = used_kb  * 2L;
-                        long free_pages  = total_pages - used_pages;
-                        if (!header_shown) {
-                            dcl_out_printf("\n%-40s%12s%12s%12s\n",
-                                   "Paging File Usage (pages):",
-                                   "Free", "Reservable", "Total");
-                            header_shown = 1;
-                        }
-                        /* Reservable == Free: OVMX does not yet track page-file
-                         * reservations, so every free block is reservable. */
-                        dcl_out_printf("  %-38s%12ld%12ld%12ld\n",
-                               fname, free_pages, free_pages, total_pages);
-                    }
-                }
-            }
-            fclose(sf);
-            /* No swap area configured -> nothing printed, honestly. */
-        }
-    }
+    /* Omitted: the executive keeps no page-file accounting yet (rd vms-0d0),
+     * and the host swap table is not a VMS paging file. show_files still
+     * selects the section so /FILES is accepted; it prints nothing rather
+     * than a fabricated row. */
+    (void)show_files;
 
     return SS$_NORMAL;
 }
@@ -4278,42 +4195,20 @@ static int cmd_show_root(struct dcl_command *cmd)
  *   are flagged in rd vms-a9e for a future executive CPU database.
  */
 
-/* Parse a Linux cpulist ("0", "0-3", "0,2-5") into a boolean membership map.
- * Returns the number of CPUs set; *out_max receives the highest id seen. */
-static int parse_cpu_list(const char *path, unsigned char *set, int maxcpu,
-                          int *out_max)
+/* One $GETSYI longword item (SYI$_AVAILCPU_CNT / SYI$_ACTIVECPU_CNT) --
+ * the VMS system service, not the host's /sys cpulist (rd vms-b14e4).
+ * Returns the count, or -1 when $GETSYI does not answer it. */
+static int syi_cpu_count(uint16_t code)
 {
-    FILE *fp = fopen(path, "r");
-    if (!fp)
+    uint32_t v = 0;
+    uint16_t rl = 0;
+    struct item_list_3 il[2];
+    memset(il, 0, sizeof il);
+    il[0].buflen = sizeof v; il[0].item_code = code;
+    il[0].bufaddr = &v; il[0].retlen = &rl;
+    if (!(sys$getsyiw(0, NULL, NULL, il, NULL, NULL, 0) & 1) || rl != sizeof v)
         return -1;
-    char buf[512];
-    if (!fgets(buf, sizeof(buf), fp)) {
-        fclose(fp);
-        return -1;
-    }
-    fclose(fp);
-
-    int count = 0, hi = -1;
-    const char *p = buf;
-    while (*p) {
-        if (*p == ' ' || *p == '\n') { p++; continue; }
-        long lo = strtol(p, (char **)&p, 10);
-        long rng_hi = lo;
-        if (*p == '-') {
-            p++;
-            rng_hi = strtol(p, (char **)&p, 10);
-        }
-        for (long i = lo; i <= rng_hi; i++) {
-            if (i >= 0 && i < maxcpu && !set[i]) {
-                set[i] = 1;
-                count++;
-                if ((int)i > hi) hi = (int)i;
-            }
-        }
-        if (*p == ',') p++;
-    }
-    *out_max = hi;
-    return count;
+    return (int)v;
 }
 
 static void format_cpu_set(const unsigned char *set, int maxid, char *out,
@@ -4341,29 +4236,18 @@ static int cmd_show_cpu(struct dcl_command *cmd)
     memset(present, 0, sizeof(present));
     memset(online, 0, sizeof(online));
 
-    int present_max = -1, online_max = -1;
-    int n_present = parse_cpu_list("/sys/devices/system/cpu/present",
-                                   present, OVMX_MAX_CPU, &present_max);
-    int n_online  = parse_cpu_list("/sys/devices/system/cpu/online",
-                                   online, OVMX_MAX_CPU, &online_max);
-
-    /* Fall back to sysconf when /sys is not mounted (some minimal roots). */
-    if (n_present <= 0) {
-        long c = sysconf(_SC_NPROCESSORS_CONF);
-        if (c < 1) c = 1;
-        if (c > OVMX_MAX_CPU) c = OVMX_MAX_CPU;
-        for (long i = 0; i < c; i++) present[i] = 1;
-        n_present = (int)c;
-        present_max = (int)c - 1;
-    }
-    if (n_online <= 0) {
-        long c = sysconf(_SC_NPROCESSORS_ONLN);
-        if (c < 1) c = 1;
-        if (c > OVMX_MAX_CPU) c = OVMX_MAX_CPU;
-        for (long i = 0; i < c; i++) online[i] = 1;
-        n_online = (int)c;
-        online_max = (int)c - 1;
-    }
+    /* VMS numbers its CPUs 0..n-1: $GETSYI's available (configured) and
+     * active counts give both sets. If $GETSYI cannot answer, SHOW CPU fails
+     * with its status rather than guessing a CPU set. */
+    int n_present = syi_cpu_count(SYI$_AVAILCPU_CNT);
+    int n_online  = syi_cpu_count(SYI$_ACTIVECPU_CNT);
+    if (n_present < 1 || n_online < 1)
+        return SS$_UNSUPPORTED;
+    if (n_present > OVMX_MAX_CPU) n_present = OVMX_MAX_CPU;
+    if (n_online > n_present) n_online = n_present;
+    for (int i = 0; i < n_present; i++) present[i] = 1;
+    for (int i = 0; i < n_online; i++) online[i] = 1;
+    int present_max = n_present - 1, online_max = n_online - 1;
 
     /* Primary CPU = lowest online CPU (the boot processor). */
     int primary = -1;

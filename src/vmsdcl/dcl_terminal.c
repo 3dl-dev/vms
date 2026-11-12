@@ -429,80 +429,119 @@ static void pg_raw(const char *b, size_t n)
                        NULL, 0, (void *)b, (uint32_t)n, 0, 0, 0, 0);
 }
 
+/* the sink's /PAGE capture: each SYS$OUTPUT record, held with its '\n' */
+static int pg_take(void *arg, const char *rec, size_t n, int open)
+{
+    struct dcl_pager *pg = arg;
+    (void)open;
+    if (pg->full)
+        return -1;
+    if (pg->len + n + 1 > pg->cap) {
+        size_t cap = pg->cap ? pg->cap : 8192;
+        while (cap < pg->len + n + 1)
+            cap *= 2;
+        if (cap > DCL_PAGE_MAX)
+            cap = DCL_PAGE_MAX;
+        char *nb = pg->len + n + 1 <= cap ? realloc(pg->buf, cap) : NULL;
+        if (!nb) {
+            pg->full = 1;               /* reported, never silently dropped */
+            return -1;
+        }
+        pg->buf = nb;
+        pg->cap = cap;
+    }
+    memcpy(pg->buf + pg->len, rec, n);
+    pg->len += n;
+    pg->buf[pg->len++] = '\n';
+    pg->nlines++;
+    return 0;
+}
+
 int dcl_page_begin(struct dcl_pager *pg)
 {
     memset(pg, 0, sizeof *pg);
-    pg->save = -1;
     if (!isatty(STDOUT_FILENO) || !dcl_tt_assign())
         return 0;                       /* not a terminal: no pager */
     dcl_out_flush();
-    /* A scratch file that cannot take data means no pager, and the listing goes
-     * straight to the terminal -- never into a buffer that silently drops it
-     * (rd vms-f47: tmpfs refuses writes below 4 MB of available memory). */
-    pg->tmp = dcl_scratch_tmpfile();
-    if (!pg->tmp)
-        return 0;
-    pg->save = dup(STDOUT_FILENO);
-    if (pg->save < 0 || dup2(fileno(pg->tmp), STDOUT_FILENO) < 0) {
-        if (pg->save >= 0) close(pg->save);
-        fclose(pg->tmp);
-        pg->tmp = NULL;
-        pg->save = -1;
-        return 0;
-    }
-    dcl_out_capture(pg->tmp);           /* DCL's own records too, not only an image's */
+    dcl_out_capture(pg_take, pg);       /* DCL's records, as they are written */
+    pg->on = 1;
     return 1;
+}
+
+int dcl_page_stop(struct dcl_pager *pg)
+{
+    if (!pg->on)
+        return 1;
+    dcl_out_flush();
+    dcl_out_capture(NULL, NULL);
+    pg->on = 0;
+    return !pg->full;
+}
+
+int dcl_page_record(const struct dcl_pager *pg, size_t *pos,
+                    const char **rec, size_t *n)
+{
+    if (*pos >= pg->len)
+        return 0;
+    const char *p = pg->buf + *pos;
+    const char *e = memchr(p, '\n', pg->len - *pos);
+    size_t l = e ? (size_t)(e - p) : pg->len - *pos;
+    *rec = p;
+    *n = l;
+    *pos += l + (e != NULL);
+    return 1;
+}
+
+void dcl_page_free(struct dcl_pager *pg)
+{
+    (void)dcl_page_stop(pg);
+    free(pg->buf);
+    pg->buf = NULL;
+    pg->len = pg->cap = 0;
 }
 
 void dcl_page_end(struct dcl_pager *pg, int page_len)
 {
     static const char status[] =
         "\r RETURN/SPACE=More, PREV/NEXT=Scroll, INS/REM=Pan, SELECT=80/132, CTRL/Z=Quit";
-    char line[4096];
-    long nlines = 0, shown = 0;
+    char line[4096 + 2];
+    const char *rec;
+    size_t n, pos = 0;
+    long nlines, shown = 0;
 
-    if (!pg->tmp)
+    if (!pg->on)
         return;
-    dcl_out_flush();
-    int page_werr = dcl_out_error();      /* the buffer filled mid-command */
-    dcl_out_clearerr();
-    dcl_out_capture(NULL);
-    if (page_werr)
+    if (!dcl_page_stop(pg))
         dcl_err_printf("%%DCL-W-PAGEFULL, output exceeded the paging buffer; the listing is incomplete\n");
-    dup2(pg->save, STDOUT_FILENO);
-    close(pg->save);
-    pg->save = -1;
-
-    rewind(pg->tmp);
-    while (fgets(line, sizeof line, pg->tmp))
-        if (strchr(line, '\n')) nlines++;
+    nlines = pg->nlines;
     if (page_len < 3)
         page_len = 24;
-    rewind(pg->tmp);
 
     /* output that fits on one screen goes out as the records it is, the
      * screen filled out with empty ones (PG.DIR D: DCL's prompt follows with
      * its own CR) */
     if (nlines <= page_len) {
-        while (fgets(line, sizeof line, pg->tmp))
-            dcl_out_fputs(line);
+        while (dcl_page_record(pg, &pos, &rec, &n)) {
+            dcl_out_write(rec, n);
+            dcl_out_putc('\n');
+        }
         for (long i = nlines; i < page_len; i++)
             dcl_out_putc('\n');
         dcl_out_flush();
-        fclose(pg->tmp);
-        pg->tmp = NULL;
+        dcl_page_free(pg);
         return;
     }
 
     /* the first screen holds the page length; each later one starts on the
      * status line's row and holds one more (PG.DIR C1: 9 + 1 + 1 + 14) */
     long screen = 0, cap = page_len;
-    while (fgets(line, sizeof line, pg->tmp)) {
-        size_t l = strlen(line);
-        if (l && line[l - 1] == '\n') line[--l] = '\0';
-        line[l++] = '\r';
-        line[l++] = '\n';
-        pg_raw(line, l);
+    while (dcl_page_record(pg, &pos, &rec, &n)) {
+        if (n > sizeof line - 2)
+            n = sizeof line - 2;
+        memcpy(line, rec, n);
+        line[n++] = '\r';
+        line[n++] = '\n';
+        pg_raw(line, n);
         shown++;
         screen++;
         if (screen == cap && nlines - shown > 0) {
@@ -516,8 +555,7 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
                             IO$M_NOECHO | IO$M_TRMNOECHO, 0, &t);
             if (r == DCL_TT_EOF || r == DCL_TT_INTR || r == DCL_TT_GONE ||
                 t == 0x1A || t == 0x19) {
-                fclose(pg->tmp);
-                pg->tmp = NULL;
+                dcl_page_free(pg);
                 return;
             }
         }
@@ -527,8 +565,7 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
         pg_raw("\r\n", 2);
         screen++;
     }
-    fclose(pg->tmp);
-    pg->tmp = NULL;
+    dcl_page_free(pg);
 }
 
 /*

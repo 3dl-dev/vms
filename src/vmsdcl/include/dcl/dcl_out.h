@@ -28,8 +28,6 @@ int    dcl_out_error(void);                  /* the stream's error flag */
 void   dcl_out_clearerr(void);
 void   dcl_out_line_buffered(void);          /* SYS$OUTPUT became a pipe */
 
-/* /PAGE: SYS$OUTPUT is gathered into `f` until dcl_out_capture(NULL). */
-void   dcl_out_capture(FILE *f);
 /* What an image run in this process left in its stdio buffers goes to fd 1/2
  * now, ahead of DCL's next record. */
 void   dcl_out_stdio_sync(void);
@@ -53,6 +51,10 @@ typedef int (*dcl_out_emit_fn)(void *arg, const char *rec, size_t n, int open);
 void   dcl_out_route(int which, dcl_out_emit_fn emit, void *arg, unsigned flags,
                      void (*close)(void *arg));
 int    dcl_out_routed(int which);
+/* /PAGE (rd vms-457, vms-07ae): SYS$OUTPUT's records go to `fn`, whole and
+ * without their '\n', until dcl_out_capture(NULL, NULL); the last line goes
+ * to `fn` too, ended or not. SYS$ERROR is not gathered. */
+void   dcl_out_capture(dcl_out_emit_fn fn, void *arg);
 /* Route SYS$OUTPUT/SYS$ERROR from the process-permanent files they name
  * (dcl_io.c): at startup, and again once a mailbox SYS$OUTPUT is bound. */
 void   dcl_out_bind_ppf(void);

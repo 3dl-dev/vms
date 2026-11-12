@@ -55,10 +55,14 @@ infb=$(awk '/THE STDIO FALLBACK/{f=1} f&&/^ \* =+ \*\/$|^\/\* =+ \*\/$/{n++; if(
 [ -n "$infb" ] && { echo "dcl_in.c: stdin used outside its marked fallback block: $infb"; bad=1; }
 # Files whose libc I/O reached 0 stay at 0 (hard pin; the ratchet alone would
 # accept a baseline edit back up).
-for z in dcl_io.c dcl_main.c dcl_cmd_misc.c; do
+for z in dcl_io.c dcl_main.c dcl_cmd_misc.c dcl_editor.c; do
     n=$(bash "$ROOT/tests/dcl/libc_io_census.sh" "$ROOT" | awk -v f="$z" '$1==f{print $2}')
-    [ -n "$n" ] && { echo "$z: $n libc I/O sites; it is pinned at 0 (rd vms-4d27, vms-67a, vms-6d6c)"; bad=1; }
+    [ -n "$n" ] && { echo "$z: $n libc I/O sites; it is pinned at 0 (rd vms-4d27, vms-67a, vms-6d6c, vms-07ae)"; bad=1; }
 done
+# /PAGE gathers SYS$OUTPUT's records in the sink (rd vms-07ae): the pager
+# (dcl_terminal.c) and EDT's command line (dcl_editor.c) never point fd 1 elsewhere.
+hits=$(grep -nE '\bdup2\s*\([^,]*,\s*(1|STDOUT_FILENO)\s*\)|\bdup\s*\(\s*(1|STDOUT_FILENO)\s*\)' "$ROOT"/src/vmsdcl/dcl_terminal.c "$ROOT"/src/vmsdcl/dcl_editor.c | grep -vE '^[^:]+:[0-9]+:\s*(\*|//|/\*)')
+[ -n "$hits" ] && { echo "the /PAGE pager captures output by redirecting fd 1: $hits"; bad=1; }
 base="$ROOT/tests/dcl/libc_io_baseline.txt"
 now=$(bash "$ROOT/tests/dcl/libc_io_census.sh" "$ROOT")
 while read -r f n; do

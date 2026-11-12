@@ -1661,25 +1661,24 @@ run_dcl_acceptance_battery() {
         else
             note "NETACP [vms-1f69]: DECNETD.EXE on this runtime is not built with the executive datalink backend (its --show-executor names another) -- the executive-datalink proof DID NOT RUN here"
         fi
-        # STARTNET now passes its NETNODE_LOCAL.DAT gate and attempts the
-        # detached NETACP launch -- and REPORTS IT HONESTLY: it may announce
-        # %DECNET-I-STARTNET only if RUN/DETACHED actually created the process.
-        # (From an interactive, non-root DCL session RUN/DETACHED is currently
-        # refused %RUN-F-CREPRC -SYSTEM-F-NOPRIV for ANY image -- rd vms-ff75, a
-        # general $CREPRC defect; then STARTNET must say %DECNET-E-STARTNET.
-        # The NETACP-actually-running proof is the boot-time STARTNET in
-        # tests/qemu/test_decnet_startnet_boot_e2e.sh, which runs it as the
-        # system does at LPBETA, on a VM with a NIC, and checks the wire.)
+        # STARTNET now passes its NETNODE_LOCAL.DAT gate and starts the network
+        # the VMS way (rd vms-0a7 S3): NCP SET EXECUTOR STATE ON $CREPRCs
+        # SYS$SYSTEM:NETACP.EXE detached. NCP prints NOTHING on success (as on
+        # VMS), so there is no RUN line to match any more; the proof is the
+        # procedure's own exit status, which STARTNET passes through from NCP
+        # (EXIT run_status) -- a refused $CREPRC (SS$_NOPRIV, a missing image)
+        # makes it even and prints NCP's %NCP-F- line. This VM has no NIC, so
+        # the NETACP it creates logs its honest no-circuit refusal and exits
+        # (rd vms-bc6); the NETACP-actually-running proof is the boot-time
+        # STARTNET in tests/qemu/test_decnet_startnet_boot_e2e.sh, which runs it
+        # as the system does at LPBETA, on a VM with a NIC, and checks the wire.
         run_cmd '@SYS$MANAGER:STARTNET'
-        if printf '%s\n' "$SEG" | grep -qF '%RUN-F-CREPRC'; then
-            must_not_have "$SEG" '%RUN-S-PROC_ID' \
-                "STARTNET [vms-1f69]: a REFUSED RUN/DETACHED is never announced as a NETACP launch (honest .COM)"
-            note "STARTNET [vms-158d]: the refusal is RUN's own %RUN-F-CREPRC (the .COM adds no line of its own)"
-            note "STARTNET [vms-1f69]: interactive RUN/DETACHED from this non-root session was refused (rd vms-ff75); the running-NETACP proof is the boot-time e2e"
-        else
-            must_have "$SEG" '%RUN-S-PROC_ID' \
-                "STARTNET [vms-1f69]: on the CONFIGURED node @SYS\$MANAGER:STARTNET passes its gate and launches NETACP detached (RUN's own line)"
-        fi
+        local SN_SEG="$SEG"
+        run_cmd 'WRITE SYS$OUTPUT "[SNST:", $STATUS, ":]"'
+        must_match "$SEG" '\[SNST:%X[0-9A-F]{7}[13579BDF]:\]' \
+            "STARTNET [vms-1f69]: on the CONFIGURED node @SYS\$MANAGER:STARTNET passes its gate and NCP SET EXECUTOR STATE ON creates NETACP (the procedure exits with NCP's success status)"
+        must_not_have "$SN_SEG" '%NCP-F-' \
+            "STARTNET [vms-1f69]: NCP did not refuse the NETACP launch (no %NCP-F- line)"
     fi
     wait_for '$ ' 20 "$DN_OFF"
 

@@ -2305,6 +2305,37 @@ pid_t dcl_image_fork(uint32_t kind)
     return dcl_image_fork_mbx(kind, 0, NULL);
 }
 
+/*
+ * A SYS$SYSTEM utility's image task (dcl_cmd_misc.c): DCL's own VMS process,
+ * its termination mailbox DCL's request mailbox, so DCL waits for it the way
+ * it waits for a RUN image -- in ONE mailbox read during which the process
+ * runs its ASTs (dcl_cli_wait, rd vms-b24). A utility given a command
+ * procedure's data block needs that: the block's read-attention AST refills
+ * the mailbox while DCL waits (dcl_in.c, rd vms-07ae). DCL runs one image at
+ * a time, so one set of mailboxes.
+ */
+static struct dcl_cli_mbx dcl_util_cli;
+
+pid_t dcl_utility_fork(void)
+{
+    uint32_t pcb_st = SS$_ABORT;
+
+    dcl_cli_mbx_open(&dcl_util_cli);
+    pid_t pid = dcl_image_fork_mbx(VMS_CREPRC_PCB_CONTINUE,
+                                   dcl_util_cli.ok ? dcl_util_cli.req_unit : 0, &pcb_st);
+    if (pid < 0 || (pid > 0 && !(pcb_st & 1)))
+        dcl_cli_mbx_close(&dcl_util_cli);
+    return pid;
+}
+
+void dcl_utility_wait(pid_t pid)
+{
+    siginfo_t si;
+
+    dcl_cli_wait(&dcl_util_cli, pid, &si);
+    dcl_cli_mbx_close(&dcl_util_cli);
+}
+
 /* Child side, after a failed execv: record the errno and leave. Never returns. */
 static void dcl_exec_handshake_fail(int err)
 {

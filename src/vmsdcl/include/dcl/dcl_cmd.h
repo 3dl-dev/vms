@@ -169,6 +169,11 @@ pid_t dcl_image_fork(uint32_t kind);
  * termination mailbox (rd vms-6d9; 0 = none); *pcb_status (may be NULL) gets
  * the executive's answer for the PCB. */
 pid_t dcl_image_fork_mbx(uint32_t kind, uint32_t mbxunt, uint32_t *pcb_status);
+/* A SYS$SYSTEM utility's image task (VMS_CREPRC_PCB_CONTINUE) and DCL's wait
+ * for it to exit or stop, during which DCL runs its ASTs; the task's state is
+ * then for waitpid to read. */
+pid_t dcl_utility_fork(void);
+void dcl_utility_wait(pid_t pid);
 void dcl_sysinput_restore(struct dcl_sysinput *si);
 
 /* P1 control-region establishment (vms-68f.v, in-process image activation).

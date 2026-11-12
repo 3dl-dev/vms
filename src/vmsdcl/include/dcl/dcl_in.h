@@ -57,8 +57,8 @@ void dcl_in_unget(const char *rec);
 
 /* A command procedure's in-stream data block as SYS$INPUT (rd vms-07ae):
  * DCL creates a temporary mailbox, writes the block's records to it whole --
- * what fits at once, the rest from a feeder thread as the image's reads make
- * room, so a block of any size -- then end of file (IO$_WRITEOF), and defines
+ * what fits at once, the rest from a read-attention AST each time the image's
+ * read finds the mailbox empty, so a block of any size -- then end of file (IO$_WRITEOF), and defines
  * SYS$INPUT at user mode to it for the image; the executive runs that name
  * down when the image exits. Until dcl_in_block_close (which reads off what
  * the image left unread), DCL's own reads come from the mailbox too. With

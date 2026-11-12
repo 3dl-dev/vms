@@ -1017,7 +1017,7 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
         return srt;
 
     uint32_t status = SS$_NORMAL;
-    pid_t pid = dcl_image_fork(VMS_CREPRC_PCB_CONTINUE);
+    pid_t pid = dcl_utility_fork();
     if (pid == 0) {
         /* A SYS$SYSTEM utility (MAIL, SYSGEN, INSTALL, ...) is an image the
          * CLI runs IN ITS OWN PROCESS on VMS: DCL makes this task its own VMS
@@ -1035,6 +1035,7 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
         extern volatile sig_atomic_t dcl_running_child;
         dcl_running_child = (sig_atomic_t)pid;
         int wstatus;
+        dcl_utility_wait(pid);     /* running ASTs meanwhile (rd vms-07ae) */
         waitpid(pid, &wstatus, WUNTRACED);
         dcl_running_child = 0;
         if (WIFSTOPPED(wstatus)) {
@@ -3765,6 +3766,7 @@ int cmd_attach(struct dcl_command *cmd)
         extern volatile sig_atomic_t dcl_running_child;
         dcl_running_child = (sig_atomic_t)pid;
         int wstatus;
+        dcl_utility_wait(pid);     /* running ASTs meanwhile (rd vms-07ae) */
         waitpid(pid, &wstatus, WUNTRACED);
         dcl_running_child = 0;
         if (WIFSTOPPED(wstatus)) {

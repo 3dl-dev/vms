@@ -900,24 +900,20 @@ static void kp_command_line(struct kp *k)
     int cap = dcl_page_begin(&pg);
     line_cmd(k->b, cmdl, skip(cmdl), skip(cmdl));
     if (cap) {
-        dcl_out_flush();
-        /* the sink stops gathering into pg.tmp before it is closed: DCL's
-         * next record (the "$ " after QUIT) must not go to a freed stream
-         * (keystroke EDT.KEYPAD2 Q, rd vms-1b6a) */
-        dcl_out_capture(NULL);
-        dup2(pg.save, 1);
-        close(pg.save);
-        rewind(pg.tmp);
-        char ln[EDT_LINE_MAX];
+        /* the sink stops gathering before the records are shown: DCL's
+         * next record (the "$ " after QUIT) is not the pager's (keystroke
+         * EDT.KEYPAD2 Q, rd vms-1b6a) */
+        if (!dcl_page_stop(&pg))
+            dcl_err_printf("%%DCL-W-PAGEFULL, output exceeded the paging buffer; the listing is incomplete\n");
+        const char *ln;
+        size_t l, pos = 0;
         int first = 1;
-        while (fgets(ln, sizeof ln, pg.tmp)) {
-            size_t l = strlen(ln);
-            if (l && ln[l - 1] == '\n') ln[--l] = '\0';
+        while (dcl_page_record(&pg, &pos, &ln, &l)) {
             if (!first) dcl_tt_qio_write("\r\n", 2);
             dcl_tt_qio_write(ln, l);
             first = 0;
         }
-        fclose(pg.tmp);
+        dcl_page_free(&pg);
     }
     k->s.known = 0;
     sregion(&k->s, 1, WROWS);

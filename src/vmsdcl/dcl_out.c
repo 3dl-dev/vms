@@ -43,15 +43,15 @@ struct sink {
 
 static struct sink g_out = { .is_err = 0 };
 static struct sink g_err = { .is_err = 1 };
-static FILE *g_capture;               /* /PAGE: SYS$OUTPUT gathered for the pager */
+/* /PAGE: SYS$OUTPUT's records go to the pager while it gathers them */
+static dcl_out_emit_fn g_capture;
+static void *g_capture_arg;
 
 /* ================================================================
  * THE STDIO FALLBACK -- the only libc I/O in DCL's output path.
  * ================================================================ */
 static FILE *fb_stream(const struct sink *s)
 {
-    if (!s->is_err && g_capture)
-        return g_capture;
     return s->is_err ? stderr : stdout;
 }
 
@@ -68,9 +68,20 @@ static void fb_clearerr(const struct sink *s)    { clearerr(fb_stream(s)); }
 void dcl_out_stdio_sync(void)                    { fflush(stdout); fflush(stderr); }
 /* ================================================================ */
 
+static int capturing(const struct sink *s)
+{
+    return !s->is_err && g_capture;
+}
+
 static int routed(const struct sink *s)
 {
-    return s->emit && !(!s->is_err && g_capture);
+    return s->emit || capturing(s);
+}
+
+/* a pager takes whole records; a long line goes as several */
+static unsigned route_flags(const struct sink *s)
+{
+    return capturing(s) ? 0 : s->flags;
 }
 
 /* Send the buffered text: a whole record, or (`open`) the start of one. */
@@ -84,7 +95,8 @@ static int sink_emit(struct sink *s, int open)
     memcpy(rec, s->rec, n);
     s->len = 0;
     dcl_out_stdio_sync();
-    int r = s->emit(s->arg, rec, n, open);
+    int r = capturing(s) ? g_capture(g_capture_arg, rec, n, 0)
+                         : s->emit(s->arg, rec, n, open);
     if (r != 0)
         s->err = 1;
     return r;
@@ -101,7 +113,7 @@ static int sink_write(struct sink *s, const char *p, size_t n)
             continue;
         }
         if (s->len == sizeof s->rec) {
-            if (s->flags & DCL_OUT_ROUTE_OPEN)
+            if (route_flags(s) & DCL_OUT_ROUTE_OPEN)
                 r |= sink_emit(s, 1);
             else
                 r |= sink_emit(s, 0);       /* a file takes it as a record */
@@ -110,7 +122,7 @@ static int sink_write(struct sink *s, const char *p, size_t n)
     }
     /* SYS$ERROR is unbuffered: on a route that can leave a record open, a
      * partial line goes now */
-    if (s->is_err && s->len && (s->flags & DCL_OUT_ROUTE_OPEN))
+    if (s->is_err && s->len && (route_flags(s) & DCL_OUT_ROUTE_OPEN))
         r |= sink_emit(s, 1);
     return r ? -1 : 0;
 }
@@ -119,7 +131,7 @@ static int sink_flush(struct sink *s)
 {
     if (!routed(s))
         return fb_flush(s);
-    if (s->len && (s->flags & DCL_OUT_ROUTE_OPEN))
+    if (s->len && (route_flags(s) & DCL_OUT_ROUTE_OPEN))
         return sink_emit(s, 1) ? EOF : 0;
     return 0;
 }
@@ -233,10 +245,21 @@ void dcl_out_clearerr(void)
         fb_clearerr(&g_out);
 }
 void dcl_out_line_buffered(void) { setvbuf(stdout, NULL, _IOLBF, 0); }
-void dcl_out_capture(FILE *f)
+void dcl_out_capture(dcl_out_emit_fn fn, void *arg)
 {
-    (void)sink_flush(&g_out);
-    g_capture = f;
+    struct sink *s = &g_out;
+    if (g_capture) {
+        /* the gathered output's last line, even unended, is the pager's */
+        if (s->len)
+            (void)sink_emit(s, 0);
+    } else {
+        (void)sink_flush(s);
+        if (!s->emit)
+            (void)fb_flush(s);
+    }
+    g_capture = fn;
+    g_capture_arg = arg;
+    s->err = 0;
 }
 
 /* ---- SYS$ERROR ---- */

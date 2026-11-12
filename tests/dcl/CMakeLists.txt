@@ -236,3 +236,19 @@ set_tests_properties(dcl-no-argv-flags PROPERTIES
     TIMEOUT 60
     LABELS "dcl;gate"
 )
+
+# Hermetic test for the /PAGE capture of DCL's output sink (rd vms-07ae): the
+# pager gathers SYS$OUTPUT's records in the sink, never through fd 1.
+add_executable(test_out_capture
+    test_out_capture.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_out.c
+)
+target_include_directories(test_out_capture PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
+    ${VMS_INCLUDE_DIR}
+)
+add_test(NAME dcl-out-capture COMMAND test_out_capture)
+set_tests_properties(dcl-out-capture PROPERTIES
+    TIMEOUT 60
+    LABELS "dcl;unit"
+)

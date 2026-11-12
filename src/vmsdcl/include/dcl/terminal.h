@@ -143,8 +143,12 @@ int dcl_tt_output_ready(void);
 int dcl_tt_put_text(const char *text, size_t n, int open);
 
 /* /PAGE: gather a command's output, then show it a screen at a time (rd
- * vms-457). begin returns 0 when the output is not a terminal (no pager). */
-struct dcl_pager { FILE *tmp; int save; };
+ * vms-457). begin returns 0 when the output is not a terminal (no pager).
+ * The output is SYS$OUTPUT's records, held by DCL as they are written (rd
+ * vms-07ae: no host stream, no fd 1 redirect); a listing past
+ * DCL_PAGE_MAX bytes is cut short with %DCL-W-PAGEFULL. */
+#define DCL_PAGE_MAX (16u << 20)
+struct dcl_pager { char *buf; size_t len, cap; long nlines; int full, on; };
 
 /* screen programs (EDT keypad mode, rd vms-c37): raw output, raw keys */
 void dcl_tt_raw_write(const void *b, size_t n);     /* IO$M_NOFORMAT */
@@ -152,6 +156,12 @@ void dcl_tt_qio_write(const void *b, size_t n);     /* $QIO, no carriage control
 int  dcl_tt_getc(int poll);
 int  dcl_page_begin(struct dcl_pager *pg);
 void dcl_page_end(struct dcl_pager *pg, int page_len);
+/* stop gathering (the paged command is done); 0 when the buffer filled */
+int  dcl_page_stop(struct dcl_pager *pg);
+/* the gathered records in turn: 1 and *rec/*n, or 0 at the end; *pos from 0 */
+int  dcl_page_record(const struct dcl_pager *pg, size_t *pos,
+                     const char **rec, size_t *n);
+void dcl_page_free(struct dcl_pager *pg);
 int dcl_recall_size(void);
 int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
                 uint32_t modifiers, uint32_t timeout_sec, uint16_t *term_out);

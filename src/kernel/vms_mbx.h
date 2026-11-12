@@ -131,6 +131,14 @@ struct vms_mbx_write_args {
  * the mailbox; if the mailbox is empty the read completes with SS$_ENDOFFILE).
  * When clear, the read blocks (the default, documented mailbox-read shape). */
 #define VMS_MBX_READ_NOW  0x00000001u
+/* VMS_MBX_READ_ASTWAIT (rd vms-b24): a waiting read lets the process run its
+ * ASTs, as a $QIOW does on VMS. When an AST is deliverable and no message has
+ * arrived, the read returns with oflags VMS_MBX_RDO_ASTPEND, status SS$_NORMAL
+ * and no data: the caller delivers the AST and issues the read again; the read
+ * has not completed. Without it the read waits as before (an executive thread
+ * that is no AST-taking caller). */
+#define VMS_MBX_READ_ASTWAIT 0x00000002u
+#define VMS_MBX_RDO_ASTPEND  0x00000001u   /* vms_mbx_read_args.oflags (out) */
 
 /* $QIO IO$_READVBLK-equivalent. Blocks (kernel wait queue) until a message
  * is queued -- see vms_ioctl_mbx_read()'s "INTERRUPTED WAITS" note, which
@@ -146,7 +154,7 @@ struct vms_mbx_read_args {
     uint32_t status;    /* out */
     uint32_t sender_pid; /* out: VMS PID of the process that wrote the message
                          * (a mailbox read's IOSB second longword, rd vms-4a69) */
-    uint32_t pad2;
+    uint32_t oflags;    /* out: VMS_MBX_RDO_* (was pad2) */
     char     data[VMS_MBX_IOCTL_MAXLEN];
 };
 
@@ -164,13 +172,19 @@ struct vms_mbx_read_args {
  * again. A fresh SETMODE|WRTATTN on the same channel REPLACES any still-armed
  * registration for that channel rather than stacking a second one.
  */
+/* The attention AST the call arms (rd vms-b24). IO$M_READATTN: fired when a
+ * read is queued to the EMPTY mailbox, or at once if a reader is already
+ * waiting when it is armed; one-shot, re-armed by another SETMODE (VSI
+ * OpenVMS I/O User's Reference, Mailbox Driver). */
+#define VMS_MBX_ATTN_WRITE 0u
+#define VMS_MBX_ATTN_READ  1u
 struct vms_mbx_wrtattn_args {
     uint32_t chan;      /* in: this process's channel to the mailbox */
     uint32_t acmode;    /* in: access mode to deliver the AST at (0-3) */
     uint64_t astadr;    /* in: write-attention AST routine (opaque address) */
     uint64_t astprm;    /* in: parameter passed to the AST routine */
     uint32_t status;    /* out: SS$_ status */
-    uint32_t pad;
+    uint32_t kind;      /* in: VMS_MBX_ATTN_WRITE (0, was pad) or VMS_MBX_ATTN_READ */
 };
 
 /*

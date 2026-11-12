@@ -1,0 +1,47 @@
+# mbx-read-ast-not-delivered -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "AST delivery during an executive mailbox-read wait (vms_ast_wait + VMS_MBX_READ_ASTWAIT, the \$QIOW read stays outstanding), rd vms-b24";;
+        targets)      echo "kernel-core/vms_ast.c";;
+        suites_red)   echo "test_syssvc_mbx_astwait test_syssvc_mbx_readattn";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ast_wait() is the wait a mailbox read makes on the process's own hiber_wq; it ends with VMS_AST_WAIT_ASTPEND when an AST is deliverable, so the reader returns to user mode, runs the AST and reads again. The mutation removes that predicate from the wait loop, so a process blocked in a mailbox read sleeps through every AST queued to it until a message (or a signal) ends the wait -- the pre-vms-b24 behaviour. The read itself, the message wake (vms_ast_waiter_wake), \$HIBER (vms_ioctl_hiber, a different file) and the AST queue are untouched.";;
+        require_fail) cat <<'EOF2'
+an AST queued to a process blocked in a mailbox read is delivered DURING the wait
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+the AST ran with its own parameter
+the read completes normally with the record the AST wrote (the AST-driven feeder)
+EOF2
+                      ;;
+        knock_on_why)  cat <<'EOF2'
+SAME ONE ROOT (a mailbox-read wait does not end for a deliverable AST). In
+test_syssvc_mbx_astwait the poke AST is not run during the read, so the
+recorder has not stored its parameter when the read returns (it is drained by
+the following $SETAST(1), so round 3 is clean). In test_syssvc_mbx_readattn the
+feeder's read-attention AST is queued to A while A waits in its own read; A
+sleeps until the suite's SIGALRM guard, whose interrupted wait then does
+deliver the feeder -- but the guard's "TIMEOUT" record is already first in the
+mailbox, so the read completes with it. What STAYS GREEN: the read still
+completes normally with B's message, ASTs disabled are still held, and every
+read-attention firing check passes (those drain with $SETAST(1)).
+EOF2
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: this exact line occurs once in vms_ast.c -- the
+        # deliverable-AST predicate at the top of vms_ast_wait's loop (the
+        # interrupted-wait recheck below it is a ternary and untouched). After
+        # substitution the text no longer matches, so a second apply is a no-op.
+        sed -i 's|^        if (vms_ast_has_deliverable(proc, cur_mode)) {$|        if (0) { /* NEGCTL mbx-read-ast-not-delivered */|' "$_file"
+
+    :
+}

@@ -2184,6 +2184,10 @@ static void dcl_cli_mbx_close(struct dcl_cli_mbx *m)
  * the task's last instructions in the kernel) and a blocking waitid reads it.
  * No host descriptor wait, no polling interval.
  */
+/* LIBVMS: a mailbox read that delivers ASTs while it waits (sys_qio.c). */
+extern uint32_t vms$$mbx_read_wait(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                                   uint32_t *actlen, uint32_t *sender);
+
 static void dcl_cli_wait(struct dcl_cli_mbx *m, pid_t pid, siginfo_t *si)
 {
     if (m->ok) {
@@ -2194,7 +2198,10 @@ static void dcl_cli_wait(struct dcl_cli_mbx *m, pid_t pid, siginfo_t *si)
         dcl_wait_mbx_chan = (sig_atomic_t)m->req_chan;
         for (;;) {
             uint32_t len = 0;
-            uint32_t st = vms_kif_mbx_read(m->req_chan, &msg, sizeof msg, &len, 0);
+            /* The process runs its ASTs while it waits here, as a CLI
+             * waiting for its image does on VMS (rd vms-b24); the read stays
+             * outstanding across them. */
+            uint32_t st = vms$$mbx_read_wait(m->req_chan, &msg, sizeof msg, &len, 0);
             if (!(st & 1))
                 break;                    /* the executive is gone: wait below */
             if (len == (uint32_t)sizeof msg.rq) {

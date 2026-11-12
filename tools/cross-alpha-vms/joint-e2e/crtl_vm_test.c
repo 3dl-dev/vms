@@ -14,7 +14,13 @@
  *      SS$_EXQUOTA -- the heap's pages and SYS$EXPREG's are one charge, so a
  *      heap that was not charged leaves room and SYS$EXPREG succeeds;
  *   3. frees everything and asks again: the charge came back, so SYS$EXPREG
- *      and a fresh malloc succeed.
+ *      and a fresh malloc succeed;
+ *   4. (rd vms-b85) CHURN times: mallocs a 4 MB block and a 256 KB block above
+ *      it, frees the 4 MB block (now a hole under a live block) and the
+ *      previous 256 KB one. The live heap stays under 5 MB, but the address
+ *      space given back adds up to 1.6 GB -- more than all of P0. A heap that
+ *      does not re-create the holes it deleted walks off the end of P0
+ *      (SS$_VASFULL, malloc NULL) partway through, as cc1plus did.
  * Run with no argument (SYSTARTUP, a process with no sourced quota) it only
  * checks that small and large allocations work and lie in P0.
  */
@@ -28,6 +34,7 @@ unsigned int sys$expreg(unsigned int pagcnt, void *retadr, unsigned int acmode,
 
 #define SS_EXQUOTA 28u
 #define NMAX 400
+#define CHURN 400
 
 static char *blk[NMAX];
 
@@ -70,6 +77,28 @@ int main(int argc, char **argv)
     p = malloc(1024 * 1024);
     printf("CRTLVM: after free: SYS$EXPREG %%X%08X, malloc 1 MB %s\n",
            st2, p ? "ok" : "NULL");
+
+    free(p);
+    {
+        char *big, *pin, *prev = NULL;
+        int c;
+
+        for (c = 0; c < CHURN; c++) {
+            big = malloc(4 * 1024 * 1024);
+            pin = big ? malloc(256 * 1024) : NULL;
+            if (!pin) {
+                free(big);
+                break;
+            }
+            big[0] = 1; big[4 * 1024 * 1024 - 1] = 2; pin[0] = 3;
+            free(big);
+            free(prev);
+            prev = pin;
+        }
+        free(prev);
+        printf("CRTLVM: churn %d x 4 MB under a live block: %d ok\n", CHURN, c);
+        ok = ok && c == CHURN;
+    }
 
     ok = ok && n >= 1 && n < NMAX && e == ENOMEM && st1 == SS_EXQUOTA &&
          (st2 & 1) && p != NULL;

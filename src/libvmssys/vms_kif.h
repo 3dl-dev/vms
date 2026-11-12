@@ -1337,6 +1337,14 @@ uint32_t vms_kif_mbx_read(uint32_t exec_chan, void *buf, uint32_t bufsz,
  * re-armed by another call. SS$_NOSUCHDEV if the executive is unreachable. */
 uint32_t vms_kif_mbx_set_wrtattn(uint32_t exec_chan, uint8_t acmode,
                                  uint64_t astadr, uint64_t astprm);
+/* Arm a write- or read-attention AST (kind VMS_MBX_ATTN_*, rd vms-b24). */
+uint32_t vms_kif_mbx_set_attn(uint32_t exec_chan, uint32_t kind, uint8_t acmode,
+                              uint64_t astadr, uint64_t astprm);
+/* A blocking read a deliverable AST interrupts: *astpend = 1 = not completed,
+ * deliver and read again (rd vms-b24). */
+uint32_t vms_kif_mbx_read_ast(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                              uint32_t *actlen, uint32_t *sender_pid,
+                              int *astpend);
 
 /* $CHECK_ACCESS-shaped: may process `target_vms_pid` perform `access`
  * (VMS_MBX_ACC_READ / VMS_MBX_ACC_WRITE, vms_mbx.h) on mailbox `devnam`? The

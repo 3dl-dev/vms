@@ -191,6 +191,13 @@ echo "--- rebuilding INSTALL.EXE (the subject test_syssvc_dcl_install drives) --
 ( cd /src/repo && cmake --build build-static --target vms_install \
                         --parallel "$(nproc)" ) || exit 4
 
+# SYSGEN.EXE is the SUBJECT test_syssvc_crtl_stdio_start runs (rd vms-07ae), and
+# crtl-static-stdio-not-bound targets src/vmsrms/crtl_stdio_start.c, the static
+# start-up linked into it. Rebuilt unconditionally, same reason as above.
+echo "--- rebuilding SYSGEN.EXE (the subject test_syssvc_crtl_stdio_start runs) ---"
+( cd /src/repo && cmake --build build-static --target vms_sysgen \
+                        --parallel "$(nproc)" ) || exit 4
+
 # IMGACT.EXE is the activator of every IMGACT-activated subject (MMK.EXE,
 # RMHOLD.EXE, CRTLSHR.EXE, ...), and crtl-shr-layer-not-started (rd vms-569)
 # targets src/imgact/imgact.c -- the call that starts an activated image's C RTL
@@ -321,6 +328,11 @@ chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE || exit 4
 cp /src/repo/build-static/bin/INSTALL.EXE \
    /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/INSTALL.EXE || exit 4
 chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/INSTALL.EXE || exit 4
+# SYSGEN.EXE at SYS$SYSTEM (rd vms-07ae): refreshed so a defect in its static
+# start-up (crtl_stdio_start.c) reaches the image the suite runs.
+cp /src/repo/build-static/bin/SYSGEN.EXE \
+   /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSGEN.EXE || exit 4
+chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSGEN.EXE || exit 4
 cp /src/repo/build-static/bin/RTPAD.EXE \
    /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RTPAD.EXE || exit 4
 chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RTPAD.EXE || exit 4

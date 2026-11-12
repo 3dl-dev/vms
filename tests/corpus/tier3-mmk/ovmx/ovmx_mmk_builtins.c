@@ -13,6 +13,16 @@
  *                       manuals); implemented here on the standard {flink,blink}
  *                       entry layout every MMK queue structure begins with.
  *
+ *  __PAL_INSQUEL / __PAL_REMQUEL - the Alpha forms of the same operations,
+ *                       which MMK's queue macros use when __ALPHA is defined
+ *                       (the alpha-dec-vms port compiler).  Longword queues:
+ *                       the links are 32-bit, as are the pointers of an image
+ *                       built with the compiler's default pointer size.  Results
+ *                       per the Alpha architecture's INSQUEL/REMQUEL:
+ *                       INSQUEL 1 if the queue was empty before the insert, else 0;
+ *                       REMQUEL -1 if the queue was empty (nothing removed),
+ *                       0 if the removal emptied it, else 1.
+ *
  *  sp_once            - "run one command, collect its output" (parse_descrip.c
  *                       uses it for command-substitution during parsing).  This
  *                       needs the same DCL-subprocess drive that build_target's
@@ -57,6 +67,26 @@ void _REMQUE(void *entry, void *addr)
     e->flink->blink = e->blink;
     if (addr) *(void **)addr = entry;
 }
+
+#if defined(__ALPHA) || defined(__alpha)
+int __PAL_INSQUEL(void *predecessor, void *new_entry)
+{
+    struct ovmx_q *p = (struct ovmx_q *)predecessor;
+    int was_empty = (p->flink == p);
+    _INSQUE(new_entry, predecessor);
+    return was_empty;
+}
+
+int __PAL_REMQUEL(void *entry, void *removed_entry)
+{
+    struct ovmx_q *e = (struct ovmx_q *)entry;
+    if (e->flink == e)
+        return -1;                     /* entry is an empty header: nothing removed */
+    int emptied = (e->flink == e->blink);
+    _REMQUE(entry, removed_entry);
+    return emptied ? 0 : 1;
+}
+#endif
 
 unsigned int sp_once(void *cmd, void *actrtn, void *result)
 {

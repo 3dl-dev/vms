@@ -275,6 +275,15 @@ jobs:
       - name: Port compiler -- gcov-tool builds where <ftw.h> has no nftw; client headers hide it (vms-fd1)
         run: bash tools/cross-alpha-vms/test/run_gcov_tool_nftw.sh tools/cross-alpha-vms
 
+      # vms-59a: MMK (tests/corpus/tier3-mmk, unchanged) compiles for the
+      # alpha-dec-vms host -- the first rung toward MMK.EXE on OVMX/Alpha, the
+      # build driver GCC stage 2 needs (vms-9e6). Alpha branches included (the
+      # __PAL_INSQUEL/__PAL_REMQUEL queue built-ins), with a control.
+      - name: Port compiler -- MMK compiles for the alpha-dec-vms host (vms-59a)
+        run: |
+          docker run --rm --network none -v "${{ github.workspace }}":/src:ro \
+            ovmx-cross-alpha-vms:latest bash /src/tools/cross-alpha-vms/test/run_mmk_alpha_compile.sh /src
+
       # OTS$ runtime (LIBOTS$) — RUNG completeness (vms-bfd6). Builds LINK.EXE +
       # LIBOTS$SHR.EXE, links DECC$SHR whole-archiving libc.a+libgcc.a WITH
       # --use LIBOTS$, and ASSERTS zero OTS$ references are left deferred (they

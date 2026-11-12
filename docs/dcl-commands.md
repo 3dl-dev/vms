@@ -620,7 +620,9 @@ SHOW ENTRY [entry-number]
 
 ### SHOW INTRUSION
 
-Display intrusion detection database entries.
+Display intrusion detection database entries. OVMX's executive has no
+intrusion database or `$SHOW_INTRUSION` service yet, so the command returns
+`%SYSTEM-E-UNSUPPORTED` (`SS$_UNSUPPORTED`).
 
 ---
 

@@ -1585,40 +1585,12 @@ run_dcl_acceptance_battery() {
         must_not_have "$SEG" 'Product:  DECNET' \
             "SHOW NETWORK [vms-30e]: no DECNET product line while no NETACP serves"
         negctl "$SEG" 'Product:' "SHOW NETWORK"
-        run_cmd 'NCP SET EXECUTOR STATE ON'
-        must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR STATE ON persists"
-        # LIST reads the PERMANENT database -- the file NCP just wrote (rd vms-30e:
-        # SHOW now reads the RUNNING NETACP, the VMS split).
-        run_cmd 'NCP LIST EXECUTOR'
-        must_have "$SEG" 'Executor node = 1.42 (OVMX)' \
-            "DECnet config [vms-1f69]: a FRESH NCP image reads back 1.42 (OVMX) -- all three SETs landed in the one executor database"
-        must_match "$SEG" 'State +=  *on' "DECnet config [vms-1f69]: LIST EXECUTOR reads back State = on"
-        negctl "$SEG" 'Executor node' "NCP LIST EXECUTOR"
-        # STATE ON created NETACP. Does this node have a LAN adapter (the
-        # executive's ETH0:, INV-6)? Without one (-nic none: x86_64/Alpha)
-        # NETACP logs its honest no-circuit refusal and exits (rd vms-bc6), so
-        # the network is STILL not running and SHOW must still say so. With
-        # one (the VAX rail's DELQA) NETACP serves, and SHOW reads it -- that
-        # positive half is asserted at the end of this block, once NETACP has
-        # had the intervening commands to open its datalink.
-        local DN_NIC=0 NIC_OFF; NIC_OFF=$(wc -c <"$LOG")
-        run_cmd 'IF F$GETDVI("ETH0:","EXISTS") THEN WRITE SYS$OUTPUT "[DNNIC:", "YES:]"'
-        if tail -c "+$((NIC_OFF + 1))" "$LOG" | tr -d '\r' | grep -qF '[DNNIC:YES:]'; then
-            DN_NIC=1
-        else
-            run_cmd 'NCP SHOW EXECUTOR'
-            must_have "$SEG" '%NCP-F-OPEFAI' \
-                "NCP SHOW [vms-30e]: no LAN adapter -- the NETACP STATE ON created could not serve, NCP SHOW EXECUTOR fails %NCP-F-OPEFAI"
-            must_not_have "$SEG" 'Node Volatile Summary' \
-                "NCP SHOW [vms-30e]: no LAN adapter -- no volatile summary (the permanent file is not shown as the running network)"
-            run_cmd 'SHOW NETWORK'
-            must_not_have "$SEG" 'Product:  DECNET' \
-                "SHOW NETWORK [vms-30e]: no LAN adapter -- no DECNET product line while no NETACP serves"
-        fi
-        run_cmd 'WRITE SYS$OUTPUT "[DNCFG:" + F$SEARCH("SYS$SYSTEM:NETNODE_LOCAL.DAT") + ":]"'
-        must_match "$SEG" '\[DNCFG:[^"]*NETNODE_LOCAL\.DAT[^"]*:\]' \
-            "DECnet config [vms-1f69]: SYS\$SYSTEM:NETNODE_LOCAL.DAT now EXISTS on the system disk (F\$SEARCH, STARTNET's own gate, sees what NCP wrote)"
-
+        # The datalink proofs below run a NETACP_TEST.EXE engine (DNETACC). They
+        # run BEFORE STATE ON, while no NETACP serves: a node runs one NETACP
+        # (rd vms-365), and a test engine run beside the live one would publish
+        # its own DNET$NETACP_REQ over the live NETACP's and delete it on exit,
+        # leaving the running network unreachable (NCP SHOW %NCP-F-OPEFAI
+        # DEVOFFLINE on the VAX rail, CI run 43290347353).
         # NETACP self-sources the address + names its datalink backend.
         run_cmd 'DNETACC --show-executor'
         must_have "$SEG" 'Executor node = 1.42' \
@@ -1681,6 +1653,40 @@ run_dcl_acceptance_battery() {
         else
             note "NETACP [vms-1f69]: DECNETD.EXE on this runtime is not built with the executive datalink backend (its --show-executor names another) -- the executive-datalink proof DID NOT RUN here"
         fi
+        run_cmd 'NCP SET EXECUTOR STATE ON'
+        must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR STATE ON persists"
+        # LIST reads the PERMANENT database -- the file NCP just wrote (rd vms-30e:
+        # SHOW now reads the RUNNING NETACP, the VMS split).
+        run_cmd 'NCP LIST EXECUTOR'
+        must_have "$SEG" 'Executor node = 1.42 (OVMX)' \
+            "DECnet config [vms-1f69]: a FRESH NCP image reads back 1.42 (OVMX) -- all three SETs landed in the one executor database"
+        must_match "$SEG" 'State +=  *on' "DECnet config [vms-1f69]: LIST EXECUTOR reads back State = on"
+        negctl "$SEG" 'Executor node' "NCP LIST EXECUTOR"
+        # STATE ON created NETACP. Does this node have a LAN adapter (the
+        # executive's ETH0:, INV-6)? Without one (-nic none: x86_64/Alpha)
+        # NETACP logs its honest no-circuit refusal and exits (rd vms-bc6), so
+        # the network is STILL not running and SHOW must still say so. With
+        # one (the VAX rail's DELQA) NETACP serves, and SHOW reads it -- that
+        # positive half is asserted at the end of this block, once NETACP has
+        # had the intervening commands to open its datalink.
+        local DN_NIC=0 NIC_OFF; NIC_OFF=$(wc -c <"$LOG")
+        run_cmd 'IF F$GETDVI("ETH0:","EXISTS") THEN WRITE SYS$OUTPUT "[DNNIC:", "YES:]"'
+        if tail -c "+$((NIC_OFF + 1))" "$LOG" | tr -d '\r' | grep -qF '[DNNIC:YES:]'; then
+            DN_NIC=1
+        else
+            run_cmd 'NCP SHOW EXECUTOR'
+            must_have "$SEG" '%NCP-F-OPEFAI' \
+                "NCP SHOW [vms-30e]: no LAN adapter -- the NETACP STATE ON created could not serve, NCP SHOW EXECUTOR fails %NCP-F-OPEFAI"
+            must_not_have "$SEG" 'Node Volatile Summary' \
+                "NCP SHOW [vms-30e]: no LAN adapter -- no volatile summary (the permanent file is not shown as the running network)"
+            run_cmd 'SHOW NETWORK'
+            must_not_have "$SEG" 'Product:  DECNET' \
+                "SHOW NETWORK [vms-30e]: no LAN adapter -- no DECNET product line while no NETACP serves"
+        fi
+        run_cmd 'WRITE SYS$OUTPUT "[DNCFG:" + F$SEARCH("SYS$SYSTEM:NETNODE_LOCAL.DAT") + ":]"'
+        must_match "$SEG" '\[DNCFG:[^"]*NETNODE_LOCAL\.DAT[^"]*:\]' \
+            "DECnet config [vms-1f69]: SYS\$SYSTEM:NETNODE_LOCAL.DAT now EXISTS on the system disk (F\$SEARCH, STARTNET's own gate, sees what NCP wrote)"
+
         # STARTNET now passes its NETNODE_LOCAL.DAT gate and starts the network
         # the VMS way (rd vms-0a7 S3): NCP SET EXECUTOR STATE ON $CREPRCs
         # SYS$SYSTEM:NETACP.EXE detached. NCP prints NOTHING on success (as on

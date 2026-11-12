@@ -103,6 +103,9 @@ jobs:
         with:
           name: cc1b-shard-${{ matrix.k }}
           path: .cc1b-out
+          # .cc1b-out is a dot-directory: upload-artifact@v4 skips hidden files
+          # unless told, and found nothing in every nightly since 11-03 (rd vms-b85)
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 3
       - name: Keep the boot log

@@ -23,10 +23,8 @@
  * executive (the host test harness), a terminal with no executive driver
  * behind it, a pipe a PIPE segment feeds -- reads its substrate stdin exactly
  * as before. That fallback is the block marked below and is the only libc
- * input in DCL (tests/dcl/test_no_libc_io.sh pins it). It is also what is
- * read while a command procedure's in-stream data block stands on fd 0 for
- * CREATE or an image (dcl_sysinput_install, dcl_cmd_process.c; rd vms-1a9):
- * dcl_in_substrate() brackets that window.
+ * input in DCL (tests/dcl/test_no_libc_io.sh pins it). A command procedure's
+ * in-stream data block is never read from it: that block is a mailbox (dcl_in_block_open, rd vms-07ae).
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -40,6 +38,8 @@
 #include "descrip.h"
 #include "lnmdef.h"
 #include "iodef.h"
+#include "dvidef.h"
+#include "psldef.h"
 #include "ssdef.h"
 #include "rms_textfile.h"
 #include "dcl/dcl_out.h"
@@ -55,7 +55,6 @@ static char            g_msg[DCL_IN_MSG];    /* mailbox: the message being read 
 static size_t          g_msg_len, g_msg_off;
 static int             g_msg_more;           /* g_msg holds lines not yet read */
 static int             g_eof;                /* the route's last read hit the end */
-static int             g_substrate;          /* reads go to the substrate fd 0 */
 static char           *g_unget;              /* a record handed back (dcl_in_unget) */
 
 /* ================================================================
@@ -87,7 +86,7 @@ static void fb_clear_eof(void)  { clearerr(stdin); }
 
 static int substrate(void)
 {
-    return g_route == DCL_IN_ROUTE_NONE || g_substrate;
+    return g_route == DCL_IN_ROUTE_NONE;
 }
 
 static void make_desc(struct dsc$descriptor_s *d, const char *s)
@@ -265,6 +264,8 @@ static int mbx_get(char *buf, size_t bufsz)
     return (int)take;
 }
 
+static int mem_get(char *buf, size_t bufsz);   /* a data block DCL reads */
+
 static int file_get(char *buf, size_t bufsz)
 {
     int too_long = 0;
@@ -294,7 +295,8 @@ int dcl_in_get(const char *prompt, char *buf, size_t bufsz)
         g_eof = 0;
         return (int)strlen(buf);
     }
-    int n = g_route == DCL_IN_ROUTE_MBX ? mbx_get(buf, bufsz) : file_get(buf, bufsz);
+    int n = g_route == DCL_IN_ROUTE_MBX ? mbx_get(buf, bufsz)
+          : g_route == DCL_IN_ROUTE_MEM ? mem_get(buf, bufsz) : file_get(buf, bufsz);
     g_eof = n < 0;
     return n;
 }
@@ -323,9 +325,170 @@ void dcl_in_unget(const char *rec)
     g_unget = rec ? strdup(rec) : NULL;
 }
 
-void dcl_in_substrate(int on)
+/* ================================================================
+ * A PROCEDURE'S DATA BLOCK AS SYS$INPUT (rd vms-07ae).
+ *
+ * On VMS an image RUN from a command procedure reads the procedure's data
+ * lines as its SYS$INPUT. OVMX runs the image in a task of its own, so DCL
+ * hands it the block through a temporary mailbox: every record written now,
+ * before the image starts (the image reads them; one that never reads cannot
+ * hold DCL up), then end of file. SYS$INPUT is defined to the mailbox at user
+ * mode -- an image's name, run down by the executive when the image exits
+ * (DEFINE/USER) -- so the C RTL of every image class binds descriptor 0 to it.
+ * ================================================================ */
+#define DCL_IN_BLOCK_QUOTA 4096u     /* the executive's mailbox buffer-quota cap */
+
+static const struct dsc$descriptor_s blk_ptab =
+    { 17, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"LNM$PROCESS_TABLE" };
+static const struct dsc$descriptor_s blk_lnm =
+    { 9, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"SYS$INPUT" };
+
+/* DCL's own input, set aside while the block is SYS$INPUT */
+static struct {
+    int       active, route, eof, msg_more;
+    uint16_t  chan;
+    size_t    msg_len, msg_off;
+    char     *unget;
+    char      msg[DCL_IN_MSG];
+} g_saved;
+
+static uint32_t blk_status(uint32_t st, const uint16_t *iosb)
 {
-    g_substrate = on;
+    return (st & 1) ? iosb[0] : st;
+}
+
+static char  *g_blk;                 /* DCL's own read of a data block */
+static size_t g_blk_len, g_blk_off;
+
+static void save_and_route(int route, uint16_t chan)
+{
+    g_saved.active   = 1;
+    g_saved.route    = g_route;
+    g_saved.chan     = g_chan;
+    g_saved.eof      = g_eof;
+    g_saved.msg_more = g_msg_more;
+    g_saved.msg_len  = g_msg_len;
+    g_saved.msg_off  = g_msg_off;
+    g_saved.unget    = g_unget;
+    if (g_msg_more)
+        memcpy(g_saved.msg, g_msg, g_msg_len);
+    g_route = route;
+    g_chan = chan;
+    g_eof = 0;
+    g_msg_more = 0;
+    g_unget = NULL;
+}
+
+static int mem_get(char *buf, size_t bufsz)
+{
+    if (!g_blk || g_blk_off >= g_blk_len)
+        return DCL_IN_EOF;
+    const char *p = g_blk + g_blk_off;
+    size_t left = g_blk_len - g_blk_off;
+    const char *nl = memchr(p, '\n', left);
+    size_t ll = nl ? (size_t)(nl - p) : left;
+    size_t take = ll < bufsz - 1 ? ll : bufsz - 1;
+    memcpy(buf, p, take);
+    buf[take] = '\0';
+    g_blk_off += nl ? ll + 1 : ll;
+    return (int)take;
+}
+
+uint32_t dcl_in_block_open(const char *blk, size_t len, int image, uint16_t *chan_out)
+{
+    uint16_t chan = 0, iosb[4] = { 0, 0, 0, 0 };
+    uint32_t st;
+
+    *chan_out = 0;
+    if (g_saved.active)
+        return SS$_BADPARAM;
+    if (!image) {
+        /* DCL itself reads the block (CREATE): the procedure's own lines,
+         * from the memory DCL gathered them into -- no device between */
+        g_blk = malloc(len + 1);
+        if (!g_blk)
+            return SS$_INSFMEM;
+        memcpy(g_blk, blk, len);
+        g_blk_len = len;
+        g_blk_off = 0;
+        save_and_route(DCL_IN_ROUTE_MEM, 0);
+        return SS$_NORMAL;
+    }
+    st = sys$crembx(0, &chan, DCL_IN_MSG, DCL_IN_BLOCK_QUOTA, 0, 0, NULL, 0);
+    if (!(st & 1))
+        return st;
+    /* the records, whole; IO$M_NORSWAIT: a block over the buffer quota is
+     * refused (SS$_MBFULL), never waited on by the one task that reads it */
+    for (size_t off = 0; off < len;) {
+        const char *nl = memchr(blk + off, '\n', len - off);
+        size_t rl = nl ? (size_t)(nl - (blk + off)) + 1 : len - off;
+        st = blk_status(sys$qiow(0, chan, IO$_WRITEVBLK | IO$M_NOW | IO$M_NORSWAIT, iosb,
+                                 NULL, 0, (void *)(blk + off), rl, 0, 0, 0, 0), iosb);
+        if (!(st & 1))
+            goto fail;
+        off += rl;
+    }
+    st = blk_status(sys$qiow(0, chan, IO$_WRITEOF | IO$M_NOW | IO$M_NORSWAIT, iosb,
+                             NULL, 0, 0, 0, 0, 0, 0, 0), iosb);
+    if (!(st & 1))
+        goto fail;
+
+    char dev[64];
+    uint16_t dl = 0;
+    struct item_list_3 il[2];
+    memset(il, 0, sizeof il);
+    il[0].buflen    = sizeof dev - 1;
+    il[0].item_code = DVI$_DEVNAM;
+    il[0].bufaddr   = dev;
+    il[0].retlen    = &dl;
+    st = sys$getdviw(0, chan, NULL, il, NULL, NULL, 0, 0);
+    if (!(st & 1) || dl == 0) {
+        st = (st & 1) ? SS$_NOSUCHDEV : st;
+        goto fail;
+    }
+    memset(il, 0, sizeof il);
+    il[0].buflen    = dl;
+    il[0].item_code = LNM$_STRING;
+    il[0].bufaddr   = dev;
+    uint8_t um = PSL$C_USER;
+    st = sys$crelnm(NULL, &blk_ptab, &blk_lnm, &um, il);
+    if (!(st & 1))
+        goto fail;
+
+    save_and_route(DCL_IN_ROUTE_MBX, chan);
+    *chan_out = chan;
+    return SS$_NORMAL;
+
+fail:
+    (void)sys$dassgn(chan);
+    return st;
+}
+
+void dcl_in_block_close(uint16_t chan)
+{
+    uint8_t um = PSL$C_USER;
+
+    if (!g_saved.active)
+        return;
+    /* the image's exit ran the name down already; an image never entered
+     * (or one DCL ran in its own task) leaves it to DCL */
+    if (g_route == DCL_IN_ROUTE_MBX) {
+        (void)sys$dellnm(&blk_ptab, &blk_lnm, &um);
+        (void)sys$dassgn(chan);     /* the temporary mailbox goes with it */
+    }
+    free(g_blk);
+    g_blk = NULL;
+    free(g_unget);
+    g_route    = g_saved.route;
+    g_chan     = g_saved.chan;
+    g_eof      = g_saved.eof;
+    g_msg_more = g_saved.msg_more;
+    g_msg_len  = g_saved.msg_len;
+    g_msg_off  = g_saved.msg_off;
+    g_unget    = g_saved.unget;
+    if (g_msg_more)
+        memcpy(g_msg, g_saved.msg, g_msg_len);
+    g_saved.active = 0;
 }
 
 void dcl_in_shutdown(void)

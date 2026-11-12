@@ -123,7 +123,7 @@ set -u
 
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 MANIFEST="$REPO_ROOT/tests/qemu/facility_defects.sh"
-BASE_TAG=ovmx-ktest-negctl-base:latest
+BASE_TAG=${FACILITY_NEGCTL_BASE_TAG:-ovmx-ktest-negctl-base:latest}   # a private tag keeps lanes apart
 
 # The execution-sourced attribution record (rd vms-d894, rd vms-659). This
 # script is the only thing in the program that executes anything, and until

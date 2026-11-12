@@ -1844,9 +1844,22 @@ static void sysin_putback(struct dcl_pf *fp, long pos, char *line)
     dcl_in_unget(line);
 }
 
+static int sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si, int image);
+
 int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
 {
-    si->saved_fd0 = -1;
+    return sysinput_setup(ctx, si, 1);
+}
+
+int dcl_sysinput_setup_dcl(struct dcl_context *ctx, struct dcl_sysinput *si)
+{
+    return sysinput_setup(ctx, si, 0);
+}
+
+static int sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si, int image)
+{
+    si->active = 0;
+    si->chan = 0;
     if (!ctx)
         return 0;
     /*
@@ -1857,11 +1870,9 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
      * are the image's SYS$INPUT. They are $GET from the same stream; the '$'
      * record that ends them is handed back for DCL's own next read.
      *
-     * BOOTSTRAP: the records reach the image through the SAME vms-1a9 fd-0
-     * block a procedure's data lines use (dcl_sysinput_install), because an
-     * image's C RTL reads SYS$INPUT from fd 0. The real fix -- DECC$SHR's
-     * stdin reading SYS$INPUT through RMS/$QIO for every image class -- retires
-     * this block (rd vms-07ae).
+     * The records reach the image the way a procedure's data lines do: a
+     * temporary mailbox its C RTL reads as SYS$INPUT (dcl_in_block_open,
+     * rd vms-07ae).
      */
     struct dcl_pf *fp = NULL;
     int from_ppf = 0;
@@ -1872,14 +1883,11 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
     if (!fp && !from_ppf)
         return 0;                   /* interactive: SYS$INPUT = terminal */
 
-    /* The block is gathered in MEMORY and delivered on fd 0 by
-     * dcl_sysinput_install(): /dev/null for an empty block (the RUN line is
-     * immediately followed by a '$'-line -- an honest EOF), a pipe filled
-     * before the image starts for a small one, and a checked scratch file only
-     * for a block too big for a pipe. It used to be an unconditional tmpfile():
-     * on NetBSD /tmp is a tmpfs, which refuses every write (ENOSPC) below 4 MB
-     * of available memory, and the unchecked fputs() handed the image a
-     * truncated block with no error (rd vms-f47, same cause as vms-97c2). */
+    /* The block is gathered in MEMORY and handed over whole as the records of
+     * a temporary mailbox, then end of file (dcl_in_block_open, rd vms-07ae):
+     * an empty block -- the RUN line immediately followed by a '$'-line -- is
+     * an honest end of file. No scratch file: on NetBSD /tmp is a tmpfs that
+     * refuses writes below 4 MB of available memory (rd vms-f47, vms-97c2). */
     char *blk = NULL;
     size_t blk_len = 0, blk_cap = 0;
     int blk_bad = 0;
@@ -1992,24 +2000,26 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
         dcl_error("DCL", 4, "SYSINPUT", "insufficient memory for the procedure's input block");
         return SS$_INSFMEM;
     }
-    int rc = dcl_sysinput_install(si, blk, blk_len);
+    uint32_t st = dcl_in_block_open(blk ? blk : "", blk_len, image, &si->chan);
     free(blk);
-    if (si->saved_fd0 >= 0)
-        dcl_in_substrate(1);     /* SYS$INPUT is the block now (dcl_in.c) */
-    if (rc != 0)
-        dcl_error("DCL", 4, "SYSINPUT", "cannot provide SYS$INPUT for the image");
-    return rc != 0 ? SS$_INSFMEM : 0;
+    if (!(st & 1)) {
+        dcl_error("DCL", 4, "SYSINPUT", st == SS$_MBFULL
+                  ? "the image's input block is more than its mailbox's buffer quota"
+                  : "cannot provide SYS$INPUT for the image");
+        return st;
+    }
+    si->active = 1;
+    return 0;
 }
 
 void dcl_sysinput_restore(struct dcl_sysinput *si)
 {
-    if (si->saved_fd0 < 0)
+    if (!si->active)
         return;
-    dup2(si->saved_fd0, 0);
-    close(si->saved_fd0);
-    si->saved_fd0 = -1;
+    dcl_in_block_close(si->chan);
+    si->active = 0;
+    si->chan = 0;
     dcl_in_clear_eof();          /* the block's end is not the stream's */
-    dcl_in_substrate(0);
 }
 
 /*
@@ -2021,10 +2031,11 @@ void dcl_sysinput_restore(struct dcl_sysinput *si)
  * (argv = {linux_path, P1, ..., P8, NULL}). Extracted from cmd_run's
  * body verbatim so this behavior change is refactor-only for RUN.
  *
- * SYS$INPUT wiring (vms-1a9): when activated from within a command procedure,
- * the image's SYS$INPUT is the procedure's following data lines. Set up before
- * activation and restored after, so it covers BOTH the in-process image and the
- * fork()+execve() fallback (both inherit fd 0).
+ * SYS$INPUT wiring (vms-1a9, vms-07ae): when activated from within a command
+ * procedure, the image's SYS$INPUT is the procedure's following data lines, a
+ * temporary mailbox named by a user-mode SYS$INPUT. Set up before activation
+ * and released after, so it covers BOTH the in-process image and the
+ * fork()+execve() task (which shares the process's logical names).
  */
 static int dcl_activate_image_inner(struct dcl_context *ctx,
                                     const char *display_name,

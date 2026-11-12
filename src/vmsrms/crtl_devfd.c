@@ -35,7 +35,8 @@
  * file) is left as it is, and so is a stream the substrate has redirected
  * underneath the VMS name -- a terminal stream whose line is no longer a
  * terminal (a DCL PIPE segment, still a host pipe), or a mailbox stream the
- * creator pumps from a host pipe (LIB$SPAWN's DCL). Those
+ * creator pumps from a host pipe (LIB$SPAWN's DCL) -- unless the mailbox is
+ * named at user mode, the image's own (a procedure's data block). Those
  * are tracked as their own items; this layer never sends a stream's bytes to a
  * device other than the one the stream already reaches.
  *
@@ -860,6 +861,32 @@ static int line_is_host_pipe(int fd)
     return rawsys(SYS_fcntl, fd, 1032 /* F_GETPIPE_SZ */, 0) >= 0;
 }
 
+/* `lognam` is an image's own name -- one at user mode (DEFINE/USER; DCL's
+ * name for a command procedure's data block, rd vms-07ae), which the
+ * executive runs down when the image exits: its translation changes when the
+ * user-mode names are left out. Such a stream is never the creator's pump. */
+static int image_mode_name(const char *lognam)
+{
+    char eq[2][256];
+    unsigned short rl[2] = { 0, 0 };
+    unsigned int st[2];
+    static const unsigned char super = 2;           /* PSL$C_SUPER */
+    struct devfd_dsc d;
+    dsc(&d, lognam, strlen(lognam));
+    for (int i = 0; i < 2; i++) {
+        struct devfd_ile3 il[2];
+        memset(il, 0, sizeof il);
+        il[0].buflen = sizeof eq[i] - 1;
+        il[0].code = LNM_STRING;
+        il[0].buf = eq[i];
+        il[0].retlen = &rl[i];
+        st[i] = sys$trnlnm(0, 0, &d, i ? &super : 0, il);
+    }
+    if (!(st[0] & 1))
+        return 0;
+    return !(st[1] & 1) || rl[0] != rl[1] || memcmp(eq[0], eq[1], rl[0]) != 0;
+}
+
 /*
  * Bind descriptors 0, 1 and 2 to SYS$INPUT, SYS$OUTPUT and SYS$ERROR when each
  * is a terminal (with_tt) or a mailbox (see the head comment for what stays as
@@ -893,7 +920,7 @@ static void bind_std(int with_tt)
             if (!with_tt || !line_is_terminal(fd))
                 cls = 0;                        /* redirected underneath */
         } else if (cls == DC_MAILBOX) {
-            if (line_is_host_pipe(fd))
+            if (line_is_host_pipe(fd) && !image_mode_name(names[fd]))
                 cls = 0;                        /* pumped from a host pipe */
         } else {
             cls = 0;                            /* a file: RMS's, not ours */

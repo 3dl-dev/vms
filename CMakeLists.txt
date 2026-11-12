@@ -1702,8 +1702,13 @@ if(OVMX_CRTL_STDIO_START)
     foreach(_t ${_all_targets})
         get_target_property(_ty ${_t} TYPE)
         get_target_property(_sd ${_t} SOURCE_DIR)
+        # Two suites are such an image too, RUN by the DCL under test, reading the
+        # data lines after RUN as their SYS$INPUT (rd vms-07ae): the ECHOIN.EXE
+        # stand-in of test_syssvc_dcl_image_sysout and test_syssvc_dcl_input_route.
         if(NOT _ty STREQUAL "EXECUTABLE" OR _t STREQUAL "vmsdcl" OR _t STREQUAL "ovmx_init"
-           OR NOT _sd MATCHES "^${CMAKE_SOURCE_DIR}/(src|tools)(/|$)")
+           OR (NOT _sd MATCHES "^${CMAKE_SOURCE_DIR}/(src|tools)(/|$)"
+               AND NOT _t STREQUAL "test_syssvc_dcl_image_sysout"
+               AND NOT _t STREQUAL "test_syssvc_dcl_input_route"))
             continue()
         endif()
         _ovmx_links_vms(${_t} _lv)

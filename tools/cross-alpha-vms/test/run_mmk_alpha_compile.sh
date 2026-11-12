@@ -80,7 +80,7 @@ if compile_all "$OVMX" "$W/obj"; then
     n=$(ls "$W"/obj/*.obj | wc -l)
     bad=0
     for o in "$W"/obj/*.obj; do
-        alpha-dec-vms-objdump -f "$o" | grep -q 'file format vms-alpha' || { echo "  FAIL $o is not an EVAX object"; bad=1; }
+        alpha-dec-vms-objdump -f "$o" | grep 'file format vms-alpha' >/dev/null || { echo "  FAIL $o is not an EVAX object"; bad=1; }
     done
     [ $bad -eq 0 ] && echo "  PASS all $n MMK objects compiled as EVAX (vms-alpha) objects" || rc=1
 else

@@ -713,8 +713,7 @@ static uint32_t qio_mailbox_op(uint16_t chan, uint32_t func, void *iosb_ptr,
             if (func & (IO$M_WRTATTN | IO$M_READATTN)) {
                 st = SS$_NORMAL;
                 if (func & IO$M_WRTATTN)
-                    st = vms_kif_mbx_set_attn(exec_chan, VMS_MBX_ATTN_WRITE,
-                                              (uint8_t)PSL_C_USER,
+                    st = vms_kif_mbx_set_wrtattn(exec_chan, (uint8_t)PSL_C_USER,
                                               (uint64_t)(uintptr_t)p1,
                                               (uint64_t)p2);
                 if ((st & 1) && (func & IO$M_READATTN))

@@ -78,7 +78,7 @@ Two accounts can authenticate on a stock install. Every other row in
 | Username | Password | Privileges |
 |----------|----------|------------|
 | `SYSTEM` | `MANAGER` | `ALL` |
-| `GUEST`  | `GUEST`   | `TMPMBX` |
+| `GUEST`  | `GUEST`   | `TMPMBX,NETMBX` |
 
 ```
 Username: SYSTEM

@@ -1785,7 +1785,7 @@ run_dcl_acceptance_battery() {
     #     JOB_CONTROL went round its loop and issued $CREPRC again. There is
     #     no fork+execl left in that program to produce one another way.
     #   - A NON-SYSTEM SYSUAF account (GUEST, [128,129] = octal [200,201],
-    #     TMPMBX only, password GUEST -- tools/mksysuaf.c's seed) logs in and
+    #     TMPMBX,NETMBX (vms-f76), password GUEST -- tools/mksysuaf.c's seed) logs in and
     #     the process reports THAT ACCOUNT'S identity. The creator (JOB_CONTROL)
     #     is SYSTEM and passes no identity at all: if $CREPRC were stamping the
     #     creator's identity, or if LOGINOUT were not re-personaing through the
@@ -1848,7 +1848,7 @@ run_dcl_acceptance_battery() {
     negctl        "$SEG" 'Process ID' "SHOW PROCESS as GUEST"
 
     run_cmd 'SHOW PROCESS/PRIVILEGES'
-    # GUEST is authorized TMPMBX and nothing else. SYSTEM holds PRV$M_ALL, so
+    # GUEST is authorized TMPMBX,NETMBX (vms-f76) and nothing else. SYSTEM holds PRV$M_ALL, so
     # every one of these would be listed if the session were still its creator
     # -- each is a privilege GUEST must not have.
     must_have     "$SEG" 'Process privileges' "SHOW PROCESS/PRIVILEGES [vms-3e9]: prints the executive-held privilege blocks"

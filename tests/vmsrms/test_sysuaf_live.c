@@ -82,7 +82,7 @@ int main(void)
     check(sysuaf_put_record(&sf, &rec) == RMS$_NORMAL, "put SYSTEM (Purdy MANAGER)");
     build(&rec, "OPERATOR", 1,   6,   "SYS$SYSDEVICE:[SYSMGR]",        "OPER,TMPMBX",   NULL);
     check(sysuaf_put_record(&sf, &rec) == RMS$_NORMAL, "put OPERATOR (no password)");
-    build(&rec, "GUEST",    128, 129, "SYS$SYSDEVICE:[USERS.GUEST]",   "TMPMBX",        "GUEST");
+    build(&rec, "GUEST",    128, 129, "SYS$SYSDEVICE:[USERS.GUEST]",   "TMPMBX,NETMBX", "GUEST");
     check(sysuaf_put_record(&sf, &rec) == RMS$_NORMAL, "put GUEST (Purdy GUEST)");
     sysuaf_rms_close(&sf);
 

@@ -946,6 +946,10 @@ assert_crtlvm() {
     || { echo "  assert_crtlvm: no ENOMEM exhaustion below the bound followed by SS\$_EXQUOTA: '$line'" >&2; return 1; }
   tr -d '\r' < "$log" | grep >/dev/null -aE "^CRTLVM: after free: SYS\\\$EXPREG %X[0-9A-F]{7}[13579BDF], malloc 1 MB ok$" \
     || { echo "  assert_crtlvm: the charge did not come back after free" >&2; return 1; }
+  # rd vms-b85: the heap re-creates the holes it deleted ($CRETVA) -- 1.6 GB of
+  # churn under a live block never runs P0 out
+  tr -d '\r' < "$log" | grep >/dev/null -aE "^CRTLVM: churn 400 x 4 MB under a live block: 400 ok$" \
+    || { echo "  assert_crtlvm: the heap ran out of P0 in the churn (deleted holes not re-created)" >&2; return 1; }
   return 0
 }
 
@@ -3518,6 +3522,7 @@ EOF
       echo "CRTLVM: small+large malloc in P0=1"
       echo "CRTLVM: heap exhausted after 18 MB: malloc NULL errno=ENOMEM, then SYS\$EXPREG %X0000001C"
       echo "CRTLVM: after free: SYS\$EXPREG %X00000001, malloc 1 MB ok"
+      echo "CRTLVM: churn 400 x 4 MB under a live block: 400 ok"
       echo "OVMX CRTL-VM test: OK (the heap is P0 charged to PGFLQUOTA)"
       echo "CRTLVM-END"
     } > "$_st/pass.log"
@@ -3528,8 +3533,10 @@ EOF
     sed 's/errno=ENOMEM/errno=other/' "$_st/pass.log" > "$_st/noerrno.log"
     sed 's/after free: SYS\$EXPREG %X00000001/after free: SYS$EXPREG %X0000001C/' "$_st/pass.log" > "$_st/nocredit.log"
     sed 's/test: OK (the heap/test: FAILED (the heap/' "$_st/pass.log" > "$_st/checkfail.log"
+    # the heap never re-creates what it deleted: P0 runs out partway through the churn
+    sed 's/under a live block: 400 ok/under a live block: 233 ok/' "$_st/pass.log" > "$_st/vasfull.log"
     { cat "$_st/pass.log"; echo "%DCL-F-ABORT, image terminated abnormally"; } > "$_st/crash.log"
-    for _c in "pass:0" "linuxheap:1" "nocharge:1" "noerrno:1" "nocredit:1" "checkfail:1" "crash:1"; do
+    for _c in "pass:0" "linuxheap:1" "nocharge:1" "noerrno:1" "nocredit:1" "vasfull:1" "checkfail:1" "crash:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_crtlvm "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  crtlvm selftest $_n: PASS"; else echo "  crtlvm selftest $_n: FAIL"; _fails=$((_fails+1)); fi

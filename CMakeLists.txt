@@ -114,6 +114,30 @@ else()
     set(OVMX_LIB_TYPE SHARED)
 endif()
 
+# vms-07ae: the static product images' start-up binds their standard streams to
+# SYS$ through the C RTL device layer when the C RTL base has the system-call
+# funnel (src/crtl-musl-x86_64). Detected here; applied at the end of this file.
+# x86_64 only: that is the funnel these images link (the Alpha musl's hook cell
+# serves the Alpha DECC$SHR, whose images bind their streams in decc$main).
+if(OVMX_STATIC AND NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD"
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    include(CheckCSourceCompiles)
+    set(CMAKE_REQUIRED_LINK_OPTIONS -static)
+    check_c_source_compiles(
+        "extern long long (*__ovmx_sys_hook)(void); int main(void) { return __ovmx_sys_hook != 0; }"
+        OVMX_CRTL_HAS_FUNNEL)
+    unset(CMAKE_REQUIRED_LINK_OPTIONS)
+endif()
+option(OVMX_CRTL_STDIO_START
+    "bind a static product image's standard streams to SYS$ at start-up (needs the funnel C RTL)"
+    ${OVMX_CRTL_HAS_FUNNEL})
+if(OVMX_CRTL_STDIO_START)
+    if(NOT OVMX_CRTL_HAS_FUNNEL)
+        message(FATAL_ERROR "OVMX_CRTL_STDIO_START needs the C RTL base with the "
+            "system-call funnel (src/crtl-musl-x86_64/build-musl.sh): this libc has no __ovmx_sys_hook")
+    endif()
+endif()
+
 # Mode 2 self-hosting (OVMX_LINK_NATIVE, src/vmslink/CMakeLists.txt) is a
 # host-arch-only (aarch64/x86_64 musl) build of the VMS-native LINK.EXE
 # shareable-image graph, orthogonal to the Mode-1 cross bootstrap build this
@@ -1613,3 +1637,88 @@ add_custom_target(release
     VERBATIM
     USES_TERMINAL
 )
+
+# ---------------------------------------------------------------------------
+# vms-07ae: a static image's stdin/stdout/stderr are SYS$INPUT/SYS$OUTPUT/
+# SYS$ERROR from image start-up when they are mailboxes, through the C RTL
+# device layer a DECC$SHR image binds them with (src/vmsrms/crtl_devfd.c),
+# turned on by src/vmsrms/crtl_stdio_start.c's constructor. It needs the C RTL
+# base with the system-call funnel (src/crtl-musl-x86_64, which tests/qemu/
+# Dockerfile and distro/Dockerfile.bootable install); a stock libc has nowhere
+# for the layer to sit, so the start-up is not linked there.
+#
+# Every PRODUCT executable (defined under src/ or tools/) that links LIBVMS gets
+# it, here, in one place: no tool carries its own copy. Not linked into:
+#   * test harnesses (tests/): their own stdout is the harness report, and a
+#     suite that tests this layer turns it on itself;
+#   * DCL.EXE: the CLI reads SYS$INPUT by $QIO itself (dcl_input.c) and hands
+#     its images their streams; it is not a C RTL image on VMS either;
+#   * STARTUP.EXE: PID 1, running before the executive has a process for it.
+# ---------------------------------------------------------------------------
+if(OVMX_CRTL_STDIO_START)
+    add_library(ovmx_crtl_stdio_start OBJECT ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_stdio_start.c)
+    add_library(ovmx_crtl_stdio_devfd OBJECT ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_devfd.c)
+    target_compile_definitions(ovmx_crtl_stdio_devfd PRIVATE OVMX_CRTLFD_STATIC)
+    target_compile_options(ovmx_crtl_stdio_devfd PRIVATE -w)
+    target_include_directories(ovmx_crtl_stdio_devfd PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms ${CMAKE_SOURCE_DIR}/src/crtl-musl-x86_64/include)
+
+    # does target T link the LIBVMS target `vms`, directly or through a library?
+    function(_ovmx_links_vms t out)
+        set(_seen "")
+        set(_todo ${t})
+        set(_hit FALSE)
+        while(_todo)
+            list(POP_FRONT _todo _c)
+            if(_c IN_LIST _seen OR NOT TARGET ${_c})
+                continue()
+            endif()
+            list(APPEND _seen ${_c})
+            if(_c STREQUAL "vms")
+                set(_hit TRUE)
+                break()
+            endif()
+            get_target_property(_ty ${_c} TYPE)
+            set(_l "")
+            if(NOT _ty STREQUAL "INTERFACE_LIBRARY")
+                get_target_property(_l ${_c} LINK_LIBRARIES)
+            endif()
+            get_target_property(_il ${_c} INTERFACE_LINK_LIBRARIES)
+            foreach(_d ${_l} ${_il})
+                string(REGEX REPLACE "^\\$<LINK_ONLY:(.*)>$" "\\1" _d "${_d}")
+                if(_d AND TARGET ${_d})
+                    list(APPEND _todo ${_d})
+                endif()
+            endforeach()
+        endwhile()
+        set(${out} ${_hit} PARENT_SCOPE)
+    endfunction()
+    function(_ovmx_dir_targets dir out)
+        get_property(_t DIRECTORY ${dir} PROPERTY BUILDSYSTEM_TARGETS)
+        get_property(_s DIRECTORY ${dir} PROPERTY SUBDIRECTORIES)
+        foreach(_d ${_s})
+            _ovmx_dir_targets(${_d} _st)
+            list(APPEND _t ${_st})
+        endforeach()
+        set(${out} ${_t} PARENT_SCOPE)
+    endfunction()
+    _ovmx_dir_targets(${CMAKE_SOURCE_DIR} _all_targets)
+    set(_stdio_images "")
+    foreach(_t ${_all_targets})
+        get_target_property(_ty ${_t} TYPE)
+        get_target_property(_sd ${_t} SOURCE_DIR)
+        if(NOT _ty STREQUAL "EXECUTABLE" OR _t STREQUAL "vmsdcl" OR _t STREQUAL "ovmx_init"
+           OR NOT _sd MATCHES "^${CMAKE_SOURCE_DIR}/(src|tools)(/|$)")
+            continue()
+        endif()
+        _ovmx_links_vms(${_t} _lv)
+        if(NOT _lv)
+            continue()
+        endif()
+        target_sources(${_t} PRIVATE $<TARGET_OBJECTS:ovmx_crtl_stdio_start>
+                                     $<TARGET_OBJECTS:ovmx_crtl_stdio_devfd>)
+        list(APPEND _stdio_images ${_t})
+    endforeach()
+    list(LENGTH _stdio_images _n)
+    message(STATUS "vms-07ae: ${_n} static images bind SYS$INPUT/OUTPUT/ERROR at start-up")
+endif()

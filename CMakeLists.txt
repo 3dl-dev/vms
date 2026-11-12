@@ -117,7 +117,10 @@ endif()
 # vms-07ae: the static product images' start-up binds their standard streams to
 # SYS$ through the C RTL device layer when the C RTL base has the system-call
 # funnel (src/crtl-musl-x86_64). Detected here; applied at the end of this file.
-if(OVMX_STATIC AND NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+# x86_64 only: that is the funnel these images link (the Alpha musl's hook cell
+# serves the Alpha DECC$SHR, whose images bind their streams in decc$main).
+if(OVMX_STATIC AND NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD"
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
     include(CheckCSourceCompiles)
     set(CMAKE_REQUIRED_LINK_OPTIONS -static)
     check_c_source_compiles(

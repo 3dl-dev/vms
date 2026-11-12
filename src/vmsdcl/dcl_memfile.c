@@ -8,8 +8,7 @@
 #include "dcl/dcl_memfile.h"
 
 struct dcl_pf {
-    FILE  *fp;          /* non-NULL: a stdio stream */
-    char  *buf;         /* otherwise: the procedure text */
+    char  *buf;         /* the procedure text (read through RMS by the caller) */
     size_t len;
     size_t pos;
 };
@@ -25,27 +24,12 @@ struct dcl_pf *dcl_pf_from_mem(char *buf, size_t len)
     return pf;
 }
 
-struct dcl_pf *dcl_pf_from_file(FILE *fp)
-{
-    struct dcl_pf *pf;
-
-    if (!fp)
-        return NULL;
-    pf = calloc(1, sizeof(*pf));
-    if (!pf)
-        return NULL;
-    pf->fp = fp;
-    return pf;
-}
-
 char *dcl_pf_gets(char *s, int n, struct dcl_pf *pf)
 {
     size_t i = 0;
 
     if (!pf || !s || n <= 0)
         return NULL;
-    if (pf->fp)
-        return fgets(s, n, pf->fp);
     if (pf->pos >= pf->len)
         return NULL;
     while ((int)i < n - 1 && pf->pos < pf->len) {
@@ -63,7 +47,7 @@ long dcl_pf_tell(struct dcl_pf *pf)
 {
     if (!pf)
         return -1;
-    return pf->fp ? ftell(pf->fp) : (long)pf->pos;
+    return (long)pf->pos;
 }
 
 int dcl_pf_seek(struct dcl_pf *pf, long off, int whence)
@@ -72,8 +56,6 @@ int dcl_pf_seek(struct dcl_pf *pf, long off, int whence)
 
     if (!pf)
         return -1;
-    if (pf->fp)
-        return fseek(pf->fp, off, whence);
     switch (whence) {
     case SEEK_SET: base = 0; break;
     case SEEK_CUR: base = (long)pf->pos; break;
@@ -94,15 +76,11 @@ void dcl_pf_rewind(struct dcl_pf *pf)
 
 int dcl_pf_close(struct dcl_pf *pf)
 {
-    int rc = 0;
-
     if (!pf)
         return 0;
-    if (pf->fp)
-        rc = fclose(pf->fp);
     free(pf->buf);
     free(pf);
-    return rc;
+    return 0;
 }
 
 FILE *dcl_scratch_tmpfile(void)

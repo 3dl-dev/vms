@@ -1,6 +1,8 @@
 /*
- * dcl_memfile.h - DCL's command-procedure stream: a seekable line source that
- * is either a stdio FILE (the passthrough fopen path) or a malloc'd buffer.
+ * dcl_memfile.h - DCL's command-procedure stream: a seekable line source over
+ * a malloc'd buffer holding the procedure text DCL read through RMS. (The
+ * stdio FILE variant, dcl_pf_from_file, had no caller left and is deleted: a
+ * procedure is never read through libc stdio.)
  *
  * WHY (rd vms-97c2). DCL stages a command procedure it read through RMS in a
  * stream the fgets/fseek script engine drives. That stream was tmpfile(): a
@@ -26,8 +28,6 @@ struct dcl_pf;
 /* Takes ownership of `buf` (malloc'd, `len` bytes; NULL when len == 0). NULL on
  * allocation failure, in which case the caller still owns `buf`. */
 struct dcl_pf *dcl_pf_from_mem(char *buf, size_t len);
-/* Wraps an open stdio stream; dcl_pf_close() fcloses it. */
-struct dcl_pf *dcl_pf_from_file(FILE *fp);
 
 char *dcl_pf_gets(char *s, int n, struct dcl_pf *pf);   /* fgets semantics */
 long  dcl_pf_tell(struct dcl_pf *pf);

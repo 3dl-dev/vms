@@ -18,6 +18,8 @@
  */
 
 #include <stdio.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>     /* getpid() -- was implicitly declared (vms-2a8) */
@@ -312,6 +314,39 @@ static void test_current_process(void)
           "no-PCB current process vms_pid falls back to vms_pid_from_linux(getpid())");
 }
 
+/* ------------------------------------------------------------------ */
+/* Test: a second vms_pcb_init in the same process keeps its context  */
+/* (rd vms-07ae): a static image's C RTL start-up assigned SYS$INPUT  */
+/* before main() called vms_pcb_init; that channel must survive.      */
+/* A fork() child is a new process and gets a fresh context.          */
+/* ------------------------------------------------------------------ */
+static void test_pcb_reinit_keeps_context(void)
+{
+    printf("\n--- vms_pcb_init twice in one process ---\n");
+    struct vms_pcb *pcb = vms_pcb_init(0);
+    if (!pcb) { check(0, "vms_pcb_init for re-init test"); return; }
+    pcb->channels[5].in_use = 1;
+    pcb->channels[5].fd = 42;
+    struct vms_pcb *again = vms_pcb_init(0xFFULL);
+    check(again == pcb, "a second vms_pcb_init returns the process's own context");
+    check(again->channels[5].in_use == 1 && again->channels[5].fd == 42,
+          "the channel assigned before the second vms_pcb_init is still assigned");
+    check(again->cur_privs == 0xFFULL && again->perm_privs == 0xFFULL,
+          "the second vms_pcb_init sets the privileges it was given");
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        struct vms_pcb *child = vms_pcb_init(0);
+        _exit(child && child->channels[5].in_use == 0 ? 0 : 1);
+    }
+    int ws = 0;
+    check(pid > 0 && waitpid(pid, &ws, 0) == pid && WIFEXITED(ws) && WEXITSTATUS(ws) == 0,
+          "a fork() child's vms_pcb_init gives it a fresh context with no channels");
+    pcb->channels[5].in_use = 0;
+    pcb->channels[5].fd = -1;
+    vms_pcb_cleanup();
+}
+
 int main(void)
 {
     printf("=== vmsprocess unit tests ===\n");
@@ -324,6 +359,7 @@ int main(void)
     /* Re-init PCB for subsequent tests that need it */
     test_ast();
     test_current_process();
+    test_pcb_reinit_keeps_context();
 
     if (failures == 0)
         printf("\nAll vmsprocess tests passed.\n");

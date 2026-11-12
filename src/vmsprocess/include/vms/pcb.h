@@ -24,6 +24,7 @@
 #define __VMS_PCB_H
 
 #include <stdint.h>
+#include <sys/types.h>
 #include <pthread.h>
 #include "vms/process.h"   /* vms_process_t (cached_process, below) */
 
@@ -259,6 +260,10 @@ struct vms_pcb {
     uint32_t        uring_cq_size; /* CQ ring size */
     pthread_t       uring_thread;  /* completion processing thread */
     volatile int    uring_running; /* 1 while completion thread is active */
+
+    /* The substrate process this context was made in (vms_pcb_init). A child
+     * of fork() inherits the pointer but is a new process: it gets a fresh one. */
+    pid_t           owner_pid;
 };
 
 /* ================================================================
@@ -273,7 +278,11 @@ struct vms_pcb *vms_pcb_get(void);
 
 /*
  * Initialize the PCB for the current thread/process.
- * Called once at process startup (from runtime init or main).
+ * Called once at process startup (from runtime init or main). A process
+ * has ONE context: called again in the process that made it -- an image's
+ * main() after its C RTL start-up already reached a system service, which
+ * established the context and assigned SYS$INPUT's channel -- it keeps
+ * that context, its channels included, and sets the privileges given.
  *
  * initial_privs: starting privilege mask
  * Returns: pointer to the new PCB, or NULL on failure.

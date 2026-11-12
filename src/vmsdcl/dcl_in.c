@@ -33,6 +33,7 @@
 #include <strings.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -42,6 +43,7 @@
 #include "psldef.h"
 #include "ssdef.h"
 #include "rms_textfile.h"
+#include "vms_kif.h"
 #include "dcl/dcl_out.h"
 #include "dcl/dcl_in.h"
 
@@ -329,12 +331,23 @@ void dcl_in_unget(const char *rec)
  * A PROCEDURE'S DATA BLOCK AS SYS$INPUT (rd vms-07ae).
  *
  * On VMS an image RUN from a command procedure reads the procedure's data
- * lines as its SYS$INPUT. OVMX runs the image in a task of its own, so DCL
- * hands it the block through a temporary mailbox: every record written now,
- * before the image starts (the image reads them; one that never reads cannot
- * hold DCL up), then end of file. SYS$INPUT is defined to the mailbox at user
- * mode -- an image's name, run down by the executive when the image exits
+ * lines as its SYS$INPUT, record by record, however many there are. OVMX runs
+ * the image in a task of its own, so DCL hands it the block through a
+ * temporary mailbox, then end of file. SYS$INPUT is defined to the mailbox at
+ * user mode -- an image's name, run down by the executive when the image exits
  * (DEFINE/USER) -- so the C RTL of every image class binds descriptor 0 to it.
+ *
+ * FLOW CONTROL. The mailbox holds one buffer quota of records. DCL writes what
+ * fits at once (IO$M_NORSWAIT, before the image starts: a small block needs
+ * nothing more). The rest goes in from a feeder thread of DCL's process whose
+ * writes wait for room in the mailbox the way any mailbox writer does
+ * (resource wait, VSI I/O User's Reference, Mailbox Driver): each record the
+ * image reads makes room for the next, so a block of any size reaches it whole.
+ * The thread writes on the executive channel (vms_kif_mbx_*), as dcl_mbx.c's
+ * bridge threads do, because the PCB's channel table is the main thread's.
+ * When the image is done, DCL reads off whatever it left unread (VMS's DCL
+ * skips those lines too), which lets the feeder finish, and ends the mailbox
+ * with end of file again for an image that is only stopped (CTRL/Y).
  * ================================================================ */
 #define DCL_IN_BLOCK_QUOTA 4096u     /* the executive's mailbox buffer-quota cap */
 
@@ -394,6 +407,62 @@ static int mem_get(char *buf, size_t bufsz)
     return (int)take;
 }
 
+/* the feeder: the records that did not fit at once, written as the image
+ * makes room */
+static struct {
+    int        up;           /* the thread runs, or ran and is not joined */
+    pthread_t  th;
+    uint32_t   xchan;        /* the mailbox's executive channel */
+    char      *blk;          /* the rest of the block */
+    size_t     len, off;
+    int        stop;         /* DCL is done with the image: end the block now */
+    int        done;         /* the feeder wrote the end of file */
+} g_feed;
+
+static size_t rec_len(const char *p, size_t left)
+{
+    const char *nl = memchr(p, '\n', left);
+    return nl ? (size_t)(nl - p) + 1 : left;
+}
+
+static void *feed_main(void *arg)
+{
+    (void)arg;
+    while (g_feed.off < g_feed.len && !__atomic_load_n(&g_feed.stop, __ATOMIC_ACQUIRE)) {
+        size_t rl = rec_len(g_feed.blk + g_feed.off, g_feed.len - g_feed.off);
+        /* a write that waits for room: the image's reads make it */
+        if (!(vms_kif_mbx_write_ex(g_feed.xchan, g_feed.blk + g_feed.off,
+                                   (uint32_t)rl, 0) & 1))
+            break;
+        g_feed.off += rl;
+    }
+    (void)vms_kif_mbx_write_eof(g_feed.xchan);
+    __atomic_store_n(&g_feed.done, 1, __ATOMIC_RELEASE);
+    return NULL;
+}
+
+/* The image is done with the block: read off what it left so the feeder can
+ * finish, through the end of file it writes; then end the mailbox again. */
+static void feed_finish(void)
+{
+    if (!g_feed.up)
+        return;
+    __atomic_store_n(&g_feed.stop, 1, __ATOMIC_RELEASE);
+    if (!__atomic_load_n(&g_feed.done, __ATOMIC_ACQUIRE)) {
+        static char drain[DCL_IN_MSG];
+        uint32_t got = 0;
+        /* only DCL holds the mailbox's read side now: the feeder's end of
+         * file arrives, and the read that takes it fails SS$_ENDOFFILE */
+        while (vms_kif_mbx_read(g_feed.xchan, drain, sizeof drain, &got, 0) & 1)
+            ;
+        (void)vms_kif_mbx_write_eof(g_feed.xchan);
+    }
+    (void)pthread_join(g_feed.th, NULL);
+    (void)vms_kif_dassgn(g_feed.xchan);
+    free(g_feed.blk);
+    memset(&g_feed, 0, sizeof g_feed);
+}
+
 uint32_t dcl_in_block_open(const char *blk, size_t len, int image, uint16_t *chan_out)
 {
     uint16_t chan = 0, iosb[4] = { 0, 0, 0, 0 };
@@ -417,21 +486,25 @@ uint32_t dcl_in_block_open(const char *blk, size_t len, int image, uint16_t *cha
     st = sys$crembx(0, &chan, DCL_IN_MSG, DCL_IN_BLOCK_QUOTA, 0, 0, NULL, 0);
     if (!(st & 1))
         return st;
-    /* the records, whole; IO$M_NORSWAIT: a block over the buffer quota is
-     * refused (SS$_MBFULL), never waited on by the one task that reads it */
-    for (size_t off = 0; off < len;) {
-        const char *nl = memchr(blk + off, '\n', len - off);
-        size_t rl = nl ? (size_t)(nl - (blk + off)) + 1 : len - off;
+    /* what fits now, whole records (IO$M_NORSWAIT); the feeder takes the
+     * rest once the name is in place */
+    size_t off = 0;
+    while (off < len) {
+        size_t rl = rec_len(blk + off, len - off);
         st = blk_status(sys$qiow(0, chan, IO$_WRITEVBLK | IO$M_NOW | IO$M_NORSWAIT, iosb,
                                  NULL, 0, (void *)(blk + off), rl, 0, 0, 0, 0), iosb);
+        if (st == SS$_MBFULL)
+            break;
         if (!(st & 1))
             goto fail;
         off += rl;
     }
-    st = blk_status(sys$qiow(0, chan, IO$_WRITEOF | IO$M_NOW | IO$M_NORSWAIT, iosb,
-                             NULL, 0, 0, 0, 0, 0, 0, 0), iosb);
-    if (!(st & 1))
-        goto fail;
+    if (off == len) {
+        st = blk_status(sys$qiow(0, chan, IO$_WRITEOF | IO$M_NOW | IO$M_NORSWAIT, iosb,
+                                 NULL, 0, 0, 0, 0, 0, 0, 0), iosb);
+        if (!(st & 1))
+            goto fail;
+    }
 
     char dev[64];
     uint16_t dl = 0;
@@ -451,9 +524,37 @@ uint32_t dcl_in_block_open(const char *blk, size_t len, int image, uint16_t *cha
     il[0].item_code = LNM$_STRING;
     il[0].bufaddr   = dev;
     uint8_t um = PSL$C_USER;
+    if (off < len) {
+        dev[dl] = '\0';
+        uint32_t xchan = 0;
+        st = vms_kif_mbx_assign(dev, &xchan);
+        if (!(st & 1))
+            goto fail;
+        g_feed.blk = malloc(len - off);
+        if (!g_feed.blk) {
+            (void)vms_kif_dassgn(xchan);
+            st = SS$_INSFMEM;
+            goto fail;
+        }
+        memcpy(g_feed.blk, blk + off, len - off);
+        g_feed.len = len - off;
+        g_feed.off = 0;
+        g_feed.xchan = xchan;
+        g_feed.stop = g_feed.done = 0;
+        if (pthread_create(&g_feed.th, NULL, feed_main, NULL) != 0) {
+            (void)vms_kif_dassgn(xchan);
+            free(g_feed.blk);
+            memset(&g_feed, 0, sizeof g_feed);
+            st = SS$_INSFMEM;
+            goto fail;
+        }
+        g_feed.up = 1;
+    }
     st = sys$crelnm(NULL, &blk_ptab, &blk_lnm, &um, il);
-    if (!(st & 1))
+    if (!(st & 1)) {
+        feed_finish();
         goto fail;
+    }
 
     save_and_route(DCL_IN_ROUTE_MBX, chan);
     *chan_out = chan;
@@ -473,6 +574,7 @@ void dcl_in_block_close(uint16_t chan)
     /* the image's exit ran the name down already; an image never entered
      * (or one DCL ran in its own task) leaves it to DCL */
     if (g_route == DCL_IN_ROUTE_MBX) {
+        feed_finish();
         (void)sys$dellnm(&blk_ptab, &blk_lnm, &um);
         (void)sys$dassgn(chan);     /* the temporary mailbox goes with it */
     }

@@ -30,7 +30,17 @@ struct vms_pcb *vms_pcb_get(void)
 
 struct vms_pcb *vms_pcb_init(uint64_t initial_privs)
 {
-    struct vms_pcb *pcb;
+    struct vms_pcb *pcb = current_pcb;
+
+    /* This process already has its context (rd vms-07ae): a static image's
+     * C RTL start-up assigned its SYS$INPUT/SYS$OUTPUT channels through the
+     * services before main() called this. Starting over would orphan them
+     * (the C RTL's next $QIO on SYS$INPUT: SS$_IVCHAN, read as end of file). */
+    if (pcb && pcb->self == pcb && pcb->owner_pid == getpid()) {
+        pcb->cur_privs = initial_privs;
+        pcb->perm_privs = initial_privs;
+        return pcb;
+    }
 
     /* First call gets the static main PCB (atomic CAS to avoid race) */
     int expected = 0;
@@ -108,6 +118,8 @@ struct vms_pcb *vms_pcb_init(uint64_t initial_privs)
     pcb->uring_sq_size = 0;
     pcb->uring_cq_size = 0;
     pcb->uring_running = 0;
+
+    pcb->owner_pid = getpid();
 
     /* Set as current thread's PCB */
     current_pcb = pcb;

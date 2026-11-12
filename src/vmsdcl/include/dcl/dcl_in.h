@@ -56,14 +56,15 @@ void dcl_in_clear_eof(void);
 void dcl_in_unget(const char *rec);
 
 /* A command procedure's in-stream data block as SYS$INPUT (rd vms-07ae):
- * DCL creates a temporary mailbox, writes the block's records to it whole,
- * then end of file (IO$_WRITEOF), and defines SYS$INPUT at user mode to it
- * for the image -- the executive runs that name down when the image exits.
- * Until dcl_in_block_close, DCL's own reads come from the mailbox too. With
+ * DCL creates a temporary mailbox, writes the block's records to it whole --
+ * what fits at once, the rest from a feeder thread as the image's reads make
+ * room, so a block of any size -- then end of file (IO$_WRITEOF), and defines
+ * SYS$INPUT at user mode to it for the image; the executive runs that name
+ * down when the image exits. Until dcl_in_block_close (which reads off what
+ * the image left unread), DCL's own reads come from the mailbox too. With
  * `image` 0 the block is for DCL alone (CREATE): no mailbox, DCL reads the
  * lines it gathered. SS$_NORMAL with *chan the mailbox channel (0 for DCL's
- * own), or the failing status (SS$_MBFULL: the block is more than the
- * mailbox's buffer quota). */
+ * own), or the failing status. */
 uint32_t dcl_in_block_open(const char *blk, size_t len, int image, uint16_t *chan);
 void dcl_in_block_close(uint16_t chan);
 

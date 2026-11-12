@@ -2003,9 +2003,7 @@ static int sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si, int 
     uint32_t st = dcl_in_block_open(blk ? blk : "", blk_len, image, &si->chan);
     free(blk);
     if (!(st & 1)) {
-        dcl_error("DCL", 4, "SYSINPUT", st == SS$_MBFULL
-                  ? "the image's input block is more than its mailbox's buffer quota"
-                  : "cannot provide SYS$INPUT for the image");
+        dcl_error("DCL", 4, "SYSINPUT", "cannot provide SYS$INPUT for the image");
         return st;
     }
     si->active = 1;

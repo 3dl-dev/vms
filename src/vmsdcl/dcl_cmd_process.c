@@ -695,64 +695,27 @@ int cmd_set_queue(struct dcl_command *cmd)
 }
 
 /*
- * SHOW INTRUSION - Display intrusion database.
- * Reads VMS_MANAGER_DIR/INTRUSION.DAT
- * Format per line: timestamp|username|source|type|count
+ * SHOW INTRUSION - display the intrusion database (vms libc-drop ratchet).
+ *
+ * On VMS the intrusion database is held by the security server and read
+ * through the $SHOW_INTRUSION system service. It is not a file DCL opens.
+ * OVMX's executive has no intrusion database and no $SHOW_INTRUSION (the
+ * corpus probe sys_show_intr.c fails to link on it), so this command returns
+ * the honest SS$_UNSUPPORTED refusal and prints nothing else.
+ *
+ * THE FACADE THIS REPLACES. It used to fopen() a host Linux path,
+ * VMS_MANAGER_DIR/INTRUSION.DAT, in an invented bar-separated format that
+ * nothing in OVMX writes. It therefore always printed
+ * "%SHOW-I-NOINTRUSION, no intrusion records found" with SS$_NORMAL. That
+ * line claimed an empty database that does not exist, and it read the file
+ * through libc instead of RMS. When $SHOW_INTRUSION exists in the executive,
+ * this command calls it.
  */
 int cmd_show_intrusion(struct dcl_command *cmd)
 {
     (void)cmd;
-
-    const char *intrusion_path = VMS_MANAGER_DIR "/INTRUSION.DAT";
-    FILE *fp = fopen(intrusion_path, "r");
-    if (!fp) {
-        dcl_out_printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
-        return SS$_NORMAL;
-    }
-
-    char line[512];
-    int found = 0;
-
-    while (fgets(line, sizeof(line), fp)) {
-        /* Strip newline */
-        size_t len = strlen(line);
-        if (len > 0 && line[len - 1] == '\n')
-            line[len - 1] = '\0';
-
-        /* Parse: timestamp|username|source|type|count */
-        char *timestamp = line;
-        char *username = strchr(timestamp, '|');
-        if (!username) continue;
-        *username++ = '\0';
-
-        char *source = strchr(username, '|');
-        if (!source) continue;
-        *source++ = '\0';
-
-        char *type = strchr(source, '|');
-        if (!type) continue;
-        *type++ = '\0';
-
-        char *count_str = strchr(type, '|');
-        if (!count_str) continue;
-        *count_str++ = '\0';
-
-        if (!found) {
-            dcl_out_printf("Intrusion   Type    Count  Expiration          Source\n");
-            found = 1;
-        }
-
-        dcl_out_printf("%-11s %-7s %5s  %-19s %s\n",
-               type, username, count_str, timestamp, source);
-    }
-
-    fclose(fp);
-
-    if (!found) {
-        dcl_out_printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
-    }
-
-    return SS$_NORMAL;
+    /* refused: there is no intrusion database in the executive; nothing read */
+    return (int)dcl_unsupported();
 }
 
 /*

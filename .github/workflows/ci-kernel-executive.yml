@@ -1767,6 +1767,8 @@ jobs:
           NEGCTL_SELECT: ${{ needs.changes.outputs.negctl_select }}
         run: |
           set -eu
+          # rd vms-6a1b: the job's start, for the run step's NEGCTL_DEADLINE.
+          echo "NEGCTL_JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
           ALL=$(sh tests/qemu/facility_defects.sh list)
           if [ "$NEGCTL_SELECT" = "ALL" ]; then
             PICK="$ALL"
@@ -1838,10 +1840,16 @@ jobs:
           DEFECTS=$(cat "$RUNNER_TEMP/negctl-mine.txt")
           echo "This shard (${{ matrix.shard }}/${{ strategy.job-total }}) runs:"
           echo "$DEFECTS" | sed 's/^/  /'
+          # rd vms-6a1b: stop 4 minutes inside the job's timeout-minutes (50,
+          # above -- keep the two in step) so a hung guest ends this step RED
+          # naming its defect, with its partial console uploaded below, instead
+          # of GitHub cancelling the job and discarding the log.
+          export NEGCTL_DEADLINE=$(( NEGCTL_JOB_T0 + 50 * 60 - 240 ))
+          export NEGCTL_DEATH_DIR="$RUNNER_TEMP/negctl-deaths"
           # shellcheck disable=SC2086
           tests/qemu/run_facility_negctl.sh $DEFECTS
-      - name: Keep the guest console of any total guest death (vms-898a)
-        if: failure()
+      - name: Keep the guest console of any total guest death (vms-898a) and of a guest the budget stopped (vms-6a1b)
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: negctl-guest-deaths-${{ matrix.shard }}

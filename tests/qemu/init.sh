@@ -225,6 +225,13 @@ dump_stuck_tasks() {
 SHARD_INDEX=0
 SHARD_TOTAL=1
 ONLY_SUITE=""
+# ORDERED SUITE LIST (rd vms-3264). ovmx.suites=<a>,<b>,... runs EXACTLY those
+# suites, IN THAT ORDER, bypassing the shard filter and the sharded-set
+# exclusion, then ends the run as usual (FINAL RESULTS, reboot). The facility
+# negative-control runner uses it to boot a defect's image for the defect's
+# declared suites only: a defect that hangs one facility must not make every
+# unrelated suite wait out its watchdog. Empty = disabled (every other caller).
+SUITE_LIST=""
 # CORPUS RUNTIME MODE (vms-44a, R2.3): ovmx.corpus=1 runs every program staged in
 # /tests/corpus_rt under the live executive INSTEAD of the executive suites, and
 # reports one CORPUS-RT line per program (see the loop below). ovmx.corpus_skip=
@@ -236,6 +243,7 @@ for _tok in $(cat /proc/cmdline 2>/dev/null); do
         ovmx.shard=*)  SHARD_INDEX=${_tok#ovmx.shard=} ;;
         ovmx.shards=*) SHARD_TOTAL=${_tok#ovmx.shards=} ;;
         ovmx.only=*)   ONLY_SUITE=${_tok#ovmx.only=} ;;
+        ovmx.suites=*) SUITE_LIST=${_tok#ovmx.suites=} ;;
         ovmx.corpus=*) CORPUS_RT=${_tok#ovmx.corpus=} ;;
         ovmx.corpus_skip=*) CORPUS_SKIP=${_tok#ovmx.corpus_skip=} ;;
     esac
@@ -246,6 +254,14 @@ case "$SHARD_TOTAL" in ''|*[!0-9]*|0) SHARD_TOTAL=1 ;; esac
 case "$SHARD_INDEX" in ''|*[!0-9]*) SHARD_INDEX=0 ;; esac
 # Reject a junk ovmx.only= (only a bare suite name is valid); empty = disabled.
 case "$ONLY_SUITE" in *[!A-Za-z0-9_]*) ONLY_SUITE="" ;; esac
+# A junk ovmx.suites= (anything but suite names and commas) is refused LOUDLY:
+# falling back to run-all would hide a broken caller, and running nothing
+# would pass a run that tested nothing. Every listed suite then prints its
+# verdict line or the caller's per-suite check finds it missing.
+case "$SUITE_LIST" in *[!A-Za-z0-9_,]*)
+    echo "  FAIL: ovmx.suites=$SUITE_LIST is not a comma list of suite names"
+    SUITE_LIST="" ; ONLY_SUITE="__bad_suite_list__" ;;
+esac
 # SHARDED-SET EXCLUSION (rd vms-f881 / vms-8cb). test_kmod_devtab_terminal
 # (a real PTY + a cross-process fork doing $GETDVI) is a TCG-pathological hog
 # that blew the whole-VM wall on whichever shard it landed on (measured at
@@ -395,10 +411,29 @@ if [ "$CORPUS_RT" = "1" ]; then
     echo "=== CORPUS-RT DONE: $n_corpus_rt programs ===" >&4
 fi
 
-for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/test_corpus_*; do
-    [ -x "$test" ] || continue
+if [ -n "$SUITE_LIST" ]; then
+    SUITE_PATHS=$(echo "$SUITE_LIST" | tr ',' '\n' | sed '/^$/d; s|^|/tests/|')
+else
+    # Group order, sorted within each group, exactly as the literal glob list
+    # always ran (an unmatched glob stays literal and the -x test skips it).
+    SUITE_PATHS=$(echo /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/test_corpus_*)
+fi
+for test in $SUITE_PATHS; do
     name=$(basename "$test")
-    if [ -n "$ONLY_SUITE" ]; then
+    if [ -n "$SUITE_LIST" ]; then
+        # Listed but absent from /tests: that is the suite's red, not a skip.
+        if [ ! -x "$test" ]; then
+            echo "--- $name ---" >&4
+            echo "  FAIL: $name is in ovmx.suites but not in /tests" >&4
+            echo "=== SUITE $name rc=127 ===" >&4
+            SUITE_FAIL=$((SUITE_FAIL+1))
+            continue
+        fi
+    fi
+    [ -x "$test" ] || continue
+    if [ -n "$SUITE_LIST" ]; then
+        :   # explicit ordered list: no shard filter, no sharded-set exclusion
+    elif [ -n "$ONLY_SUITE" ]; then
         # Single-suite mode (ovmx.only=, the dedicated devtab_terminal job):
         # run EXACTLY the named suite, bypassing BOTH the shard filter and the
         # sharded-set exclusion below.

@@ -2188,6 +2188,52 @@ static void dcl_cli_mbx_close(struct dcl_cli_mbx *m)
 extern uint32_t vms$$mbx_read_wait(uint32_t exec_chan, void *buf, uint32_t bufsz,
                                    uint32_t *actlen, uint32_t *sender);
 
+/*
+ * THE TASK'S END, WHEN THE EXECUTIVE'S MESSAGE DOES NOT COME. The executive's
+ * termination message is what ends DCL's wait. Should it never arrive -- the
+ * executive could not allocate or queue it, or a defect drops it -- DCL must
+ * not wait forever on an image task that no longer exists: on VMS the CLI
+ * regains control at image rundown, whatever the image did. So while DCL waits,
+ * the substrate's notice that the task ended (its child-exit signal, the same
+ * fact the waitid() below reads) has DCL put its own end marker in the request
+ * mailbox, after anything the executive already queued: the executive's
+ * message, posted before the task becomes a zombie, is always read first, and
+ * the marker only ends a wait the message failed to end. Stops are not ends
+ * (SA_NOCLDSTOP): the CTRL/Y message covers those.
+ */
+#define DCL_WAIT_MSG_TASKEND 0x8001u   /* DCL's own; no executive msgtyp */
+
+static volatile sig_atomic_t dcl_wait_task_pid;
+static volatile sig_atomic_t dcl_wait_task_chan;
+
+static void dcl_wait_taskend_mark(void)
+{
+    uint32_t wc = (uint32_t)dcl_wait_task_chan;
+    pid_t tp = (pid_t)dcl_wait_task_pid;
+    siginfo_t ws;
+    struct vms_exec_mbxmsg em;
+
+    if (!wc || tp <= 0)
+        return;
+    /* Coalesced child signals: ask about THIS task, whatever si_pid said. */
+    memset(&ws, 0, sizeof ws);
+    if (waitid(P_PID, (id_t)tp, &ws, WEXITED | WNOHANG | WNOWAIT) != 0 ||
+        ws.si_pid != tp)
+        return;
+    memset(&em, 0, sizeof em);
+    em.msgtyp = DCL_WAIT_MSG_TASKEND;
+    em.task_pid = (uint32_t)tp;
+    (void)vms_kif_mbx_write_ex(wc, &em, sizeof em, 1);
+}
+
+static void dcl_wait_sigchld(int sig)
+{
+    int e = errno;
+    (void)sig;
+    dcl_wait_taskend_mark();
+    errno = e;
+}
+
 static void dcl_cli_wait(struct dcl_cli_mbx *m, pid_t pid, siginfo_t *si)
 {
     if (m->ok) {
@@ -2195,7 +2241,20 @@ static void dcl_cli_wait(struct dcl_cli_mbx *m, pid_t pid, siginfo_t *si)
             struct ovmx_cli_req    rq;
             struct vms_exec_mbxmsg em;
         } msg;
+        struct sigaction sa, old_sa;
+        int have_old;
+
         dcl_wait_mbx_chan = (sig_atomic_t)m->req_chan;
+        dcl_wait_task_chan = (sig_atomic_t)m->req_chan;
+        dcl_wait_task_pid = (sig_atomic_t)pid;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_handler = dcl_wait_sigchld;
+        sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+        sigemptyset(&sa.sa_mask);
+        have_old = sigaction(SIGCHLD, &sa, &old_sa) == 0;
+        /* A task that ended before the handler was in place sent its signal
+         * to nobody: look once. */
+        dcl_wait_taskend_mark();
         for (;;) {
             uint32_t len = 0;
             /* The process runs its ASTs while it waits here, as a CLI
@@ -2217,11 +2276,16 @@ static void dcl_cli_wait(struct dcl_cli_mbx *m, pid_t pid, siginfo_t *si)
              * this one reuses) is not this wait's. */
             if (len == (uint32_t)sizeof msg.em &&
                 (msg.em.msgtyp == VMS_EXEC_MBXMSG_TERM ||
-                 msg.em.msgtyp == VMS_EXEC_MBXMSG_CTRLY) &&
+                 msg.em.msgtyp == VMS_EXEC_MBXMSG_CTRLY ||
+                 msg.em.msgtyp == DCL_WAIT_MSG_TASKEND) &&
                 msg.em.task_pid == (uint32_t)pid)
                 break;
             /* anything else is no CLI request: ignored */
         }
+        dcl_wait_task_chan = 0;
+        dcl_wait_task_pid = 0;
+        if (have_old)
+            (void)sigaction(SIGCHLD, &old_sa, NULL);
         dcl_wait_mbx_chan = 0;
     }
     for (;;) {

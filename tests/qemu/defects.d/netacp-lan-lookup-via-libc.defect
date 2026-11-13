@@ -1,12 +1,12 @@
-# decnetd-lan-lookup-via-libc -- one facility negative control (tests/qemu/facility_defects.sh).
+# netacp-lan-lookup-via-libc -- one facility negative control (tests/qemu/facility_defects.sh).
 # defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
 
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "the booted NETACP (DECNETD.EXE, executive datalink) learns its interface index and LAN address from the executive (\$QIO IO\$_SENSEMODE on ETH0:, VMS_IOCTL_L2_OPEN), never by Linux libc interface lookup (decnetd.c, rd vms-d3cd)";;
-        targets)      echo "vmsdecnet/engine/decnetd.c";;
-        suites_red)   echo "test_syssvc_decnetd_syscall_audit";;
+        facility)     echo "the booted NETACP (NETACP.EXE, executive datalink) learns its interface index and LAN address from the executive (\$QIO IO\$_SENSEMODE on ETH0:, VMS_IOCTL_L2_OPEN), never by Linux libc interface lookup (netacp.c, rd vms-d3cd)";;
+        targets)      echo "vmsdecnet/engine/netacp.c";;
+        suites_red)   echo "test_syssvc_netacp_syscall_audit";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -22,6 +22,6 @@ EOT
 }
 
 defect_apply() {
-        sed -i 's|^        int xi = scs_datalink_ifindex(sock);$|        int xi = (int)if_nametoindex("lo"); /* NEGCTL decnetd-lan-lookup-via-libc */|' "$_file"
+        sed -i 's|^        int xi = scs_datalink_ifindex(sock);$|        int xi = (int)if_nametoindex("lo"); /* NEGCTL netacp-lan-lookup-via-libc */|' "$_file"
     :
 }

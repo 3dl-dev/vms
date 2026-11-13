@@ -728,7 +728,7 @@ int vms_devtab_remove_served_disk(const char *devnam)
  * that order; this function does not need to know who that will be.
  *
  * Called from the executive itself when a session's terminal is needed
- * (design P1/P3/P4's $CREPRC / vmssshd / decnetd-CTERM callers), NOT from
+ * (design P1/P3/P4's $CREPRC / vmssshd / netacp-CTERM callers), NOT from
  * module init -- an RTAn: unit appears when a network login session starts
  * and disappears when it ends, exactly as vms_devtab_add_served_disk above
  * appears/disappears with cluster membership. Both take the device-list

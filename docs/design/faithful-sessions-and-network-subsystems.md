@@ -7,7 +7,7 @@ the 2026-09-02 draft moment, superseded by **§8**, which maps each design eleme
 landed code. The architecture, the §4 A2/A8 dispositions, and the §7 gates remain the
 governing record — and §7's gates are now met. (rd vms-515; roadmap epics vms-43b + vms-ec9.)
 **Origin:** an operator-caught LARP — a broken `vmsdcl --login` default in the DECnet CTERM
-server — exposed that OVMX has no single VMS-authentic login subsystem, and that "decnetd"
+server — exposed that OVMX has no single VMS-authentic login subsystem, and that "netacp"
 is a Linux-daemon-shaped drift from the DECnet charter. Produced by an adversarial-design
 forum (adversary / creative / systems-pragmatist / domain-purist, one-shot), grounded in code.
 
@@ -31,7 +31,7 @@ authenticates, establishes UIC/privileges/quotas, then chains into DCL. OVMX tod
   gate, plain `setident` without quotas, no process name, restores the `VMS_*` env facade
   LOGINOUT deleted, duplicate banner, root/euid-0 SYSUAF crutch), then execs `DCL --login`
   directly. Bypasses LOGINOUT. (A second, dormant OpenSSH-port stack multiplies the copies.)
-- **DECnet SET HOST / CTERM** (`src/vmsdecnet/engine/decnetd.c --cterm-server`) — **no
+- **DECnet SET HOST / CTERM** (the former DECnet daemon's `--cterm-server`, now NETACP.EXE's CTERM host) — **no
   authentication at all**: forks + `execvp("vmsdcl","--login")`, never decodes the CTERM
   access-control username/password, stamps no identity, creates no terminal device. A remote
   node reaches `$` unauthenticated. This is a live login LARP (currently a manual dev flag,
@@ -42,11 +42,11 @@ The executive already has **one** well-guarded persona primitive (`vms_ioctl_set
 (`vms_kif_establish_system`, privilege-gated). The fragmentation is entirely at the **caller**
 layer — five independent callers, three of which reimplement or skip the login logic.
 
-**Finding B — DECnet is Linux-daemon-shaped ("decnetd"), not the VMS network subsystem.** Real
+**Finding B — DECnet is Linux-daemon-shaped ("netacp"), not the VMS network subsystem.** Real
 VMS DECnet is **NETACP** (a privileged detached process — *not* kernel-resident) + the executive
 **device face** (`_NET:`/`EWA0:` reached by `$ASSIGN`/`$QIO`/`$GETDVI`) + **NCP** + a **network-
 object dispatch table**. `vms-30e`'s own charter already said "executive device face
-(EWA0:/_NET:/QIO)… NOT a vendored Linux daemon" — decnetd drifted from the ratified design.
+(EWA0:/_NET:/QIO)… NOT a vendored Linux daemon" — netacp drifted from the ratified design.
 
 ---
 
@@ -108,7 +108,7 @@ and re-personas the process *post-creation*, so the creator forges no identity. 
 job is transport: obtain the terminal device (console OPA0:, or an RTAn: bound to an SSH channel /
 CTERM link, §3.2) and hand its name to `$CREPRC`. This is the same relationship a booted node's
 JOB_CONTROL has to the console today — generalized into one primitive every path shares, with the
-raw `fork/execl/pty` that JOB_CONTROL and vmssshd/decnetd expose today pushed down inside
+raw `fork/execl/pty` that JOB_CONTROL and vmssshd/netacp expose today pushed down inside
 `$CREPRC`, deleted from the callers. No path ever execs `DCL --login` directly (that flag is
 faithful only as LOGINOUT's own handoff).
 
@@ -126,10 +126,10 @@ traverse the executive. The LARP tell (§7.5) is precisely "a session with no ex
 **3.3 NETACP: privileged detached process + executive device/dispatch face + userspace datalink.**
 NETACP is a privileged `RUN/DETACHED` process (JOB_CONTROL's category — **not** moved into
 `vms.ko`; the cluster's kernel-residency is for DLM/membership survival-across-death + cluster
-timing, which DECnet has no analogue for — moving decnetd into vms.ko would be over-building).
+timing, which DECnet has no analogue for — moving netacp into vms.ko would be over-building).
 NETACP owns: the **network-object table** (name/number/dispatch, in the executive device/table
 layer so it is cross-process real), the **`_NET:`/`EWA0:` device face** (a `vms_devtab` entry
-like ETH0:/PEA0:), and **NCP**'s view. The existing decnetd **wire engine** (HELLO/router-hello/
+like ETH0:/PEA0:), and **NCP**'s view. The existing netacp **wire engine** (HELLO/router-hello/
 adjacency/NSP/CTERM codecs — the real assets in PR #1057) is **demoted to NETACP's datalink**,
 the AF_PACKET socket hidden behind the device face. Inbound object-42 dispatch = *mint an RTAn:
 backed by the CTERM link, then create a LOGINOUT session on it* — the same three primitives as
@@ -169,7 +169,7 @@ lost); `$CREPRC` (extended into the core installed-privileged-LOGINOUT session p
 **Deleted:** the raw `fork/execl/openpty/dup2` login mechanics from *every* caller (console
 included) — they move inside `$CREPRC`; vmssshd's inline LOGINOUT
 reimplementation + its `VMS_*` env facade + `cred_drop.c`/`ssh_ident.c`/`term_map.c` + the second
-SSH stack; decnetd's no-auth `fork+execvp`. **Net effect: a code *reduction*** (~+300 added,
+SSH stack; netacp's no-auth `fork+execvp`. **Net effect: a code *reduction*** (~+300 added,
 ~−400 deleted) — consolidation, not a big-bang rewrite.
 
 ---
@@ -192,11 +192,11 @@ SSH stack; decnetd's no-auth `fork+execvp`. **Net effect: a code *reduction*** (
   **call `$CREPRC` (P1)** to run LOGINOUT on it. No fork/execl/auth in the daemon. Carry Wall-6
   (`establish_system` before SYSUAF). SSH banner/`SHOW PROCESS` becomes provably identical to
   console.
-- **P4 (with P3 — the no-auth one):** decnetd CTERM → the SC-connect username/password decoder +
+- **P4 (with P3 — the no-auth one):** netacp CTERM → the SC-connect username/password decoder +
   route object-42 dispatch through the SAME `$CREPRC`-LOGINOUT-on-RTAn: path. Closes the no-auth
-  hole; deletes decnetd's `fork+execvp`.
+  hole; deletes netacp's `fork+execvp`.
 - **P5:** NETACP executive device/dispatch face (`_NET:`/`EWA0:`/object-table) + wire-engine
-  isolation (§3.4); demote the decnetd wire engine to the datalink; retire the dead SSH code +
+  isolation (§3.4); demote the netacp wire engine to the datalink; retire the dead SSH code +
   second stack.
 
 ---
@@ -236,7 +236,7 @@ the ratification gates (§7) stand — and §7's gates are now **met**.
 |---|---|
 | §2/§3.1 `$CREPRC`-runs-LOGINOUT-on-a-terminal-device; no Linux mechanics above the VMS layer at any caller | the `$CREPRC PRC$M_INTER\|PRC$M_LOGINOUT` session primitive; console + SSH + CTERM callers reach LOGINOUT through it (gated by `tests/integration/test_creprc_session_primitive.sh`) |
 | §3.2 RTAn: a real, cheap executive device (P2) | `vms_devtab_add_terminal` / `VMS_IOCTL_TERM_CREATE`; `$GETDVI`/`$ASSIGN`-visible cross-process — `decnet$cterm-session-auth` mints it |
-| §3.3 NETACP = privileged detached process + `_NET:` device face + object dispatch + userspace datalink | `decnet$netacp-device-face` (`vms_devtab_probe_net`, `_NET:`); the object table (`dnet_objectdb`); PR #1057's wire codecs are decnetd's datalink |
+| §3.3 NETACP = privileged detached process + `_NET:` device face + object dispatch + userspace datalink | `decnet$netacp-device-face` (`vms_devtab_probe_net`, `_NET:`); the object table (`dnet_objectdb`); PR #1057's wire codecs are netacp's datalink |
 | §3.4 / A2/A8 wire-parse isolated from the privileged control path | `decnet$wire-isolation` — `dnet_conn_descriptor_from_wire` parses attacker bytes at low privilege and hands NETACP a validated typed descriptor |
 | P3 SSH → transport-only, LOGINOUT via `$CREPRC` | faithful SSH→DCL handoff via `$CREPRC(LOGINOUT)` (#1229) |
 | P4 CTERM SC-connect credential decode; object-42 → LOGINOUT | `dnet_cterm_sc_connect_parse` + the authenticated inbound object-42 path (`decnet$cterm-session-auth`) |

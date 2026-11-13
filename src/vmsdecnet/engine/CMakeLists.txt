@@ -23,18 +23,18 @@ target_include_directories(vmsdecnet_engine PUBLIC
 # the NSP transport codec + logical-link FSM (vmsdecnet_nsp).
 target_link_libraries(vmsdecnet_engine PUBLIC vmsdecnet_routing vmsdecnet_nsp)
 
-# DATALINK BACKEND (rd vms-1f69): ${OVMX_DECNETD_DATALINK_LIB} is ovmx_datalink_exec
+# DATALINK BACKEND (rd vms-1f69): ${OVMX_NETACP_DATALINK_LIB} is ovmx_datalink_exec
 # (the executive L2 path, /dev/vms + PHY_IO, no CAP_NET_RAW) for the booted
 # runtime build and ovmx_datalink (the AF_PACKET probe) for the host/lab build --
 # see src/libdatalink/CMakeLists.txt OVMX_DATALINK_VIA_EXECUTIVE. Exactly one is
 # linked; there is no runtime fallback between them.
-# decnetd -- THE DAEMON. The DECnet analogue of scsd_exe: the ONLY place the raw
+# netacp -- THE DAEMON. The DECnet analogue of scsd_exe: the ONLY place the raw
 # datalink (scs_datalink_{open,send,recv}, the generic raw-L2 abstraction in
 # src/libdatalink, written engine-agnostic for exactly this consumer) is
 # touched. It ties the socketless engine core to the live datalink + a monotonic
 # clock. Links ovmx_datalink for its socket/bpf open + MAC-get + send + recv
 # primitives.
-# decnetd_rms_bind.c: force-bind anchor (vms-8c2). DECNETD.EXE's FAL half reaches
+# netacp_rms_bind.c: force-bind anchor (vms-8c2). NETACP.EXE's FAL half reaches
 # the RMS record services + the binary SYSUAF engine through LIBVMS's `#pragma
 # weak` seam; under a static link a weak-only reference does not extract the
 # vmsrms archive member, so --fal-accept-test's real auth + real file I/O failed
@@ -43,20 +43,20 @@ target_link_libraries(vmsdecnet_engine PUBLIC vmsdecnet_routing vmsdecnet_nsp)
 # provision_rms_bind.c / loginout_rms_bind.c / tests/qemu/rms_acp_bind.c close).
 # sysoutput_rms.c (rd vms-c89): NETACP is created DETACHED with
 # /OUTPUT=/ERROR=SYS$MANAGER:NETACP.LOG; this image-start routine $CREATEs that
-# file through RMS and files each line DECNETD writes there (vmsrms below is in
-# the link closure, decnetd_rms_bind.c binds it; Threads for its reader).
+# file through RMS and files each line NETACP writes there (vmsrms below is in
+# the link closure, netacp_rms_bind.c binds it; Threads for its reader).
 # NETACP.EXE (rd vms-0a7 S3): the network ancillary control process. NCP SET
 # EXECUTOR STATE ON $CREPRCs it detached with no parameters; it takes no argv
-# (decnetd.c NETACP_IMAGE entry). It writes SYS$MANAGER:NETACP.LOG through RMS
-# itself (netacp_log in decnetd.c) -- no sysoutput_rms reader thread -- and
+# (netacp.c NETACP_IMAGE entry). It writes SYS$MANAGER:NETACP.LOG through RMS
+# itself (netacp_log in netacp.c) -- no sysoutput_rms reader thread -- and
 # links no Threads: the libc ratchet (tests/dcl/test_no_libc_io.sh) and the
 # booted syscall audit hold it to no thread, no poll(), no pipe.
 #
-# decnetd.c is ONE translation unit compiled per image: NETACP_IMAGE for
+# netacp.c is ONE translation unit compiled per image: NETACP_IMAGE for
 # NETACP.EXE, and without it by the test image tests/vmsdecnet/netacp_test.c,
 # which holds every self-test.
 #
-# decnetd_rms_bind.c: force-bind anchor (vms-8c2) -- the RMS record services +
+# netacp_rms_bind.c: force-bind anchor (vms-8c2) -- the RMS record services +
 # the binary SYSUAF engine are reached through LIBVMS's `#pragma weak` seam; a
 # weak-only reference does not extract the vmsrms archive member under a static
 # link, so the anchor takes their address.
@@ -75,20 +75,12 @@ set(_netacp_includes
     CACHE INTERNAL "")
 set(_netacp_libs vmsdecnet_engine vmsdecnet_cterm vmsdecnet_cterm_host
                  vmsdecnet_fal vmsdecnet_mail vmsdecnet_dap vmsdecnet_broker
-                 vmsdecnet_ncpstore ${OVMX_DECNETD_DATALINK_LIB} vmsrms
+                 vmsdecnet_ncpstore ${OVMX_NETACP_DATALINK_LIB} vmsrms
     CACHE INTERNAL "")
 
-add_executable(netacp_exe decnetd.c decnetd_rms_bind.c)
+add_executable(netacp_exe netacp.c netacp_rms_bind.c)
 target_compile_definitions(netacp_exe PRIVATE NETACP_IMAGE)
 target_include_directories(netacp_exe PRIVATE ${_netacp_includes})
 target_link_libraries(netacp_exe PRIVATE ${_netacp_libs})
 set_target_properties(netacp_exe PROPERTIES OUTPUT_NAME "NETACP" SUFFIX ".EXE")
 install(TARGETS netacp_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
-
-# DECNETD.EXE: retired (rd vms-0a7). RTPAD.EXE took SET HOST (S2) and NETACP.EXE
-# the ACP (S3); nothing activates it. Until S4 removes it and the staging that
-# lists it, it is a tiny image that exits SS$_UNSUPPORTED (decnetd_retired.c).
-add_executable(decnetd_exe decnetd_retired.c)
-target_link_libraries(decnetd_exe PRIVATE vms vmssys)
-set_target_properties(decnetd_exe PROPERTIES OUTPUT_NAME "DECNETD" SUFFIX ".EXE")
-install(TARGETS decnetd_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

@@ -1,6 +1,6 @@
-/* fake_getifaddrs.c - LD_PRELOAD shim for test_decnetd_startnet_gate.sh (vms-94b).
+/* fake_getifaddrs.c - LD_PRELOAD shim for test_netacp_startnet_gate.sh (vms-94b).
  *
- * DECNETD.EXE auto-detects its datalink NIC with scs_datalink_primary_iface()
+ * NETACP.EXE auto-detects its datalink NIC with scs_datalink_primary_iface()
  * (if_nameindex() + SIOCGIFFLAGS/SIOCGIFHWADDR, src/libdatalink). Asserting
  * that against the REAL host is flaky by construction: the interface set is
  * whatever the CI runner has at that instant (docker veths appear and vanish

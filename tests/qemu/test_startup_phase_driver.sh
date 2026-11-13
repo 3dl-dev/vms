@@ -347,12 +347,12 @@ record "no %DCL-E-OPENIN during boot" "$rc"
 # boot STARTNET must gate itself OFF with a pure DCL F$SEARCH and stay SILENT:
 # launch no NETACP and print NOTHING to the pristine boot console the vms-1fb
 # oracle pins. (The daemon serve-decision matrix is proven at the unit level by
-# tests/vmsdecnet/test_decnetd_startnet_gate.sh; the configured -> serve path by
+# tests/vmsdecnet/test_netacp_startnet_gate.sh; the configured -> serve path by
 # the live inbound-SET-HOST bracket -- neither belongs on this unconfigured boot.)
 #
 # What we assert here is the LPBETA component ran AND self-gated cleanly: no
 # %DECNET-I-STARTNET announcement, no NETACP %RUN-S-PROC_ID, no %DCL abort, and
-# no %DECNETD-E-NOADDRESS. A foreground DECNETD probe whose nonzero exit DCL would
+# no %NETACP-E-NOADDRESS. A foreground NETACP probe whose nonzero exit DCL would
 # render as %DCL-E-ABORT is exactly the pollution this guards against (vms-a70).
 if printf '%s' "$BOOT_LOG" | grep >/dev/null -F 'DECnet Phase IV -- Startup (STARTNET)'; then rc=1; else rc=0; fi
 record "STARTNET is SILENT on an unconfigured boot (no DECnet startup announcement -- faithful: real VMS runs no STARTNET unconfigured)" "$rc"
@@ -363,8 +363,8 @@ record "no %DECNET-I-STARTNET on the console (STARTNET prints no launch line of 
 if printf '%s' "$BOOT_LOG" | grep >/dev/null -E '%DCL-[EF]-ABORT'; then rc=1; else rc=0; fi
 record "STARTNET leaves NO %DCL-E-ABORT on the boot console (config check is a DCL F\$SEARCH, not a foreground probe)" "$rc"
 
-if printf '%s' "$BOOT_LOG" | grep >/dev/null -F 'DECNETD-E-NOADDRESS'; then rc=1; else rc=0; fi
-record "STARTNET leaves NO %DECNETD-E-NOADDRESS on the boot console (unconfigured = clean no-op, not an error)" "$rc"
+if printf '%s' "$BOOT_LOG" | grep >/dev/null -F 'NETACP-E-NOADDRESS'; then rc=1; else rc=0; fi
+record "STARTNET leaves NO %NETACP-E-NOADDRESS on the boot console (unconfigured = clean no-op, not an error)" "$rc"
 
 echo ""
 echo "=========================================="

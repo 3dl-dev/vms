@@ -1,11 +1,11 @@
 /*
  * test_datalink_exec_backend.c - the EXECUTIVE raw-L2 datalink backend
  * (src/libdatalink/ovmx_datalink.c built with SCS_DATALINK_VIA_EXECUTIVE, the
- * ovmx_datalink_exec library the booted DECNETD.EXE links; rd vms-1f69).
+ * ovmx_datalink_exec library the booted NETACP.EXE links; rd vms-1f69).
  *
  * Proves on the build host:
- *   1. The backend identifies itself as "executive" -- the readout DECNETD's
- *      --show-executor and DECNETD-I-DATALINK print, which the booted
+ *   1. The backend identifies itself as "executive" -- the readout NETACP's
+ *      --show-executor and NETACP-I-DATALINK print, which the booted
  *      acceptance battery gates on.
  *   2. NO SILENT FALLBACK. Where /dev/vms is absent (a build host), opening the
  *      datalink -- even on loopback, which needs no NIC -- FAILS honestly

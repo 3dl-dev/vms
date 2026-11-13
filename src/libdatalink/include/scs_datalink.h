@@ -8,7 +8,7 @@
  * opens a raw socket from userspace any more, and there is no SCS datalink
  * to abstract). The file survives its original caller because it was written
  * ENGINE-AGNOSTIC for exactly the second consumer it now has: DECnet Phase IV
- * (src/vmsdecnet/engine/decnetd.c, rd vms-30e), whose daemon puts DECnet
+ * (src/vmsdecnet/engine/netacp.c, rd vms-30e), whose daemon puts DECnet
  * frames on the same kind of raw-L2 endpoint. The NAME is kept so the DECnet
  * call sites and the clean-room provenance below stay readable against the
  * history; nothing in it knows anything about SCS.

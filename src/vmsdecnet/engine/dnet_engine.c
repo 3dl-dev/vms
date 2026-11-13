@@ -5,7 +5,7 @@
  * (the AF_PACKET socket is HIDDEN behind this VMS-faithful routing surface, the
  * same way a transport daemon hides its raw socket behind its engine). This file is
  * pure logic over frame buffers + an injected clock: it opens no socket, starts
- * no thread, reads no wall clock. The daemon (decnetd.c) owns the datalink.
+ * no thread, reads no wall clock. The daemon (netacp.c) owns the datalink.
  *
  * Field ground truth is the vms-3be endnode-HELLO specimen
  * (docs/decnet-provenance-register.md sec 4.6): src node 1.1
@@ -535,7 +535,7 @@ int dnet_engine_parse_data_frame(const uint8_t *frame, size_t len,
     return DNET_ENGINE_OK;
 }
 
-/* --- single-link connection wrappers (what DECNETD drives) ---------------- */
+/* --- single-link connection wrappers (what NETACP drives) ---------------- */
 
 /* Wrap an NSP message the link FSM produced into a full data frame to the peer
  * identified by the link's remote_node. */

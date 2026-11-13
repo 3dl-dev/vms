@@ -10,7 +10,7 @@
  * takes every one of those for a success -- a bad-password COPY "opens", then
  * polls a link that never existed for ever (the booted refused-OPEN hang).
  *
- * Every DECnet client image (DECNETD's COPY / SET HOST over NETACP) issues its
+ * Every DECnet client image (RMS remote access, RTPAD.EXE's SET HOST, FAL) issues its
  * _NET: $QIOWs through this, and test_syssvc_net_qio_status proves it on the
  * real executive.
  */

@@ -3,7 +3,7 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "the DECnet _NET: client's \$QIOW status rule (dnet_net_qiow, src/vmsdecnet/broker/include/dnet_netqio.h) -- every DECnet client image (DECNETD's COPY / SET HOST over NETACP) reads how a logical-link I/O ENDED from the IOSB (rd vms-dda / vms-d01)";;
+        facility)     echo "the DECnet _NET: client's \$QIOW status rule (dnet_net_qiow, src/vmsdecnet/broker/include/dnet_netqio.h) -- every DECnet client image (RMS remote access, RTPAD.EXE's SET HOST, FAL) reads how a logical-link I/O ENDED from the IOSB (rd vms-dda / vms-d01)";;
         targets)      echo "vmsdecnet/broker/include/dnet_netqio.h";;
         suites_red)   echo "test_syssvc_net_qio_status";;
         blind_suites) echo "";;

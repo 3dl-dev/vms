@@ -1,5 +1,5 @@
 /*
- * decnetd.c - the OVMX DECnet NETACP: session control + the device/object
+ * netacp.c - the OVMX DECnet NETACP: session control + the device/object
  *             dispatch face, with the Phase IV wire engine as its low-privilege
  *             DATALINK (rd vms-449d engine rung 1; rd vms-9ab P5 NETACP reframe,
  *             design vms-515 §3.3/§3.4; epic vms-30e).
@@ -28,7 +28,7 @@
  * RULE 1 -- "do it like VMS, or HIDE it." The raw socket and the Linux/NetBSD
  * interface name are the HIDDEN mechanism. What this daemon puts on stdout is
  * the DECnet routing surface an NCP user sees -- an executor node, a circuit,
- * and a live adjacency table (SHOW ADJACENT NODES) -- plus DECNETD-I- facility
+ * and a live adjacency table (SHOW ADJACENT NODES) -- plus NETACP-I- facility
  * messages in the scsd house style. It never prints a raw socket or a bare
  * `ethN`, exactly as scsd never exposes its AF_PACKET fd behind the SCS face.
  *
@@ -90,7 +90,7 @@
 #include "vms_kif.h"        /* $GETDVI readback: the sec-7.5 anti-LARP tell */
 #include "prvdef.h"         /* PRV$M_NETMBX: a broker requester must hold it (rd vms-c6d1) */
 #include "prcdef.h"         /* PRC$M_DETACH: the vms-c6d1 request-mailbox probe process */
-#include "vmsfs/filespec.h" /* vmsfs_to_linux_path: SYS$SYSTEM:DECNETD.EXE for that probe */
+#include "vmsfs/filespec.h" /* vmsfs_to_linux_path: SYS$SYSTEM:NETACP.EXE for that probe */
 #include "vmsfs/device.h"   /* vmsfs_resolve_filespec_device: NETACP.LOG's device */
 #include "ovmx_layout.h"    /* ovmx_boot_stage_exec_path                              */
 #include "starlet.h"        /* vms-f54 CLIENT: $ASSIGN/$QIO(W)/$DASSGN terminal I/O */
@@ -101,7 +101,7 @@
 
 
 /* The process context the system services need for their channel table. An
- * OVMX image activated by the executive already holds one; a DECNETD.EXE run
+ * OVMX image activated by the executive already holds one; a NETACP.EXE run
  * standalone (a test harness) does not, so it establishes one itself before
  * it $ASSIGNs a channel -- the same bootstrap
  * vmssshd and DCL do (src/vmsssh/vmssshd.c, src/vmsdcl/dcl_main.c). */
@@ -291,7 +291,7 @@ static void netacp_log_report(FILE *f, void (*show)(const struct dnet_engine *, 
 /* Default datalink interface, matching scsd's br0 default (the lab-2 pod
  * bridge model that carries raw Phase IV multicast; SLIRP cannot, see
  * docs/decnet-provenance-register.md sec 4.2). */
-#define DECNETD_DEFAULT_IFACE  "br0"
+#define NETACP_DEFAULT_IFACE  "br0"
 
 static volatile sig_atomic_t g_stop = 0;
 static void on_signal(int signo) { (void)signo; g_stop = 1; }
@@ -301,7 +301,7 @@ static void on_signal(int signo) { (void)signo; g_stop = 1; }
  * when SYS$MANAGER:STARTNET.COM starts it with no argv (rd vms-a70 direction B).
  *
  * VMS RUN passes an image no argv, so the detached NETACP cannot be told
- * --iface; and the compile-time DECNETD_DEFAULT_IFACE ("br0") is a DEV-LAB
+ * --iface; and the compile-time NETACP_DEFAULT_IFACE ("br0") is a DEV-LAB
  * bridge name that does not exist inside a booted node's own network namespace
  * (there the primary NIC is eth0/ETH0:). So when no --iface is given, pick the
  * FIRST up, non-loopback interface that has a link-layer (Ethernet) address --
@@ -338,15 +338,15 @@ static int decnet_autodetect_iface(char *buf, size_t sz)
  * qio_lan_op). The datalink itself is opened on that VMS name too, and the
  * executive resolves the host interface privately (VMS_IOCTL_L2_OPEN).
  */
-#define DECNETD_LAN_UNIT "ETH0:"
+#define NETACP_LAN_UNIT "ETH0:"
 
-static int decnetd_executive_datalink(void)
+static int netacp_executive_datalink(void)
 {
     return strcmp(scs_datalink_backend(), "executive") == 0;
 }
 
 /* Is `n` a VMS device name (carries a ':'), not a host interface name? */
-static int decnetd_is_vms_devnam(const char *n)
+static int netacp_is_vms_devnam(const char *n)
 {
     return n && strchr(n, ':') != NULL;
 }
@@ -354,15 +354,15 @@ static int decnetd_is_vms_devnam(const char *n)
 /* $QIOW IO$_SENSEMODE on ETH0: -> its hardware address. Returns the VMS
  * status: the $ASSIGN's, the $QIOW's, the IOSB's, or SS$_NOSUCHDEV when the
  * extended characteristics carry no hardware address. */
-static uint32_t decnetd_lan_sense_hwaddr(uint8_t mac_out[6])
+static uint32_t netacp_lan_sense_hwaddr(uint8_t mac_out[6])
 {
     if (!vms_pcb_get())
         vms_pcb_init(0);
     struct dsc$descriptor_s dev;
-    dev.dsc$w_length = (uint16_t)strlen(DECNETD_LAN_UNIT);
+    dev.dsc$w_length = (uint16_t)strlen(NETACP_LAN_UNIT);
     dev.dsc$b_dtype = DSC$K_DTYPE_T;
     dev.dsc$b_class = DSC$K_CLASS_S;
-    dev.dsc$a_pointer = (char *)DECNETD_LAN_UNIT;
+    dev.dsc$a_pointer = (char *)NETACP_LAN_UNIT;
     uint16_t ch = 0;
     uint32_t st = sys$assign(&dev, &ch, 0, NULL);
     if (!(st & 1))
@@ -529,7 +529,7 @@ static void netacp_vnodes_load(void)
     int rc = dnet_store_load_nodes(&g_vnodes);
     if (rc == DNET_STORE_EREAD) {
         log_ts(stderr);
-        fprintf(stderr, " DECNETD-E-NODEDB, cannot read the permanent node database"
+        fprintf(stderr, " NETACP-E-NODEDB, cannot read the permanent node database"
                         " (status %08X); the volatile database starts empty\n",
                 (unsigned)dnet_store_last_rms_status());
         fflush(stderr);
@@ -622,7 +622,7 @@ static uint32_t broker_open_connect(const struct dnet_engine *node, uint32_t own
             uint32_t rst = dnet_store_last_rms_status();
             if (rst == 0 || (rst & 1))
                 rst = RMS$_RER;
-            fprintf(stderr, "DECNETD-E-NODEDB, cannot read the node database to resolve '%s' (status %08X)\n",
+            fprintf(stderr, "NETACP-E-NODEDB, cannot read the node database to resolve '%s' (status %08X)\n",
                     n.node, (unsigned)rst);
             fflush(stderr);
             /* A NET: completion carries an SS$ (word) status: the RMS
@@ -683,7 +683,7 @@ out:
 /*
  * The $ SET HOST CLIENT is SYS$SYSTEM:RTPAD.EXE (src/vmsdecnet/rtpad/, rd vms-0a7
  * S2): DCL activates it from its command tables, and it reaches the remote's
- * CTERM object through this NETACP's _NET: link pool. DECNETD.EXE no longer
+ * CTERM object through this NETACP's _NET: link pool. NETACP.EXE no longer
  * carries a client role.
  */
 
@@ -701,7 +701,7 @@ static void sethost_mkdesc(struct dsc$descriptor_s *d, const char *s)
 /*
  * ONE NETACP PER NODE (rd vms-365). A node runs one network ACP: it owns the
  * node's datalink, its logical-link pool and the _NET: request mailbox. A
- * second no-argv DECNETD (a RUN/DETACHED of the image under any process name
+ * second detached NETACP.EXE (a RUN/DETACHED of the image under any process name
  * other than NETACP, which the executive already refuses -DUPLNAM) used to
  * come up as a second full NETACP beside the first -- a second pool and a
  * second engine racing the first for every frame, and on a swapless VAX the
@@ -754,7 +754,7 @@ static int netacp_live(void)
  * UIC the executive holds: $GETJPI(JPI$_UIC) == vms_kif_getjpi_self()->uic,
  * packed (group << 16) | member (INV-6: the value is executive state, read
  * live, never plumbed frame-to-frame). If no executive identity is stamped on
- * this process (a standalone DECNETD with no image activation / no /dev/vms),
+ * this process (a standalone NETACP with no image activation / no /dev/vms),
  * fall back to the real POSIX identity of the running process (gid -> group,
  * uid -> member), and as a last resort its pid -- still the process's own
  * identity, still nonzero, never an invented constant.
@@ -1034,7 +1034,7 @@ static void netacp_accept_abandon(struct netacp_slot *sl, int sock, unsigned ifi
     char pa[8];
     netacp_refuse(&sl->lk, sock, ifindex, sl->peer_mac, DNET_LINK_REASON_OBJREJ, now);
     log_ts(stdout);
-    printf(" DECNETD-I-CONNREJ, inbound FAL connect from %s refused: server process"
+    printf(" NETACP-I-CONNREJ, inbound FAL connect from %s refused: server process"
            " %08X did not accept the link (%s)\n", dnet_addr_str(sl->peer, pa, sizeof pa),
            (unsigned)sl->owner_pid, why);
     fflush(stdout);
@@ -1100,7 +1100,7 @@ release:
     if (sl->object == DNET_CTERM_OBJECT) (void)dnet_cterm_host_close(&sl->host);
     if (sl->object != DNET_CTERM_OBJECT) dnet_fal_proc_close(&sl->fal);
     log_ts(stdout);
-    printf(" DECNETD-I-SESSEND, inbound %s session %s ended (%s)\n",
+    printf(" NETACP-I-SESSEND, inbound %s session %s ended (%s)\n",
            sl->object == DNET_FAL_OBJECT ? "FAL" :
            sl->object == DNET_MAIL11_OBJECT ? "MAIL" : "SET HOST",
            sl->object == DNET_CTERM_OBJECT ? sl->host.devnam : "", why);
@@ -1341,7 +1341,7 @@ static int netacp_reply_mbx(struct netacp_slot *sl, uint32_t reply_unit,
         if (last_full_unit != reply_unit) {
             last_full_unit = reply_unit;
             log_ts(stdout);
-            printf(" DECNETD-W-REPLYFULL, reply mailbox MBA%u: is full -- an answer"
+            printf(" NETACP-W-REPLYFULL, reply mailbox MBA%u: is full -- an answer"
                    " was dropped (the client is not reading it)\n", (unsigned)reply_unit);
             fflush(stdout);
         }
@@ -1720,11 +1720,11 @@ static void netacp_outbound_release(struct netacp_slot *sl, const char *why)
     char pa[8];
     log_ts(stdout);
     if (sl->inbound_net)
-        printf(" DECNETD-I-SESSEND, inbound FAL link from %s served by process %08X"
+        printf(" NETACP-I-SESSEND, inbound FAL link from %s served by process %08X"
                " ended (%s)\n", dnet_addr_str(sl->peer, pa, sizeof pa),
                (unsigned)sl->owner_pid, why);
     else
-        printf(" DECNETD-I-LINKEND, outbound link to %s (object %d) for process %08X"
+        printf(" NETACP-I-LINKEND, outbound link to %s (object %d) for process %08X"
                " ended (%s)\n", dnet_addr_str(sl->peer, pa, sizeof pa), sl->object,
                (unsigned)sl->owner_pid, why);
     fflush(stdout);
@@ -1778,7 +1778,7 @@ static void netacp_outbound_event(struct netacp_slot *sl, int sock, unsigned ifi
         sl->last_req = now;
         char pa[8];
         log_ts(stdout);
-        printf(" DECNETD-I-LINKOUT, outbound link to %s object %d is RUN for process"
+        printf(" NETACP-I-LINKOUT, outbound link to %s object %d is RUN for process"
                " %08X\n", dnet_addr_str(sl->peer, pa, sizeof pa), sl->object,
                (unsigned)sl->owner_pid);
         fflush(stdout);
@@ -1845,7 +1845,7 @@ static void netacp_accept(struct netacp_slot *slots, int sock, unsigned ifindex,
     if (!sl) {
         netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_ABORT, NULL, 0);
         log_ts(stdout);
-        printf(" DECNETD-W-NOACCEPT, process %08X tried to accept a link that is not"
+        printf(" NETACP-W-NOACCEPT, process %08X tried to accept a link that is not"
                " waiting for it -- refused\n", (unsigned)req->owner_pid);
         fflush(stdout);
         return;
@@ -1874,7 +1874,7 @@ static void netacp_accept(struct netacp_slot *slots, int sock, unsigned ifindex,
     memset(rd, 0, sizeof rd);
     memset(&sl->acc_lb, 0, sizeof sl->acc_lb);
     log_ts(stdout);
-    printf(" DECNETD-I-FALACCEPT, inbound FAL link from %s accepted by FAL.EXE pid %08X"
+    printf(" NETACP-I-FALACCEPT, inbound FAL link from %s accepted by FAL.EXE pid %08X"
            " (SYS$NET) -- Connect Confirm sent\n", dnet_addr_str(sl->peer, pa, sizeof pa),
            (unsigned)sl->owner_pid);
     fflush(stdout);
@@ -1914,7 +1914,7 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
         if (free_i < 0 || mine >= NETACP_MAX_PER_SOURCE) {
             netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_EXQUOTA, NULL, 0);
             log_ts(stdout);
-            printf(" DECNETD-I-LINKREJ, outbound link for process %08X refused (%s)\n",
+            printf(" NETACP-I-LINKREJ, outbound link for process %08X refused (%s)\n",
                    (unsigned)req->owner_pid,
                    free_i < 0 ? "all logical links are in use"
                               : "that process already holds its share of links");
@@ -1957,7 +1957,7 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
         netacp_note_links(slots);
         sl->open_corr = req->corr_id;      /* answered on CC / DI / give-up */
         log_ts(stdout);
-        printf(" DECNETD-I-LINKCI, process %08X: Connect Initiate to %s object %d\n",
+        printf(" NETACP-I-LINKCI, process %08X: Connect Initiate to %s object %d\n",
                (unsigned)req->owner_pid, dnet_addr_str(sl->peer, pa, sizeof pa), obj);
         fflush(stdout);
         netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
@@ -2146,7 +2146,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
             uint32_t tst = dnet_cterm_host_record_origin(&sl->host, &sl->cth.peer.term);
             sl->term_recorded = 1;
             log_ts(stdout);
-            printf(" DECNETD-I-RTATERM, %s takes the originating terminal: device type"
+            printf(" NETACP-I-RTATERM, %s takes the originating terminal: device type"
                    " %u, width %u, page %u (status %08X)\n", sl->host.devnam,
                    (unsigned)sl->cth.peer.term.devtype, (unsigned)sl->cth.peer.term.width,
                    (unsigned)sl->cth.peer.term.page, (unsigned)tst);
@@ -2182,7 +2182,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
     if (!netacp_object_served(obj)) {   /* NETACP's object table (rd vms-2d0) */
         netacp_refuse(&tmp, sock, ifindex, mac, DNET_LINK_REASON_OBJREJ, now);
         log_ts(stdout);
-        printf(" DECNETD-I-CONNREJ, inbound connect from %s to object %d refused"
+        printf(" NETACP-I-CONNREJ, inbound connect from %s to object %d refused"
                " (no such object served here)\n", dnet_addr_str(peer, pa, sizeof pa), obj);
         fflush(stdout);
         return;
@@ -2190,7 +2190,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
     if (free_i < 0 || from_peer >= NETACP_MAX_PER_SOURCE) {
         netacp_refuse(&tmp, sock, ifindex, mac, DNET_LINK_REASON_RESOURCE, now);
         log_ts(stdout);
-        printf(" DECNETD-I-CONNREJ, inbound connect from %s to object %d refused"
+        printf(" NETACP-I-CONNREJ, inbound connect from %s to object %d refused"
                " (%s)\n", dnet_addr_str(peer, pa, sizeof pa), obj,
                free_i < 0 ? "all inbound sessions are in use"
                           : "that node already holds its share of sessions");
@@ -2220,7 +2220,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
             cst = dnet_cterm_host_open_desc(&sl->host, &desc);
         if (!(cst & 1)) {
             netacp_refuse(&sl->lk, sock, ifindex, mac, DNET_LINK_REASON_OBJREJ, now);
-            fprintf(stderr, "DECNETD-E-NOSESSION, inbound SET HOST refused: the session"
+            fprintf(stderr, "NETACP-E-NOSESSION, inbound SET HOST refused: the session"
                     " could not be created (status %08X); no unauthenticated shell is"
                     " substituted\n", (unsigned)cst);
             memset(sl, 0, sizeof *sl);
@@ -2245,7 +2245,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
                           cst == SS$_INVLOGIN ? DNET_LINK_REASON_ACCESS
                                               : DNET_LINK_REASON_OBJREJ, now);
             log_ts(stdout);
-            printf(" DECNETD-I-CONNREJ, inbound MAIL connect from %s refused (status"
+            printf(" NETACP-I-CONNREJ, inbound MAIL connect from %s refused (status"
                    " %08X%s%s) -- no mail is accepted without a MAIL server\n",
                    dnet_addr_str(peer, pa, sizeof pa), (unsigned)cst,
                    sl->fal.fail_stage ? " at " : "",
@@ -2300,7 +2300,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
                           (cst == SS$_INVLOGIN || cst == SS$_NOPRIV)
                               ? DNET_LINK_REASON_ACCESS : DNET_LINK_REASON_OBJREJ, now);
             log_ts(stdout);
-            printf(" DECNETD-I-CONNREJ, inbound FAL connect from %s refused (status"
+            printf(" NETACP-I-CONNREJ, inbound FAL connect from %s refused (status"
                    " %08X) -- no file access without authentication\n",
                    dnet_addr_str(peer, pa, sizeof pa), (unsigned)cst);
             fflush(stdout);
@@ -2313,7 +2313,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
     if (sl->accept_wait) {
         /* FAL: the Connect Confirm goes when FAL.EXE accepts (netacp_accept). */
         log_ts(stdout);
-        printf(" DECNETD-I-FALSTART, inbound FAL access from %s authenticated -- FAL.EXE"
+        printf(" NETACP-I-FALSTART, inbound FAL access from %s authenticated -- FAL.EXE"
                " pid %08X created as UIC [%o,%o]; the link waits for it to accept"
                " (SYS$NET)\n", dnet_addr_str(peer, pa, sizeof pa), (unsigned)sl->owner_pid,
                (unsigned)(sl->fal.uic >> 16), (unsigned)(sl->fal.uic & 0xffff));
@@ -2331,11 +2331,11 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
         netacp_rpi_by_name(&sl->host, peer);
     log_ts(stdout);
     if (obj == DNET_CTERM_OBJECT)
-        printf(" DECNETD-I-SESSTART, inbound SET HOST accepted on %s -- LOGINOUT is"
+        printf(" NETACP-I-SESSTART, inbound SET HOST accepted on %s -- LOGINOUT is"
                " authenticating (Remote Port Info: %s)\n", sl->host.devnam,
                sl->host.remote_port_info);
     else if (obj == DNET_MAIL11_OBJECT)
-        printf(" DECNETD-I-MAILSTART, inbound MAIL from %s accepted -- received by"
+        printf(" NETACP-I-MAILSTART, inbound MAIL from %s accepted -- received by"
                " MAIL_SERVER.EXE pid %08X as UIC [%o,%o]\n",
                dnet_addr_str(peer, pa, sizeof pa), (unsigned)sl->fal.pid,
                (unsigned)(sl->fal.uic >> 16), (unsigned)(sl->fal.uic & 0xffff));
@@ -2373,7 +2373,7 @@ static int netacp_broker_start(uint32_t *chan)
                                           sizeof g_breq_dev);
     if (!(st & 1)) {
         log_ts(stdout);
-        printf(" DECNETD-W-NOBROKER, could not create the _NET: request mailbox"
+        printf(" NETACP-W-NOBROKER, could not create the _NET: request mailbox"
                " (status %08X) -- outbound links are not offered\n", (unsigned)st);
         fflush(stdout);
         *chan = 0;
@@ -2386,14 +2386,14 @@ static int netacp_broker_start(uint32_t *chan)
         (void)vms_kif_mbx_delmbx(*chan);
         (void)vms_kif_dassgn(*chan);
         log_ts(stdout);
-        printf(" DECNETD-W-NOBROKER, could not publish %s (status %08X) -- outbound"
+        printf(" NETACP-W-NOBROKER, could not publish %s (status %08X) -- outbound"
                " links are not offered\n", NETACP_REQ_LOGNAM, (unsigned)st);
         fflush(stdout);
         *chan = 0;
         return 0;
     }
     log_ts(stdout);
-    printf(" DECNETD-I-BROKER, outbound logical links are brokered for local"
+    printf(" NETACP-I-BROKER, outbound logical links are brokered for local"
            " processes ($ASSIGN _NET:): request mailbox %s = %s; up to %d links"
            " in the pool, %d per process\n", dev, NETACP_REQ_LOGNAM,
            NETACP_MAX_SESSIONS, NETACP_MAX_PER_SOURCE);
@@ -2529,7 +2529,7 @@ static int netacp_req_post(void)
     g_req_posted = (st & 1) ? 1 : 0;
     if (!g_req_posted) {
         log_ts(stdout);
-        printf(" DECNETD-W-REQQIO, $QIO read of the request mailbox %s failed"
+        printf(" NETACP-W-REQQIO, $QIO read of the request mailbox %s failed"
                " (status %08X); requests are taken on the timer\n", g_breq_dev,
                (unsigned)st);
         fflush(stdout);
@@ -2545,7 +2545,7 @@ static int netacp_req_arm(void)
     uint32_t st = sys$assign(&d, &g_req_qchan, 0, NULL, 0);
     if (!(st & 1)) {
         log_ts(stdout);
-        printf(" DECNETD-W-REQASSIGN, $ASSIGN %s failed (status %08X); requests"
+        printf(" NETACP-W-REQASSIGN, $ASSIGN %s failed (status %08X); requests"
                " are taken on the timer\n", g_breq_dev, (unsigned)st);
         fflush(stdout);
         g_req_qchan = 0;
@@ -2588,7 +2588,7 @@ static int netacp_wait_ms(unsigned ms)
     uint32_t st = sys$setimr(NETACP_EFN_TMR, &dt, NULL, NETACP_TMR_REQIDT, 0);
     if (!(st & 1)) {
         log_ts(stderr);
-        fprintf(stderr, " DECNETD-F-SETIMR, $SETIMR failed (status %08X); NETACP"
+        fprintf(stderr, " NETACP-F-SETIMR, $SETIMR failed (status %08X); NETACP"
                         " cannot keep its timers and stops\n", (unsigned)st);
         return -1;
     }
@@ -2655,7 +2655,7 @@ struct netacp_cfg {
 static void netacp_cfg_default(struct netacp_cfg *c)
 {
     memset(c, 0, sizeof *c);
-    c->ifname = DECNETD_DEFAULT_IFACE;
+    c->ifname = NETACP_DEFAULT_IFACE;
     c->name = "OVMX";
     /* Device-native naming (vms-47d): NETACP's datalink rides the primary NIC,
      * which the executive enters as ETH0: (src/kernel-core/vms_devtab.c
@@ -2711,7 +2711,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
      * datalink or touches its session pool. (Diagnostic runs with flags --
      * --iface lab runs, --show-executor -- are not NETACPs and are unaffected.) */
     if (cfg->detached && netacp_live() == 1) {
-        fprintf(stderr, "DECNETD-E-NETACPACT, a NETACP is already serving this node"
+        fprintf(stderr, "NETACP-E-NETACPACT, a NETACP is already serving this node"
                         " (%s names its live request mailbox); a node runs one"
                         " NETACP -- this process is not starting a second\n",
                 NETACP_REQ_LOGNAM);
@@ -2730,8 +2730,8 @@ static int netacp_run(const struct netacp_cfg *cfg)
     /* rd vms-d3cd: the executive build names the LAN UNIT, never a host
      * interface it would have to enumerate: ETH0: is the executive's own
      * record of the primary NIC, the one _NET: rides. */
-    if (!ifname_explicit && decnetd_executive_datalink()) {
-        ifname = DECNETD_LAN_UNIT;
+    if (!ifname_explicit && netacp_executive_datalink()) {
+        ifname = NETACP_LAN_UNIT;
     } else if (!ifname_explicit && decnet_autodetect_iface(ifname_auto, sizeof(ifname_auto))) {
         ifname = ifname_auto;
         ifname_detected = 1;
@@ -2775,12 +2775,12 @@ static int netacp_run(const struct netacp_cfg *cfg)
          * An EXPLICIT invocation (any flag: --set-host, --show-executor, --router,
          * ...) with no resolvable address is still the caller's error below. */
         if (cfg->detached) {
-            printf("DECNETD-I-NOCONFIG, DECnet is not configured on this node"
+            printf("NETACP-I-NOCONFIG, DECnet is not configured on this node"
                    " (no executor address); NETACP not started\n");
             fflush(stdout);
             return 0;
         }
-        fprintf(stderr, "DECNETD-E-NOADDRESS, a valid --address AREA.NODE is"
+        fprintf(stderr, "NETACP-E-NOADDRESS, a valid --address AREA.NODE is"
                         " required (1..63 . 1..1023); refusing to invent an"
                         " executor address\n");
         return 1;
@@ -2791,12 +2791,12 @@ static int netacp_run(const struct netacp_cfg *cfg)
 
     /* --priority is only meaningful in --router mode, and is a single wire byte. */
     if (router_priority < 0 || router_priority > 255) {
-        fprintf(stderr, "DECNETD-E-BADPRIO, --priority must be 0..255 (DR-election"
+        fprintf(stderr, "NETACP-E-BADPRIO, --priority must be 0..255 (DR-election"
                         " priority); got %d\n", router_priority);
         return 1;
     }
     if (router_priority && !router_mode) {
-        fprintf(stderr, "DECNETD-E-BADPRIO, --priority requires --router\n");
+        fprintf(stderr, "NETACP-E-BADPRIO, --priority requires --router\n");
         return 1;
     }
 
@@ -2808,7 +2808,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
         uint8_t zmac[6] = {0};
         if (dnet_engine_init(&e, area, node, name, device, circuit, zmac,
                              (uint16_t)hello_interval, 0, monotonic_sec()) != 0) {
-            fprintf(stderr, "DECNETD-E-INIT, engine init failed\n");
+            fprintf(stderr, "NETACP-E-INIT, engine init failed\n");
             return 1;
         }
         if (router_mode)
@@ -2827,7 +2827,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
          * no socket is opened here. */
         printf("Datalink interface = %s%s\n", ifname,
                ifname_explicit ? " (--iface)"
-               : decnetd_is_vms_devnam(ifname) ? " (the executive's LAN unit)"
+               : netacp_is_vms_devnam(ifname) ? " (the executive's LAN unit)"
                : ifname_detected ? " (auto-detected primary NIC)"
                : " (compiled default; no usable NIC detected)");
         /* Which raw-L2 path this binary was BUILT with (rd vms-1f69) -- a
@@ -2872,11 +2872,11 @@ static int netacp_run(const struct netacp_cfg *cfg)
               : vst                    ? "the executive refused the datalink"
                                        : strerror(e);
             fprintf(stderr,
-                    "DECNETD-E-NOSOCKET, executive datalink open on '%s'"
+                    "NETACP-E-NOSOCKET, executive datalink open on '%s'"
                     " (ethertype 0x%04x) failed: %s (status %%X%08X)\n",
                     ifname, (unsigned)DNET_ETHERTYPE, why, (unsigned)vst);
             if (scs_datalink_last_stv())
-                fprintf(stderr, "-DECNETD-I-HOSTERR, the executive's datalink"
+                fprintf(stderr, "-NETACP-I-HOSTERR, the executive's datalink"
                         " backend returned host errno %u\n",
                         (unsigned)scs_datalink_last_stv());
             /* Say WHOSE privileges the executive judged: this process's own
@@ -2887,14 +2887,14 @@ static int netacp_run(const struct netacp_cfg *cfg)
             memset(&me, 0, sizeof(me));
             if (vms_kif_getjpi_self(&me) & 1)
                 fprintf(stderr,
-                        "-DECNETD-I-PROCPRIV, executive row pid %08X user %.12s"
+                        "-NETACP-I-PROCPRIV, executive row pid %08X user %.12s"
                         " curpriv %016llX (PHY_IO %s)\n",
                         (unsigned)me.vms_pid, me.username,
                         (unsigned long long)me.cur_privs,
                         (me.cur_privs & (1ULL << 22)) ? "held" : "NOT held");
         } else {
             fprintf(stderr,
-                    "DECNETD-E-NOSOCKET, %s datalink open on '%s' (0x%04x)"
+                    "NETACP-E-NOSOCKET, %s datalink open on '%s' (0x%04x)"
                     " failed: %s\n"
                     "  (the AF_PACKET probe needs CAP_NET_RAW -- a host/lab"
                     " instrument; the booted runtime builds the executive"
@@ -2905,7 +2905,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
         return 1;
     }
     log_ts(stdout);
-    printf(" DECNETD-I-DATALINK, datalink open on %s via the %s"
+    printf(" NETACP-I-DATALINK, datalink open on %s via the %s"
            " (%s), station address %02X-%02X-%02X-%02X-%02X-%02X\n",
            ifname, scs_datalink_backend(),
            strcmp(scs_datalink_backend(), "executive") == 0
@@ -2922,28 +2922,28 @@ static int netacp_run(const struct netacp_cfg *cfg)
      * interface lookup. The probe build keeps its host lookups. */
     unsigned ifindex = 0;
     uint8_t hw_mac[6] = {0};
-    if (decnetd_executive_datalink()) {
+    if (netacp_executive_datalink()) {
         int xi = scs_datalink_ifindex(sock);
         ifindex = xi > 0 ? (unsigned)xi : 0;
         if (ifindex == 0) {
-            fprintf(stderr, "DECNETD-E-NOIFACE, the executive answered no interface"
+            fprintf(stderr, "NETACP-E-NOIFACE, the executive answered no interface"
                             " for '%s'\n", ifname);
             scs_datalink_close(sock);
             return 1;
         }
-        if (decnetd_is_vms_devnam(ifname)) {
-            uint32_t hst = decnetd_lan_sense_hwaddr(hw_mac);
+        if (netacp_is_vms_devnam(ifname)) {
+            uint32_t hst = netacp_lan_sense_hwaddr(hw_mac);
             if (!(hst & 1)) {
                 char why[128] = "";
                 (void)vms_status_string(hst, why, sizeof why);
-                fprintf(stderr, "DECNETD-E-NOHWADDR, $QIO IO$_SENSEMODE of %s"
+                fprintf(stderr, "NETACP-E-NOHWADDR, $QIO IO$_SENSEMODE of %s"
                                 " failed: %s (status %%X%08X)\n", ifname,
                         why, (unsigned)hst);
                 scs_datalink_close(sock);
                 return 1;
             }
         } else if (scs_datalink_open_hwaddr(sock, hw_mac) != 0) {
-            fprintf(stderr, "DECNETD-E-NOHWADDR, the executive answered no HW"
+            fprintf(stderr, "NETACP-E-NOHWADDR, the executive answered no HW"
                             " address for '%s'\n", ifname);
             scs_datalink_close(sock);
             return 1;
@@ -2951,13 +2951,13 @@ static int netacp_run(const struct netacp_cfg *cfg)
     } else {
         ifindex = if_nametoindex(ifname);
         if (ifindex == 0) {
-            fprintf(stderr, "DECNETD-E-NOIFACE, unknown interface '%s': %s\n",
+            fprintf(stderr, "NETACP-E-NOIFACE, unknown interface '%s': %s\n",
                     ifname, strerror(errno));
             scs_datalink_close(sock);
             return 1;
         }
         if (scs_datalink_get_hwaddr(ifname, hw_mac) != 0) {
-            fprintf(stderr, "DECNETD-E-NOHWADDR, cannot read HW address of '%s': %s\n",
+            fprintf(stderr, "NETACP-E-NOHWADDR, cannot read HW address of '%s': %s\n",
                     ifname, strerror(errno));
             scs_datalink_close(sock);
             return 1;
@@ -2966,7 +2966,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
     /* Wake the receive loop about once a second so the T3 cadence and the
      * listen-timer sweep still fire on an idle wire (as scsd does). */
     if (scs_datalink_set_recv_timeout(sock, 1) < 0) {
-        fprintf(stderr, "DECNETD-E-RCVTIMEO, set_recv_timeout failed: %s\n",
+        fprintf(stderr, "NETACP-E-RCVTIMEO, set_recv_timeout failed: %s\n",
                 strerror(errno));
         scs_datalink_close(sock);
         return 1;
@@ -2975,7 +2975,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
     struct dnet_engine eng;
     if (dnet_engine_init(&eng, area, node, name, device, circuit, hw_mac,
                          (uint16_t)hello_interval, 0, monotonic_sec()) != 0) {
-        fprintf(stderr, "DECNETD-E-INIT, engine init failed\n");
+        fprintf(stderr, "NETACP-E-INIT, engine init failed\n");
         scs_datalink_close(sock);
         return 1;
     }
@@ -2998,7 +2998,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
      * hidden behind the executive device face _NET: (Rule 1, vms-515 §3.3). */
     g_netacp_circuit_on = 1;     /* the datalink socket is bound (SHOW KNOWN CIRCUITS) */
     log_ts(stdout);
-    printf(" DECNETD-I-STARTED, NETACP up: DECnet Phase IV %s on circuit %s"
+    printf(" NETACP-I-STARTED, NETACP up: DECnet Phase IV %s on circuit %s"
            " (wire engine demoted to NETACP's datalink; the raw L2 path hidden"
            " behind the _NET: device face, Rule 1)\n",
            router_mode ? "L1 router" : "endnode", eng.circuit);
@@ -3016,19 +3016,19 @@ static int netacp_run(const struct netacp_cfg *cfg)
         g_netacp_max_links = netacp_pool_size(&ex, &clamped);
         if (clamped) {
             log_ts(stdout);
-            printf(" DECNETD-W-MAXLINKS, executor MAXIMUM LINKS %u exceeds this NETACP's"
+            printf(" NETACP-W-MAXLINKS, executor MAXIMUM LINKS %u exceeds this NETACP's"
                    " %d session slots; serving %d\n", dnet_executor_max_links(&ex),
                    NETACP_POOL_CAP, NETACP_POOL_CAP);
         }
     }
     log_ts(stdout);
     if (cterm_server)
-        printf(" DECNETD-I-CTERMLISTEN, serving inbound $ SET HOST (Session"
+        printf(" NETACP-I-CTERMLISTEN, serving inbound $ SET HOST (Session"
                " Control object 42 -> LOGINOUT on RTAn:) and file access (object"
                " 17 -> FAL.EXE as the user); up to %d sessions, %d per node\n",
                NETACP_MAX_SESSIONS, NETACP_MAX_PER_SOURCE);
     else
-        printf(" DECNETD-I-ROUTEONLY, NOT serving inbound $ SET HOST"
+        printf(" NETACP-I-ROUTEONLY, NOT serving inbound $ SET HOST"
                " (routing only)\n");
     fflush(stdout);
 
@@ -3085,7 +3085,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
                                                  DNET_ETHERTYPE, mcast,
                                                  frame, flen);
                 if (sent < 0) {
-                    fprintf(stderr, "DECNETD-E-SENDFAIL, HELLO transmit failed: %s\n",
+                    fprintf(stderr, "NETACP-E-SENDFAIL, HELLO transmit failed: %s\n",
                             strerror(errno));
                 } else {
                     if (is_router)
@@ -3100,7 +3100,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
                      * still reports each hello it sends. */
                     if (!cfg->detached) {
                         log_ts(stdout);
-                        printf(" DECNETD-I-HELLOSENT, %s circuit %s seq=%lu bytes=%zd\n",
+                        printf(" NETACP-I-HELLOSENT, %s circuit %s seq=%lu bytes=%zd\n",
                                is_router ? "router-hello" : "endnode-hello",
                                eng.circuit,
                                is_router ? eng.router_hello_sent : eng.hello_sent, sent);
@@ -3114,7 +3114,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
         int gone = dnet_engine_tick(&eng, now);
         if (gone > 0) {
             log_ts(stdout);
-            printf(" DECNETD-I-ADJDOWN, %d adjacency(ies) timed out on circuit %s\n",
+            printf(" NETACP-I-ADJDOWN, %d adjacency(ies) timed out on circuit %s\n",
                    gone, eng.circuit);
             fflush(stdout);
         }
@@ -3134,7 +3134,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
             if (n < 0) {
                 if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
                     break;                       /* nothing (more) waiting */
-                fprintf(stderr, "DECNETD-E-RECVFAIL, recv failed: %s\n", strerror(errno));
+                fprintf(stderr, "NETACP-E-RECVFAIL, recv failed: %s\n", strerror(errno));
                 rx_fatal = 1;
                 break;
             }
@@ -3160,11 +3160,11 @@ static int netacp_run(const struct netacp_cfg *cfg)
                 uint16_t na = dnet_addr_from_id(from);
                 if (st == DNET_ADJ_UP) {
                     log_ts(stdout);
-                    printf(" DECNETD-I-ADJUP, adjacency to %s is up on circuit %s\n",
+                    printf(" NETACP-I-ADJUP, adjacency to %s is up on circuit %s\n",
                            dnet_addr_str(na, afrom, sizeof(afrom)), eng.circuit);
                 } else {
                     log_ts(stdout);
-                    printf(" DECNETD-I-ADJINIT, heard %s (%s) on circuit %s\n",
+                    printf(" NETACP-I-ADJINIT, heard %s (%s) on circuit %s\n",
                            dnet_addr_str(na, afrom, sizeof(afrom)),
                            st == DNET_ADJ_INITIALIZING ? "initializing" : "?",
                            eng.circuit);
@@ -3195,9 +3195,9 @@ static int netacp_run(const struct netacp_cfg *cfg)
         netacp_broker_stop(breq_chan);
 
     log_ts(stdout);
-    printf(" DECNETD-I-STOPPING, shutting down circuit %s\n", eng.circuit);
+    printf(" NETACP-I-STOPPING, shutting down circuit %s\n", eng.circuit);
     netacp_log_report(stdout, dnet_engine_show_adjacent, &eng);
-    printf("DECNETD-I-COUNTERS, hello_sent=%lu hello_recv=%lu frames_recv=%lu"
+    printf("NETACP-I-COUNTERS, hello_sent=%lu hello_recv=%lu frames_recv=%lu"
            " frames_dropped=%lu adj_up=%lu adj_down=%lu\n",
            eng.hello_sent, eng.hello_recv, eng.frames_recv, eng.frames_dropped,
            eng.adj_up_events, eng.adj_down_events);

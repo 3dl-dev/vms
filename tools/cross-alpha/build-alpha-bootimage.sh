@@ -220,11 +220,11 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # Core boot + login chain images (all EM_ALPHA static EXEC -- the Alpha
     # cross-build produces no VMS-native LINK.EXE graph, see build log
     # "OVMX_LINK_NATIVE off ... alpha-linux-gnu is not aarch64/x86_64-musl").
-    # DECNETD.EXE (rd vms-c1f/vms-f40): the DECnet Phase IV endnode -- staged
+    # NETACP.EXE (rd vms-c1f/vms-f40): the DECnet Phase IV endnode -- staged
     # here (not started; no startup procedure runs it) so the shared DCL/SHOW
     # acceptance battery DECnet CTERM section hard-gates on this rail the same
     # way it does on x86_64/VAX. Alpha is Linux-ABI and this is an OVMX_STATIC
-    # build, so its DECNETD.EXE links the libdatalink EXECUTIVE backend (the raw
+    # build, so its NETACP.EXE links the libdatalink EXECUTIVE backend (the raw
     # L2 wire through /dev/vms VMS_IOCTL_L2_*, PHY_IO-gated; rd vms-1f69) exactly
     # as the x86_64 booted image does, not the NetBSD bpf(4) one VAX needs.
     # (No apostrophes in this block -- it
@@ -232,7 +232,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     for e in PROVISION.EXE JOB_CONTROL.EXE LOGINOUT.EXE DCL.EXE HELP.EXE \
              AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE \
              SYSGEN.EXE PRODUCT.EXE LIBRARIAN.EXE ANALYZE.EXE \
-             SYSMAN.EXE DECNETD.EXE NETACP.EXE FAL.EXE MAIL_SERVER.EXE NCP.EXE RTPAD.EXE ROOTAUDIT.EXE \
+             SYSMAN.EXE NETACP.EXE FAL.EXE MAIL_SERVER.EXE NCP.EXE RTPAD.EXE ROOTAUDIT.EXE \
              OPCOM.EXE; do
         [ -f "$BIN/$e" ] && cp "$BIN/$e" "$SYSEXE/" || echo "   (no $e)"
     done
@@ -504,10 +504,10 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # IMGACT.EXE + JOB_CONTROL.EXE included: the boot-image staging bridge
     # (ovmx_init.c stage_boot_images) requires all five first-hop images on the
     # volume, so verify them here rather than discover a miss only at boot.
-    # DECNETD.EXE (rd vms-c1f) is in the same gate: the DCL acceptance
+    # NETACP.EXE (rd vms-c1f) is in the same gate: the DCL acceptance
     # battery DECnet CTERM section hard-gates on it, so a staging regression
     # that drops it off this rail volume must fail HERE too.
-    for name in IMGACT.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE SYSUAF.DAT DECNETD.EXE NETACP.EXE OPCOM.EXE; do
+    for name in IMGACT.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE SYSUAF.DAT NETACP.EXE OPCOM.EXE; do
         grep -qi "$name" /work/distrib-list.txt \
             || { echo "FAIL: mastered ODS-2 image missing SYS\$SYSTEM:$name"; exit 1; }
         echo "   OK: ovmx-distrib-alpha.img (ODS-2) carries SYS\$SYSTEM:$name"

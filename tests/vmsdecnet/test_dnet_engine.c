@@ -14,7 +14,7 @@
  *      DOWN -> INITIALIZING -> UP, then ages to DOWN when the listen timer
  *      lapses. This is the datalink + HELLO tx/rx + adjacency-drive done end to
  *      end through the same build_hello_frame -> wire -> rx_frame path the live
- *      AF_PACKET daemon uses (decnetd.c), without needing CAP_NET_RAW.
+ *      AF_PACKET daemon uses (netacp.c), without needing CAP_NET_RAW.
  *   3. HONEST DROPS: an own-multicast echo (src == my id) and a wrong-ethertype
  *      frame are both ignored and counted, never faked as an adjacency.
  *   4. The VMS-faithful surface (SHOW ADJACENT NODES) lists the neighbour.

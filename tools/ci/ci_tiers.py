@@ -195,7 +195,7 @@ TIERS = {
     # Full-memory VAX DCL/SHOW battery (ci-vax vax-dcl-acceptance, rd vms-365):
     # the 16 MB leg (`vax_boot`) stops after login, so a battery check is run
     # ONLY by this job. #1940 changed the battery's RUN/DETACHED [vms-365] check
-    # and DECNETD together and reached main untested on the VAX. In the queue
+    # and NETACP together and reached main untested on the VAX. In the queue
     # when the battery, its VAX driver, the goldens it diffs, or the DECnet /
     # NETACP sources the battery's DECnet checks exercise are touched.
     "vax_acceptance": [
@@ -210,7 +210,7 @@ TIERS = {
         "tests/lab-vax/run-boot.sh",
         "tests/lab-vax/test_dcl_acceptance_vax.sh",
         "tests/lab-vax/drive_boot_vax.py",
-        # DECnet / NETACP (DECNETD, NCP, the NET: device) and its startup
+        # DECnet (NETACP, NCP, the NET: device) and its startup
         "src/vmsdecnet/**",
         "distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/STARTNET.COM",
         # the NetBSD executive's own glue (its $QIO terminal write, rd vms-1b6a):

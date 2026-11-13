@@ -4,9 +4,9 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "the booted NETACP (NETACP.EXE) sleeps the VMS way -- \$SETIMR + \$WFLOR on its timer flag and its async \$QIO request read -- never a Linux poll() (decnetd.c netacp_wait_ms, rd vms-0a7 S3)";;
-        targets)      echo "vmsdecnet/engine/decnetd.c";;
-        suites_red)   echo "test_syssvc_decnetd_syscall_audit";;
+        facility)     echo "the booted NETACP (NETACP.EXE) sleeps the VMS way -- \$SETIMR + \$WFLOR on its timer flag and its async \$QIO request read -- never a Linux poll() (netacp.c netacp_wait_ms, rd vms-0a7 S3)";;
+        targets)      echo "vmsdecnet/engine/netacp.c";;
+        suites_red)   echo "test_syssvc_netacp_syscall_audit";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;

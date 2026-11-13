@@ -12,7 +12,7 @@ add_test(NAME vmsdecnet_nsp_unit COMMAND test_dnet_nsp)
 # establish (CI/CC), run (data segment + ack), and tear down (DI/DC); a fresh CI
 # retransmits and abandons as UNREACHABLE after the oracle-informed budget; and
 # two ENGINES open a link + move a data segment over a real socketpair(2)
-# exercising the full build_data_frame -> wire -> link_rx path DECNETD uses.
+# exercising the full build_data_frame -> wire -> link_rx path NETACP uses.
 add_executable(test_dnet_link test_dnet_link.c)
 target_link_libraries(test_dnet_link PRIVATE vmsdecnet_engine)
 target_compile_options(test_dnet_link PRIVATE -Werror)
@@ -148,7 +148,7 @@ target_include_directories(test_l2_ring PRIVATE ${CMAKE_SOURCE_DIR}/src/kernel-c
 target_compile_options(test_l2_ring PRIVATE -Werror)
 add_test(NAME vmsdecnet_l2_ring_unit COMMAND test_l2_ring)
 
-# rd vms-1f69: the EXECUTIVE datalink backend the booted DECNETD links
+# rd vms-1f69: the EXECUTIVE datalink backend the booted NETACP links
 # (ovmx_datalink_exec): names itself, and with no /dev/vms fails honestly with
 # no AF_PACKET fallback compiled in.
 if(TARGET ovmx_datalink_exec)
@@ -291,7 +291,7 @@ endif()
 add_test(NAME vmsdecnet_routing_fuzz_unit COMMAND test_dnet_routing_fuzz)
 
 # rd vms-0a9: isolation proof of the DECnet router run-mode EMIT path -- the
-# spec-faithful router-hello DECNETD emits in --router mode. Complements the
+# spec-faithful router-hello NETACP emits in --router mode. Complements the
 # routing_fuzz RECEIVE-path proof above: it round-trips the emitted bytes,
 # asserts the emitted node-type says "router", drives an OVMX endnode's
 # DR-selection with those bytes (the endnode names the router in its rtr field),
@@ -318,39 +318,39 @@ add_test(NAME vmsdecnet_router_emit_fuzz_unit COMMAND test_dnet_router_emit_fuzz
 # Runs the test image's --show-executor on the host (the same netacp_run the
 # shipped NETACP.EXE runs) -- no socket, no /dev/vms, no privilege.
 add_test(NAME vmsdecnet_startnet_gate
-         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_decnetd_startnet_gate.sh)
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_netacp_startnet_gate.sh)
 set_tests_properties(vmsdecnet_startnet_gate PROPERTIES
-    ENVIRONMENT "DECNETD_EXE=$<TARGET_FILE:netacp_test_exe>")
+    ENVIRONMENT "NETACP_EXE=$<TARGET_FILE:netacp_test_exe>")
 
 # ---------------------------------------------------------------------------
 # NETACP_TEST.EXE (rd vms-0a7 S3): every DECnet self-test and lab mode that
-# DECNETD.EXE used to carry behind argv flags. It compiles the shipped
-# src/vmsdecnet/engine/decnetd.c itself (netacp_test.c #includes it, with no
+# NETACP.EXE used to carry behind argv flags. It compiles the shipped
+# src/vmsdecnet/engine/netacp.c itself (netacp_test.c #includes it, with no
 # image entry defined) and links the same libraries as NETACP.EXE, so each test
 # drives the real NETACP code. The test-only peers are threads: Threads here,
 # never in NETACP.EXE. Staged for the QEMU battery / boot e2e on a scratch test
 # volume, not the system disk.
 add_executable(netacp_test_exe netacp_test.c
-               ${CMAKE_SOURCE_DIR}/src/vmsdecnet/engine/decnetd_rms_bind.c)
+               ${CMAKE_SOURCE_DIR}/src/vmsdecnet/engine/netacp_rms_bind.c)
 target_include_directories(netacp_test_exe PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsdecnet/engine ${_netacp_includes})
 find_package(Threads REQUIRED)
 target_link_libraries(netacp_test_exe PRIVATE ${_netacp_libs} Threads::Threads)
 set_target_properties(netacp_test_exe PROPERTIES OUTPUT_NAME "NETACP_TEST" SUFFIX ".EXE")
 
-add_test(NAME decnetd_sethost_src_codes
+add_test(NAME netacp_sethost_src_codes
          COMMAND netacp_test_exe --set-host-src-codes-selftest)
 # rd vms-ea8/vms-6a4: the OUTBOUND $ COPY command layer floor -- copy_plan
 # direction/creds/spec derivation (GET + PUT) and the parsed creds driving a
 # real object-17 connect refused without auth, both directions. No executive.
-add_test(NAME decnetd_copy_selftest
+add_test(NAME netacp_copy_selftest
          COMMAND netacp_test_exe --copy-selftest)
 # rd vms-dda: the TASK-TO-TASK client host floor -- open a logical link by NAME
 # (format-1 NAMED descriptor, NODE::"TASK=x"), the passive side decodes the
 # name, a request + reply move BOTH directions byte-verified, then disconnect.
 # The generic-object addressing + bidirectional pump the _NET: $QIO broker
 # (Option 1, NETACP-brokered) will expose. No executive.
-add_test(NAME decnetd_task_selftest
+add_test(NAME netacp_task_selftest
          COMMAND netacp_test_exe --task-selftest)
 # rd vms-22c (a1-2): the exec<->NETACP T1 broker record codec floor -- request/
 # response round-trip, bounds-validated decode (200k-mutation + truncated-prefix
@@ -359,16 +359,16 @@ add_test(NAME decnetd_task_selftest
 # rd vms-22c (a1-2): the NCB connect-block parser floor -- NODE::"TASK=name"
 # -> {node, task/object}, bounds-safe refusal of malformed input, fuzzed. A
 # spec-derived LOCAL API parser (never a wire field); no executive.
-add_test(NAME decnetd_net_ncb_selftest
+add_test(NAME netacp_net_ncb_selftest
          COMMAND netacp_test_exe --net-ncb-selftest)
-add_test(NAME decnetd_net_broker_selftest
+add_test(NAME netacp_net_broker_selftest
          COMMAND netacp_test_exe --net-broker-selftest)
 # rd vms-22c (a1-2 integration): the NETACP broker SERVICE DISPATCH floor --
 # dnet_broker_serve driving OPEN/SEND/RECV/CLOSE against the NSP link engine
 # over a socketpair, correlation-matched, with honest never-crash refusals
 # (unknown op, too-short OPEN). No executive; the mailbox $CREMBX seam +
 # qio_net_op marshalling + the IO$M_NOW serve loop build on it.
-add_test(NAME decnetd_net_service_selftest
+add_test(NAME netacp_net_service_selftest
          COMMAND netacp_test_exe --net-service-selftest)
 # rd vms-dda: OUTBOUND links brokered through NETACP -- the host floor. A real
 # NETACP pool serves clients that reach it ONLY through broker records
@@ -379,9 +379,9 @@ add_test(NAME decnetd_net_service_selftest
 # (0::), per-process share + full-pool refusals (EXQUOTA), handle-ownership
 # and correlation-id refusals, a silent NETACP (DEVOFFLINE). No executive;
 # the booted $QIO _NET: proof is --net-loopback-accept-test in the battery.
-add_test(NAME decnetd_netacp_broker_selftest
+add_test(NAME netacp_broker_selftest
          COMMAND netacp_test_exe --netacp-broker-selftest)
-set_tests_properties(decnetd_netacp_broker_selftest PROPERTIES TIMEOUT 120)
+set_tests_properties(netacp_broker_selftest PROPERTIES TIMEOUT 120)
 # rd vms-30e: NCP SHOW / DCL SHOW NETWORK read the RUNNING NETACP -- the host
 # floor. The snapshot record codec (round-trip, every truncated prefix,
 # over-bound counts/strings, control bytes, 200k mutations); a real NETACP
@@ -391,7 +391,7 @@ set_tests_properties(decnetd_netacp_broker_selftest PROPERTIES TIMEOUT 120)
 # paging, BADPARAM / BUFFEROVF / DEVOFFLINE); and the formatters diffed line
 # for line against the real OpenVMS VAX V7.3 transcripts in
 # docs/oracle/vax-ncp-show (timestamps normalized). No executive.
-add_test(NAME decnetd_netacp_show_selftest
+add_test(NAME netacp_show_selftest
          COMMAND netacp_test_exe --netacp-show-selftest
                  --oracle-dir ${CMAKE_SOURCE_DIR}/docs/oracle/vax-ncp-show)
 # rd vms-ea8: the OUTBOUND $ COPY client transport PUMP floor -- copy_client_run
@@ -399,7 +399,7 @@ add_test(NAME decnetd_netacp_show_selftest
 # link-service + a DAP session over the copy_wire transport against a threaded
 # test-double server; an honest miss round-trips end to end. No executive (the
 # authenticated byte-verified transfer is --copy-accept-test in the battery).
-add_test(NAME decnetd_copy_transport_selftest
+add_test(NAME netacp_copy_transport_selftest
          COMMAND netacp_test_exe --copy-transport-selftest)
 
 # rd vms-0a7 S3 gates. (a) the libc thread/wait/pipe ratchet: src/vmsdecnet has

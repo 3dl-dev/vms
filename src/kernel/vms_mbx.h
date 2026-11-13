@@ -219,7 +219,7 @@ struct vms_mbx_chkacc_args {
  * Userspace built for NetBSD (libvmssys vms_kif.c) must issue THAT command
  * word -- with the Linux _IOWR word the driver answers ENOTTY, which surfaced
  * as SS$_ILLIOFUNC on every $QIO mailbox write/read from an OVMX image on VAX
- * (rd vms-bb7: DECNETD --net-mbx-selftest red on the NetBSD/vax battery). The
+ * (rd vms-bb7: NETACP_TEST.EXE --net-mbx-selftest red on the NetBSD/vax battery). The
  * NR bytes and the struct are identical; only the size/direction bits differ. */
 #define VMS_IOCTL_MBX_WRITE   _IO(VMS_IOC_MAGIC, 0x72)
 #define VMS_IOCTL_MBX_READ    _IO(VMS_IOC_MAGIC, 0x73)

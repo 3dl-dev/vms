@@ -1,16 +1,16 @@
 /*
  * netacp_test.c - NETACP_TEST.EXE, the DECnet test image (rd vms-0a7 S3).
  *
- * Every self-test and lab mode DECNETD.EXE used to carry behind argv flags
+ * Every self-test and lab mode NETACP.EXE used to carry behind argv flags
  * (--fal-selftest, --fal-accept-test, --fal-proc-accept-test,
  * --copy-accept-test, --copy-transport-selftest, --netacp-broker-selftest,
  * --net-loopback-accept-test, the codec/broker/show floors, and the
  * --address/--iface/--router lab run). None of it ships: the shipped
- * SYS$SYSTEM:NETACP.EXE takes no command line (decnetd.c NETACP_IMAGE) and
+ * SYS$SYSTEM:NETACP.EXE takes no command line (netacp.c NETACP_IMAGE) and
  * contains no self-test, thread, poll() or pipe.
  *
  * It is linked against the same libraries as NETACP.EXE and compiles the SAME
- * source -- it includes src/vmsdecnet/engine/decnetd.c, so each self-test
+ * source -- it includes src/vmsdecnet/engine/netacp.c, so each self-test
  * drives the real NETACP pool, broker and dispatch code (their statics), not a
  * copy. Host ctest runs it directly; the QEMU battery and the STARTNET boot
  * e2e run it from a scratch test volume (never the system disk).
@@ -19,7 +19,7 @@
  * the in-process NETACP of the loopback proof) still run as threads HERE: a
  * test harness, not OVMX code (the libc ratchet covers src/, not tests/).
  */
-#include "decnetd.c"
+#include "netacp.c"
 
 /* Helpers only the self-tests use (the shipped NETACP.EXE serves; it opens no
  * one-link client of its own -- RTPAD.EXE and RMS do that over _NET:). */
@@ -35,14 +35,14 @@ static uint16_t dnet_client_lla(void)
  * WAITING THE VMS WAY (rd vms-d3cd): a timer event flag ($SETIMR + $WAITFR),
  * never nanosleep/poll on a host descriptor.
  */
-#define DECNETD_WAIT_EFN 22u    /* a local event flag (1..23 are the image's) */
+#define NETACP_WAIT_EFN 22u    /* a local event flag (1..23 are the image's) */
 
-static void decnetd_wait_ms(unsigned ms)
+static void netacp_test_wait_ms(unsigned ms)
 {
     /* a VMS delta time: negative, in 100 ns units */
     uint64_t delta = (uint64_t)(-(int64_t)ms * 10000);
-    if (sys$setimr(DECNETD_WAIT_EFN, &delta, NULL, 0, 0) & 1)
-        (void)sys$waitfr(DECNETD_WAIT_EFN);
+    if (sys$setimr(NETACP_WAIT_EFN, &delta, NULL, 0, 0) & 1)
+        (void)sys$waitfr(NETACP_WAIT_EFN);
 }
 
 /*
@@ -120,7 +120,7 @@ static int netcli_assign(struct netcli *c)
     sethost_mkdesc(&d, "_NET:");
     uint32_t st = sys$assign(&d, &c->chan, 0, NULL);
     if (!(st & 1)) {
-        fprintf(stderr, "DECNETD-E-NONET, $ASSIGN _NET: failed (status %08X) -- no"
+        fprintf(stderr, "NETACP-E-NONET, $ASSIGN _NET: failed (status %08X) -- no"
                         " DECnet device on this node\n", (unsigned)st);
         return -1;
     }
@@ -149,7 +149,7 @@ static int run_self_test(void)
 {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, socketpair failed: %s\n",
+        fprintf(stderr, "NETACP-E-SELFTEST, socketpair failed: %s\n",
                 strerror(errno));
         return 1;
     }
@@ -160,7 +160,7 @@ static int run_self_test(void)
     /* left = 1.10 (OVMXL), right = 1.11 (OVMXR); both endnodes. */
     if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
         dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, engine init failed\n");
+        fprintf(stderr, "NETACP-E-SELFTEST, engine init failed\n");
         close(sv[0]); close(sv[1]);
         return 1;
     }
@@ -177,21 +177,21 @@ static int run_self_test(void)
     /* 1) LEFT emits a plain endnode HELLO -> RIGHT. RIGHT should move the
      *    neighbour to INITIALIZING (one-way: our HELLO names no router). */
     if (dnet_engine_build_hello_frame(&L, frame, sizeof(frame), &flen) != 0) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, build HELLO (L) failed\n");
+        fprintf(stderr, "NETACP-E-SELFTEST, build HELLO (L) failed\n");
         fail = 1; goto done;
     }
     if (write(sv[0], frame, flen) != (ssize_t)flen) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, write failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-SELFTEST, write failed: %s\n", strerror(errno));
         fail = 1; goto done;
     }
     n = read(sv[1], rxbuf, sizeof(rxbuf));
     if (n <= 0) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, read failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-SELFTEST, read failed: %s\n", strerror(errno));
         fail = 1; goto done;
     }
     if (dnet_engine_rx_frame(&R, now, rxbuf, (size_t)n, from, &st) != 1 ||
         st != DNET_ADJ_INITIALIZING) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, R did not reach INITIALIZING (st=%d)\n",
+        fprintf(stderr, "NETACP-E-SELFTEST, R did not reach INITIALIZING (st=%d)\n",
                 (int)st);
         fail = 1; goto done;
     }
@@ -215,7 +215,7 @@ static int run_self_test(void)
         uint8_t payload[DNET_FRAME_MAX];
         size_t plen = 0;
         if (dnet_hello_encode(&h, payload, sizeof(payload), &plen) != DNET_HELLO_OK) {
-            fprintf(stderr, "DECNETD-E-SELFTEST, encode (R two-way) failed\n");
+            fprintf(stderr, "NETACP-E-SELFTEST, encode (R two-way) failed\n");
             fail = 1; goto done;
         }
         /* Prepend the Ethernet header (dst=mcast, src=R id, type 0x6003). */
@@ -227,18 +227,18 @@ static int run_self_test(void)
         size_t f2len = DNET_ETH_HDRLEN + plen;
 
         if (write(sv[1], f2, f2len) != (ssize_t)f2len) {
-            fprintf(stderr, "DECNETD-E-SELFTEST, write2 failed\n");
+            fprintf(stderr, "NETACP-E-SELFTEST, write2 failed\n");
             fail = 1; goto done;
         }
         n = read(sv[0], rxbuf, sizeof(rxbuf));
         if (n <= 0) {
-            fprintf(stderr, "DECNETD-E-SELFTEST, read2 failed\n");
+            fprintf(stderr, "NETACP-E-SELFTEST, read2 failed\n");
             fail = 1; goto done;
         }
         st = DNET_ADJ_DOWN;
         if (dnet_engine_rx_frame(&L, now + 1, rxbuf, (size_t)n, from, &st) != 1 ||
             st != DNET_ADJ_UP) {
-            fprintf(stderr, "DECNETD-E-SELFTEST, L did not reach UP (st=%d)\n",
+            fprintf(stderr, "NETACP-E-SELFTEST, L did not reach UP (st=%d)\n",
                     (int)st);
             fail = 1; goto done;
         }
@@ -248,14 +248,14 @@ static int run_self_test(void)
      *    with no further HELLO (T4 = BCT3MULT * T3 = 30 s). */
     if (dnet_engine_tick(&L, now + 1 + 31) < 1 ||
         dnet_adj_state_of(&L.adj, R.my_id) != DNET_ADJ_DOWN) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, L neighbour did not age to DOWN\n");
+        fprintf(stderr, "NETACP-E-SELFTEST, L neighbour did not age to DOWN\n");
         fail = 1; goto done;
     }
 
     /* 4) An echo of our OWN frame must be ignored (src == my_id). */
     if (dnet_engine_build_hello_frame(&L, frame, sizeof(frame), &flen) != 0 ||
         dnet_engine_rx_frame(&L, now + 40, frame, flen, NULL, NULL) != 0) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, own-echo was not ignored\n");
+        fprintf(stderr, "NETACP-E-SELFTEST, own-echo was not ignored\n");
         fail = 1; goto done;
     }
 
@@ -263,10 +263,10 @@ done:
     close(sv[0]);
     close(sv[1]);
     if (fail) {
-        printf("DECNETD-SELFTEST: FAIL\n");
+        printf("NETACP-SELFTEST: FAIL\n");
         return 1;
     }
-    printf("DECNETD-I-SELFTEST, engine tx/rx/adjacency proof PASSED"
+    printf("NETACP-I-SELFTEST, engine tx/rx/adjacency proof PASSED"
            " (HELLO moved over a real socketpair; INITIALIZING->UP->DOWN + own-echo drop)\n");
     return 0;
 }
@@ -299,7 +299,7 @@ static int run_router_self_test(void)
 {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, socketpair failed: %s\n",
+        fprintf(stderr, "NETACP-E-ROUTERTEST, socketpair failed: %s\n",
                 strerror(errno));
         return 1;
     }
@@ -310,12 +310,12 @@ static int run_router_self_test(void)
     /* router = 1.42 (OVMXR), endnode = 1.11 (OVMXE). */
     if (dnet_engine_init(&R, 1, 42, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0 ||
         dnet_engine_init(&E, 1, 11, "OVMXE", "EWA0", NULL, hwE, 0, 0, 0) != 0) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, engine init failed\n");
+        fprintf(stderr, "NETACP-E-ROUTERTEST, engine init failed\n");
         close(sv[0]); close(sv[1]);
         return 1;
     }
     if (dnet_engine_set_router(&R, 64) != 0 || !dnet_engine_is_router(&R)) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, set_router failed\n");
+        fprintf(stderr, "NETACP-E-ROUTERTEST, set_router failed\n");
         close(sv[0]); close(sv[1]);
         return 1;
     }
@@ -332,60 +332,60 @@ static int run_router_self_test(void)
     /* 1) ROUTER emits its router-hello -> ENDNODE. The emitted node-type bits
      *    must say "router" so an endnode treats it as a DR candidate. */
     if (dnet_engine_build_router_hello_frame(&R, frame, sizeof(frame), &flen) != 0) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, build router-hello failed\n");
+        fprintf(stderr, "NETACP-E-ROUTERTEST, build router-hello failed\n");
         fail = 1; goto done;
     }
     /* Assert node-type bits on the wire == L1 router. IINFO is at payload
      * offset 12 (the router-hello map, dnet_router_hello.h), payload starting at
      * frame + ETH_HDRLEN; the low 2 bits carry the node type. */
     if ((frame[DNET_ETH_HDRLEN + 12] & 0x03u) != DNET_NODETYPE_L1ROUTER) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, emitted node-type is not router\n");
+        fprintf(stderr, "NETACP-E-ROUTERTEST, emitted node-type is not router\n");
         fail = 1; goto done;
     }
     if (write(sv[0], frame, flen) != (ssize_t)flen) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, write failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-ROUTERTEST, write failed: %s\n", strerror(errno));
         fail = 1; goto done;
     }
     n = read(sv[1], rxbuf, sizeof(rxbuf));
     if (n <= 0) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, read failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-ROUTERTEST, read failed: %s\n", strerror(errno));
         fail = 1; goto done;
     }
     /* 2) ENDNODE consumes it through the routing path and SELECTS R as its DR. */
     if (dnet_engine_rx_frame(&E, now, rxbuf, (size_t)n, from, &st) != 1) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, E did not accept the router-hello\n");
+        fprintf(stderr, "NETACP-E-ROUTERTEST, E did not accept the router-hello\n");
         fail = 1; goto done;
     }
     if (!E.have_dr || memcmp(E.dr_id, R.my_id, 6) != 0) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, E did not select R as its DR\n");
+        fprintf(stderr, "NETACP-E-ROUTERTEST, E did not select R as its DR\n");
         fail = 1; goto done;
     }
 
     /* 3) ENDNODE now emits an endnode-hello that NAMES R in its rtr field, and
      *    4) ROUTER consumes it -> two-way adjacency to E reaches UP. */
     if (dnet_engine_build_hello_frame(&E, frame, sizeof(frame), &flen) != 0) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, build E endnode-hello failed\n");
+        fprintf(stderr, "NETACP-E-ROUTERTEST, build E endnode-hello failed\n");
         fail = 1; goto done;
     }
     /* The rtr/neighbor field is at endnode-hello payload offset 24 (dnet_hello.h
      * map), payload starting at frame + ETH_HDRLEN; it must now name R. */
     if (memcmp(frame + DNET_ETH_HDRLEN + 24, R.my_id, 6) != 0) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, E's endnode-hello does not name R\n");
+        fprintf(stderr, "NETACP-E-ROUTERTEST, E's endnode-hello does not name R\n");
         fail = 1; goto done;
     }
     if (write(sv[1], frame, flen) != (ssize_t)flen) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, write2 failed\n");
+        fprintf(stderr, "NETACP-E-ROUTERTEST, write2 failed\n");
         fail = 1; goto done;
     }
     n = read(sv[0], rxbuf, sizeof(rxbuf));
     if (n <= 0) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, read2 failed\n");
+        fprintf(stderr, "NETACP-E-ROUTERTEST, read2 failed\n");
         fail = 1; goto done;
     }
     st = DNET_ADJ_DOWN;
     if (dnet_engine_rx_frame(&R, now + 1, rxbuf, (size_t)n, from, &st) != 1 ||
         st != DNET_ADJ_UP) {
-        fprintf(stderr, "DECNETD-E-ROUTERTEST, R did not reach UP with E (st=%d)\n",
+        fprintf(stderr, "NETACP-E-ROUTERTEST, R did not reach UP with E (st=%d)\n",
                 (int)st);
         fail = 1; goto done;
     }
@@ -394,10 +394,10 @@ done:
     close(sv[0]);
     close(sv[1]);
     if (fail) {
-        printf("DECNETD-ROUTERTEST: FAIL\n");
+        printf("NETACP-ROUTERTEST: FAIL\n");
         return 1;
     }
-    printf("DECNETD-I-ROUTERTEST, router run-mode proof PASSED"
+    printf("NETACP-I-ROUTERTEST, router run-mode proof PASSED"
            " (router-hello emitted + node-type=router; endnode SELECTED it as DR"
            " and named it in rtr; router reached UP -- all over a socketpair, NO"
            " real node touched)\n");
@@ -431,7 +431,7 @@ static int run_nsp_selftest(void)
 {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, socketpair failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-SELFTEST, socketpair failed: %s\n", strerror(errno));
         return 1;
     }
     const uint8_t hwL[6] = { 0x02,0,0,0,0,0x01 };
@@ -439,7 +439,7 @@ static int run_nsp_selftest(void)
     struct dnet_engine L, R;   /* L = 1.10 originator, R = 1.11 responder */
     if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
         dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, engine init failed\n");
+        fprintf(stderr, "NETACP-E-SELFTEST, engine init failed\n");
         close(sv[0]); close(sv[1]);
         return 1;
     }
@@ -456,7 +456,7 @@ static int run_nsp_selftest(void)
         move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
         dnet_engine_link_rx(&R, 10, rxbuf, rxlen, reply, sizeof(reply), &rlen,
                             &has_reply, &ev) != 0 || ev != DNET_LINK_EV_CONNECT_IND) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, connect-initiate did not reach R\n");
+        fprintf(stderr, "NETACP-E-SELFTEST, connect-initiate did not reach R\n");
         fail = 1; goto done;
     }
     /* 2) R accepts -> CC frame -> L sees the link RUN. */
@@ -465,7 +465,7 @@ static int run_nsp_selftest(void)
         dnet_engine_link_rx(&L, 11, rxbuf, rxlen, frame, sizeof(frame), &flen,
                             &has_reply, &ev) != 0 || ev != DNET_LINK_EV_CONNECT_CONF ||
         !dnet_link_is_up(&L.link) || !dnet_link_is_up(&R.link)) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, connect-confirm did not bring the link UP\n");
+        fprintf(stderr, "NETACP-E-SELFTEST, connect-confirm did not bring the link UP\n");
         fail = 1; goto done;
     }
     /* 3) L sends data -> R delivers it byte-identical + acks -> L absorbs it. */
@@ -476,13 +476,13 @@ static int run_nsp_selftest(void)
                             &has_reply, &ev) != 0 || ev != DNET_LINK_EV_DATA ||
         R.rx_datalen != strlen(payload) ||
         memcmp(R.rx_data, payload, R.rx_datalen) != 0 || !has_reply) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, data segment did not round-trip\n");
+        fprintf(stderr, "NETACP-E-SELFTEST, data segment did not round-trip\n");
         fail = 1; goto done;
     }
     if (move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
         dnet_engine_link_rx(&L, 13, rxbuf, rxlen, frame, sizeof(frame), &flen,
                             &has_reply, &ev) != 0 || ev != DNET_LINK_EV_ACK) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, data ack did not return\n");
+        fprintf(stderr, "NETACP-E-SELFTEST, data ack did not return\n");
         fail = 1; goto done;
     }
     /* 4) L disconnects -> R confirms (DC) -> both CLOSED. */
@@ -496,17 +496,17 @@ static int run_nsp_selftest(void)
         dnet_engine_link_rx(&L, 15, rxbuf, rxlen, frame, sizeof(frame), &flen,
                             &has_reply, &ev) != 0 || ev != DNET_LINK_EV_DISCONNECT_CONF ||
         dnet_link_state_of(&L.link) != DNET_LINK_CLOSED) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, disconnect handshake did not close cleanly\n");
+        fprintf(stderr, "NETACP-E-SELFTEST, disconnect handshake did not close cleanly\n");
         fail = 1; goto done;
     }
 
 done:
     close(sv[0]); close(sv[1]);
     if (fail) {
-        printf("DECNETD-NSP-SELFTEST: FAIL\n");
+        printf("NETACP-NSP-SELFTEST: FAIL\n");
         return 1;
     }
-    printf("DECNETD-I-NSPSELFTEST, NSP logical-link connection proof PASSED"
+    printf("NETACP-I-NSPSELFTEST, NSP logical-link connection proof PASSED"
            " (link OPEN -> data segment+ack -> clean DISCONNECT over a real"
            " socketpair; CI/CC + DI/DC choreography, payload byte-identical)\n");
     return 0;
@@ -523,7 +523,7 @@ done:
  */
 static int run_net_ncb_selftest(void)
 {
-    printf("DECNETD-I-NETNCB, NCB connect-block parser (NODE::\"TASK=name\" ->"
+    printf("NETACP-I-NETNCB, NCB connect-block parser (NODE::\"TASK=name\" ->"
            " {node, task/object}) + bounds-safe refusal of malformed input (no"
            " executive, spec-derived local API, rd vms-22c)\n");
     int pass = 0, fail = 0;
@@ -724,9 +724,9 @@ static int run_net_ncb_selftest(void)
                  " bounded and re-formats to exactly the bytes parsed; every refusal leaves *out zeroed");
     }
 
-    printf("DECNETD-I-NETNCB, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-NET-NCB-SELFTEST: PASS\n"); return 0; }
-    printf("DECNETD-NET-NCB-SELFTEST: FAIL\n");
+    printf("NETACP-I-NETNCB, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-NET-NCB-SELFTEST: PASS\n"); return 0; }
+    printf("NETACP-NET-NCB-SELFTEST: FAIL\n");
     return 1;
 #undef NC_CHECK
 }
@@ -758,7 +758,7 @@ static uint32_t nbself_rand(uint32_t *s)   /* deterministic LCG for the fuzz */
 
 static int run_net_broker_selftest(void)
 {
-    printf("DECNETD-I-NETBROKER, exec<->NETACP T1 broker record codec: round-trip"
+    printf("NETACP-I-NETBROKER, exec<->NETACP T1 broker record codec: round-trip"
            " + bounds-validated decode + correlation-id anti-cross-talk (no"
            " executive, rd vms-22c)\n");
     int pass = 0, fail = 0;
@@ -885,9 +885,9 @@ static int run_net_broker_selftest(void)
                  "a response is delivered to its request only on an exact corr-id match (cross-talk refused)");
     }
 
-    printf("DECNETD-I-NETBROKER, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-NET-BROKER-SELFTEST: PASS\n"); return 0; }
-    printf("DECNETD-NET-BROKER-SELFTEST: FAIL\n");
+    printf("NETACP-I-NETBROKER, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-NET-BROKER-SELFTEST: PASS\n"); return 0; }
+    printf("NETACP-NET-BROKER-SELFTEST: FAIL\n");
     return 1;
 #undef NB_CHECK
 }
@@ -1026,7 +1026,7 @@ static int dnet_broker_serve(struct dnet_engine *eng,
  */
 static int run_net_service_selftest(void)
 {
-    printf("DECNETD-I-NETSERVICE, NETACP broker service dispatch: OPEN/SEND/RECV/"
+    printf("NETACP-I-NETSERVICE, NETACP broker service dispatch: OPEN/SEND/RECV/"
            "CLOSE against the NSP link engine, correlation-matched, never-crash"
            " refusals (no executive, rd vms-22c)\n");
     int pass = 0, fail = 0;
@@ -1035,7 +1035,7 @@ static int run_net_service_selftest(void)
 
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
-        fprintf(stderr, "DECNETD-E-NETSERVICE, socketpair failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-NETSERVICE, socketpair failed: %s\n", strerror(errno));
         return 1;
     }
     const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
@@ -1043,7 +1043,7 @@ static int run_net_service_selftest(void)
     struct dnet_engine L, R;
     if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
         dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0) {
-        fprintf(stderr, "DECNETD-E-NETSERVICE, engine init failed\n");
+        fprintf(stderr, "NETACP-E-NETSERVICE, engine init failed\n");
         close(sv[0]); close(sv[1]); return 1;
     }
 
@@ -1136,9 +1136,9 @@ static int run_net_service_selftest(void)
              "OP_OPEN whose NCB is malformed is refused (BADPARAM, no over-read)");
 
     close(sv[0]); close(sv[1]);
-    printf("DECNETD-I-NETSERVICE, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-NET-SERVICE-SELFTEST: PASS\n"); return 0; }
-    printf("DECNETD-NET-SERVICE-SELFTEST: FAIL\n");
+    printf("NETACP-I-NETSERVICE, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-NET-SERVICE-SELFTEST: PASS\n"); return 0; }
+    printf("NETACP-NET-SERVICE-SELFTEST: FAIL\n");
     return 1;
 #undef NS_CHECK
 }
@@ -1170,7 +1170,7 @@ static int run_net_service_selftest(void)
  */
 static int run_net_mbx_selftest(void)
 {
-    printf("DECNETD-I-NETMBX, T1 mailbox transport round-trip (client $CREMBX ->"
+    printf("NETACP-I-NETMBX, T1 mailbox transport round-trip (client $CREMBX ->"
            " request -> NETACP read+serve -> reply-by-unit -> client correlation-"
            " match), against the booted executive /dev/vms (rd vms-22c)\n");
 
@@ -1248,9 +1248,9 @@ static int run_net_mbx_selftest(void)
     if (req_chan) vms_kif_mbx_delmbx(req_chan);
     if (rep_chan) vms_kif_mbx_delmbx(rep_chan);
 
-    printf("DECNETD-I-NETMBX, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-NET-MBX-SELFTEST: PASS\n"); return 0; }
-    printf("DECNETD-NET-MBX-SELFTEST: FAIL\n");
+    printf("NETACP-I-NETMBX, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-NET-MBX-SELFTEST: PASS\n"); return 0; }
+    printf("NETACP-NET-MBX-SELFTEST: FAIL\n");
     return 1;
 #undef MB_CHECK
 }
@@ -1273,7 +1273,7 @@ static int run_net_mbx_selftest(void)
  */
 static int run_task_selftest(void)
 {
-    printf("DECNETD-I-TASKSELF, task-to-task logical link by NAMED object (TASK=):"
+    printf("NETACP-I-TASKSELF, task-to-task logical link by NAMED object (TASK=):"
            " connect -> passive decodes the name -> bidirectional byte-verified"
            " message -> disconnect (no executive, rd vms-dda)\n");
     int pass = 0, fail = 0;
@@ -1282,7 +1282,7 @@ static int run_task_selftest(void)
 
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
-        fprintf(stderr, "DECNETD-E-TASKSELF, socketpair failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-TASKSELF, socketpair failed: %s\n", strerror(errno));
         return 1;
     }
     const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
@@ -1290,7 +1290,7 @@ static int run_task_selftest(void)
     struct dnet_engine L, R;
     if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
         dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0) {
-        fprintf(stderr, "DECNETD-E-TASKSELF, engine init failed\n");
+        fprintf(stderr, "NETACP-E-TASKSELF, engine init failed\n");
         close(sv[0]); close(sv[1]); return 1;
     }
 
@@ -1365,9 +1365,9 @@ static int run_task_selftest(void)
     TK_CHECK(closed, "active disconnects; both ends CLOSED");
 
     close(sv[0]); close(sv[1]);
-    printf("DECNETD-I-TASKSELF, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass == 6) { printf("DECNETD-TASK-SELFTEST: PASS\n"); return 0; }
-    printf("DECNETD-TASK-SELFTEST: FAIL\n");
+    printf("NETACP-I-TASKSELF, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass == 6) { printf("NETACP-TASK-SELFTEST: PASS\n"); return 0; }
+    printf("NETACP-TASK-SELFTEST: FAIL\n");
     return 1;
 #undef TK_CHECK
 }
@@ -1420,7 +1420,7 @@ static int run_sethost_selftest(void)
 {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, socketpair failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-SELFTEST, socketpair failed: %s\n", strerror(errno));
         return 1;
     }
     const uint8_t hwL[6] = { 0x02,0,0,0,0,0x01 };
@@ -1431,7 +1431,7 @@ static int run_sethost_selftest(void)
         dnet_engine_init(&R, 2, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0 ||
         dnet_cterm_session_init(&term, DNET_CTERM_ROLE_TERMINAL) != 0 ||
         dnet_cterm_session_init(&host, DNET_CTERM_ROLE_HOST) != 0) {
-        fprintf(stderr, "DECNETD-E-SELFTEST, init failed\n");
+        fprintf(stderr, "NETACP-E-SELFTEST, init failed\n");
         close(sv[0]); close(sv[1]);
         return 1;
     }
@@ -1458,7 +1458,7 @@ static int run_sethost_selftest(void)
         dnet_engine_link_rx(&R, t, rxbuf, rxlen, reply, sizeof(reply), &rlen,
                             &has_reply, &lev) != 0 || lev != DNET_LINK_EV_CONNECT_IND ||
         dnet_cterm_sc_connect_object(R.link.conn_data, R.link.conn_len) != DNET_CTERM_OBJECT) {
-        fprintf(stderr, "DECNETD-E-SETHOST, connect to the CTERM object failed\n");
+        fprintf(stderr, "NETACP-E-SETHOST, connect to the CTERM object failed\n");
         fail = 1; goto done;
     }
     /* R accepts -> CC -> L link RUN. */
@@ -1467,7 +1467,7 @@ static int run_sethost_selftest(void)
         dnet_engine_link_rx(&L, t, rxbuf, rxlen, frame, sizeof(frame), &flen,
                             &has_reply, &lev) != 0 || lev != DNET_LINK_EV_CONNECT_CONF ||
         !dnet_link_is_up(&L.link) || !dnet_link_is_up(&R.link)) {
-        fprintf(stderr, "DECNETD-E-SETHOST, logical link did not come UP\n");
+        fprintf(stderr, "NETACP-E-SETHOST, logical link did not come UP\n");
         fail = 1; goto done;
     }
     t++;
@@ -1475,14 +1475,14 @@ static int run_sethost_selftest(void)
     /* 2) CTERM Bind / Bind Accept -> both sessions BOUND. */
     if (dnet_cterm_bind(&term, "OVMXL$RTA1:", cpdu, sizeof(cpdu), &clen) != 0 ||
         sethost_ship(sv, 0, &L, &R, &host, cpdu, clen, t) != DNET_CTERM_EV_BIND_IND) {
-        fprintf(stderr, "DECNETD-E-SETHOST, CTERM Bind did not reach the host\n");
+        fprintf(stderr, "NETACP-E-SETHOST, CTERM Bind did not reach the host\n");
         fail = 1; goto done;
     }
     t++;
     if (dnet_cterm_bind_accept(&host, "OVMXR", cpdu, sizeof(cpdu), &clen) != 0 ||
         sethost_ship(sv, 1, &R, &L, &term, cpdu, clen, t) != DNET_CTERM_EV_BOUND ||
         !dnet_cterm_is_bound(&term) || !dnet_cterm_is_bound(&host)) {
-        fprintf(stderr, "DECNETD-E-SETHOST, CTERM session did not bind\n");
+        fprintf(stderr, "NETACP-E-SETHOST, CTERM session did not bind\n");
         fail = 1; goto done;
     }
     t++;
@@ -1492,7 +1492,7 @@ static int run_sethost_selftest(void)
             DNET_CTERM_CH_ECHO | DNET_CTERM_CH_WRAP, cpdu, sizeof(cpdu), &clen) != 0 ||
         sethost_ship(sv, 0, &L, &R, &host, cpdu, clen, t) != DNET_CTERM_EV_CHARACTERISTICS ||
         host.width != 132 || host.page != 24) {
-        fprintf(stderr, "DECNETD-E-SETHOST, characteristics negotiation failed\n");
+        fprintf(stderr, "NETACP-E-SETHOST, characteristics negotiation failed\n");
         fail = 1; goto done;
     }
     t++;
@@ -1508,7 +1508,7 @@ static int run_sethost_selftest(void)
         sethost_ship(sv, 1, &R, &L, &term, cpdu, clen, t) != DNET_CTERM_EV_WRITE ||
         term.last.datalen != strlen(banner) ||
         memcmp(term.last.data, banner, term.last.datalen) != 0) {
-        fprintf(stderr, "DECNETD-E-SETHOST, host screen output did not round-trip\n");
+        fprintf(stderr, "NETACP-E-SETHOST, host screen output did not round-trip\n");
         fail = 1; goto done;
     }
     t++;
@@ -1518,14 +1518,14 @@ static int run_sethost_selftest(void)
         sethost_ship(sv, 0, &L, &R, &host, cpdu, clen, t) != DNET_CTERM_EV_READ_DATA ||
         host.last.datalen != strlen(keys) ||
         memcmp(host.last.data, keys, host.last.datalen) != 0) {
-        fprintf(stderr, "DECNETD-E-SETHOST, terminal keystrokes did not round-trip\n");
+        fprintf(stderr, "NETACP-E-SETHOST, terminal keystrokes did not round-trip\n");
         fail = 1; goto done;
     }
     t++;
     if (dnet_cterm_oob(&term, 0x19, cpdu, sizeof(cpdu), &clen) != 0 ||
         sethost_ship(sv, 0, &L, &R, &host, cpdu, clen, t) != DNET_CTERM_EV_OOB ||
         host.last.oob_char != 0x19) {
-        fprintf(stderr, "DECNETD-E-SETHOST, out-of-band did not round-trip\n");
+        fprintf(stderr, "NETACP-E-SETHOST, out-of-band did not round-trip\n");
         fail = 1; goto done;
     }
     t++;
@@ -1534,7 +1534,7 @@ static int run_sethost_selftest(void)
     if (dnet_cterm_unbind(&host, DNET_CTERM_UNBIND_NORMAL, cpdu, sizeof(cpdu), &clen) != 0 ||
         sethost_ship(sv, 1, &R, &L, &term, cpdu, clen, t) != DNET_CTERM_EV_UNBOUND ||
         dnet_cterm_state_of(&term) != DNET_CTERM_S_UNBOUND) {
-        fprintf(stderr, "DECNETD-E-SETHOST, Unbind did not release the session\n");
+        fprintf(stderr, "NETACP-E-SETHOST, Unbind did not release the session\n");
         fail = 1; goto done;
     }
     t++;
@@ -1546,17 +1546,17 @@ static int run_sethost_selftest(void)
         dnet_engine_link_rx(&L, t, rxbuf, rxlen, frame, sizeof(frame), &flen,
                             &has_reply, &lev) != 0 || lev != DNET_LINK_EV_DISCONNECT_CONF ||
         dnet_link_state_of(&L.link) != DNET_LINK_CLOSED) {
-        fprintf(stderr, "DECNETD-E-SETHOST, logical link did not tear down cleanly\n");
+        fprintf(stderr, "NETACP-E-SETHOST, logical link did not tear down cleanly\n");
         fail = 1; goto done;
     }
 
 done:
     close(sv[0]); close(sv[1]);
     if (fail) {
-        printf("DECNETD-SETHOST-SELFTEST: FAIL\n");
+        printf("NETACP-SETHOST-SELFTEST: FAIL\n");
         return 1;
     }
-    printf("DECNETD-I-SETHOSTSELFTEST, $ SET HOST / CTERM terminal-service proof"
+    printf("NETACP-I-SETHOSTSELFTEST, $ SET HOST / CTERM terminal-service proof"
            " PASSED (link to CTERM object 42 -> Bind/Accept -> characteristics ->"
            " screen output + keystrokes + out-of-band -> Unbind -> clean"
            " disconnect over a real socketpair; every CTERM payload"
@@ -1579,7 +1579,7 @@ static int run_sethost_srccode_selftest(void)
     uint16_t grp = 0, usr = 0;
     sethost_src_codes(&grp, &usr);
     if (grp == 0 && usr == 0) {
-        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL"
+        printf("NETACP-SETHOST-SRCCODES-SELFTEST: FAIL"
                " (source group/user are BOTH zero -- VMS would discard this CI)\n");
         return 1;
     }
@@ -1588,13 +1588,13 @@ static int run_sethost_srccode_selftest(void)
     size_t sclen = 0;
     if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", grp, usr,
                                     "", "", "", sc, sizeof(sc), &sclen) != DNET_CTERM_OK) {
-        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL (connect build failed)\n");
+        printf("NETACP-SETHOST-SRCCODES-SELFTEST: FAIL (connect build failed)\n");
         return 1;
     }
 
     struct dnet_cterm_sc_connect c;
     if (dnet_cterm_sc_connect_parse(sc, sclen, &c) != DNET_CTERM_OK) {
-        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL (connect parse failed)\n");
+        printf("NETACP-SETHOST-SRCCODES-SELFTEST: FAIL (connect parse failed)\n");
         return 1;
     }
     /* The CI must name CTERM object 42 (fmt-0 dst) with a fmt-2 source whose
@@ -1603,13 +1603,13 @@ static int run_sethost_srccode_selftest(void)
         c.src_format != DNET_SC_FMT_CODED ||
         c.src_grpcode == 0 || c.src_usrcode == 0 ||
         c.src_grpcode != grp || c.src_usrcode != usr) {
-        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL"
+        printf("NETACP-SETHOST-SRCCODES-SELFTEST: FAIL"
                " (dst_obj=%u src_fmt=%u grp=0x%04x usr=0x%04x)\n",
                c.dst_object, c.src_format, c.src_grpcode, c.src_usrcode);
         return 1;
     }
 
-    printf("DECNETD-I-SETHOSTSRCCODES, live --set-host CI carries NONZERO"
+    printf("NETACP-I-SETHOSTSRCCODES, live --set-host CI carries NONZERO"
            " format-2 source codes group=0x%04x user=0x%04x (sourced from the"
            " running process, not a template) -- VMS session control dispatches"
            " it to CTERM object 42 instead of discarding it\n",
@@ -1864,14 +1864,14 @@ static int run_cterm_accept_test(void)
     enum dnet_link_event lev = DNET_LINK_EV_NONE;
     uint32_t st;
 
-    printf("DECNETD-I-CTERMACCEPT, inbound SET HOST -> $CREPRC -> LOGINOUT on RTAn:"
+    printf("NETACP-I-CTERMACCEPT, inbound SET HOST -> $CREPRC -> LOGINOUT on RTAn:"
            " (rd vms-f40; oracle docs/oracle/vax-sethost-cterm.*)\n");
 
     memset(&c, 0, sizeof(c));
     c.hs.master_fd = -1;
     c.t = 100;
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, c.sv) != 0) {
-        fprintf(stderr, "DECNETD-E-CTERMACCEPT, socketpair failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-CTERMACCEPT, socketpair failed: %s\n", strerror(errno));
         return 1;
     }
     {
@@ -1880,7 +1880,7 @@ static int run_cterm_accept_test(void)
         if (dnet_engine_init(&c.L, 1, 1, "OVMXC", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
             dnet_engine_init(&c.R, 1, 2, "OVMXH", "EWA0", NULL, hwR, 0, 0, 0) != 0 ||
             dnet_cterm_session_init(&c.term, DNET_CTERM_ROLE_TERMINAL) != 0) {
-            fprintf(stderr, "DECNETD-E-CTERMACCEPT, engine init failed\n");
+            fprintf(stderr, "NETACP-E-CTERMACCEPT, engine init failed\n");
             close(c.sv[0]); close(c.sv[1]);
             return 1;
         }
@@ -1894,7 +1894,7 @@ static int run_cterm_accept_test(void)
         move_frame(c.sv[0], c.sv[1], frame, flen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
         dnet_engine_link_rx(&c.R, c.t, rxbuf, rxlen, reply, sizeof(reply), &rlen,
                             &has_reply, &lev) != 0 || lev != DNET_LINK_EV_CONNECT_IND) {
-        fprintf(stderr, "DECNETD-E-CTERMACCEPT, the inbound connect never reached the host\n");
+        fprintf(stderr, "NETACP-E-CTERMACCEPT, the inbound connect never reached the host\n");
         close(c.sv[0]); close(c.sv[1]);
         return 1;
     }
@@ -1925,7 +1925,7 @@ static int run_cterm_accept_test(void)
              "object-42 dispatch created the session through the REAL executive"
              " ($CREPRC PRC$M_INTER|PRC$M_LOGINOUT on an executive-minted RTAn:)");
     if (!(st & 1)) {
-        fprintf(stderr, "DECNETD-E-CTERMACCEPT, dnet_cterm_host_open_desc failed, status %08X\n",
+        fprintf(stderr, "NETACP-E-CTERMACCEPT, dnet_cterm_host_open_desc failed, status %08X\n",
                 (unsigned)st);
         fprintf(stderr, "  (INV-6: no per-process imitation of a login is substituted;"
                         " a real /dev/vms + SYS$SYSTEM:LOGINOUT.EXE are required)\n");
@@ -2043,7 +2043,7 @@ static int run_cterm_accept_test(void)
         move_frame(c.sv[1], c.sv[0], reply, rlen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
         dnet_engine_link_rx(&c.L, c.t, rxbuf, rxlen, frame, sizeof(frame), &flen,
                             &has_reply, &lev) != 0 || lev != DNET_LINK_EV_CONNECT_CONF) {
-        fprintf(stderr, "DECNETD-E-CTERMACCEPT, the logical link did not come UP\n");
+        fprintf(stderr, "NETACP-E-CTERMACCEPT, the logical link did not come UP\n");
         g_ct_fail++;
         goto verdict;
     }
@@ -2053,7 +2053,7 @@ static int run_cterm_accept_test(void)
         dnet_cterm_bind_accept(&c.hs.cterm, "OVMXH", cpdu, sizeof(cpdu), &clen) != 0 ||
         ct_to_term(&c, cpdu, clen) != 0 ||
         !dnet_cterm_is_bound(&c.term)) {
-        fprintf(stderr, "DECNETD-E-CTERMACCEPT, the CTERM session did not bind\n");
+        fprintf(stderr, "NETACP-E-CTERMACCEPT, the CTERM session did not bind\n");
         g_ct_fail++;
         goto verdict;
     }
@@ -2219,12 +2219,12 @@ verdict:
         (void)dnet_cterm_host_close(&c.hs);
     close(c.sv[0]);
     close(c.sv[1]);
-    printf("DECNETD-I-CTERMACCEPT, %d passed, %d failed\n", g_ct_pass, g_ct_fail);
+    printf("NETACP-I-CTERMACCEPT, %d passed, %d failed\n", g_ct_pass, g_ct_fail);
     if (g_ct_fail == 0 && g_ct_pass > 0) {
-        printf("DECNETD-CTERM-ACCEPT: PASS\n");
+        printf("NETACP-CTERM-ACCEPT: PASS\n");
         return 0;
     }
-    printf("DECNETD-CTERM-ACCEPT: FAIL\n");
+    printf("NETACP-CTERM-ACCEPT: FAIL\n");
     return 1;
 }
 
@@ -2258,7 +2258,7 @@ static int run_isolation_test(void)
     uint32_t st;
     int pass = 0, fail = 0;
 
-    printf("DECNETD-I-ISOLATION, the A2/A8 privileged-path isolation proof"
+    printf("NETACP-I-ISOLATION, the A2/A8 privileged-path isolation proof"
            " (rd vms-9ab; design vms-515 §3.4; runs off-target, needs neither"
            " CAP_NET_RAW nor a booted executive)\n");
 
@@ -2333,9 +2333,9 @@ static int run_isolation_test(void)
         }
     }
 
-    printf("DECNETD-I-ISOLATION, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-ISOLATION: PASS\n"); return 0; }
-    printf("DECNETD-ISOLATION: FAIL\n");
+    printf("NETACP-I-ISOLATION, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-ISOLATION: PASS\n"); return 0; }
+    printf("NETACP-ISOLATION: FAIL\n");
     return 1;
 }
 
@@ -2343,7 +2343,7 @@ static int run_isolation_test(void)
  * ============== --fal-selftest / --fal-accept-test (rd vms-8c2) ==============
  * The DECnet FILE ACCESS LISTENER (object 17) + the COPY node:: client, proven
  * over a real NSP logical link (Ethernet + Phase IV routing header + NSP PDU)
- * moved over a socketpair(2) -- the same wire path DECNETD uses on the live
+ * moved over a socketpair(2) -- the same wire path NETACP uses on the live
  * datalink, with the two blocking peers (FAL server + COPY client) running in
  * two threads so their choreography is real, not stepped by the test.
  *
@@ -2498,7 +2498,7 @@ static int run_fal_selftest(void)
 {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
-        fprintf(stderr, "DECNETD-E-FALSELF, socketpair failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-FALSELF, socketpair failed: %s\n", strerror(errno));
         return 1;
     }
     const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
@@ -2506,7 +2506,7 @@ static int run_fal_selftest(void)
     struct dnet_engine L, R;
     if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
         dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0) {
-        fprintf(stderr, "DECNETD-E-FALSELF, engine init failed\n");
+        fprintf(stderr, "NETACP-E-FALSELF, engine init failed\n");
         close(sv[0]); close(sv[1]); return 1;
     }
     int pass = 0, fail = 0;
@@ -2518,12 +2518,12 @@ static int run_fal_selftest(void)
     uint32_t auth = 0;
     int br = fal_bringup(&L, &R, sv[0], sv[1], &tick, "GUEST", "GUEST", &auth);
     if (br == 1 && auth != SS$_NORMAL) {
-        printf("DECNETD-I-FALSELF, object-17 connect carried the access-control"
+        printf("NETACP-I-FALSELF, object-17 connect carried the access-control"
                " creds and FAL REFUSED it (status %08X) with an NSP disconnect --"
                " no file served on an unauthenticated connect (INV-6)\n", auth);
         pass++;
     } else {
-        printf("DECNETD-E-FALSELF, expected an honest refusal of the unauthenticated"
+        printf("NETACP-E-FALSELF, expected an honest refusal of the unauthenticated"
                " connect, got bringup=%d auth=%08X\n", br, auth);
         fail++;
     }
@@ -2561,27 +2561,27 @@ static int run_fal_selftest(void)
             fal_hangup(&cxp);
             pthread_join(th, NULL);
             if (cst == SS$_NOSUCHFILE && sarg.status == SS$_NOSUCHFILE) {
-                printf("DECNETD-I-FALSELF, the DAP-over-NSP transport pump round-trips"
+                printf("NETACP-I-FALSELF, the DAP-over-NSP transport pump round-trips"
                        " end to end over the threaded socketpair: CONFIGURATION +"
                        " ACCESS + honest STATUS(access-failed) for a missing file,"
                        " both peers return the honest miss\n");
                 pass++;
             } else {
-                printf("DECNETD-E-FALSELF, transport pump did not return the honest"
+                printf("NETACP-E-FALSELF, transport pump did not return the honest"
                        " miss (client %08X server %08X)\n", cst, sarg.status);
                 fail++;
             }
         } else { fail++; }
     } else {
-        printf("DECNETD-E-FALSELF, could not bring the pump-test link up\n");
+        printf("NETACP-E-FALSELF, could not bring the pump-test link up\n");
         fail++;
     }
     close(sv2[0]); close(sv2[1]);
 
     close(sv[0]); close(sv[1]);
-    printf("DECNETD-I-FALSELF, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass == 2) { printf("DECNETD-FAL-SELFTEST: PASS\n"); return 0; }
-    printf("DECNETD-FAL-SELFTEST: FAIL\n");
+    printf("NETACP-I-FALSELF, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass == 2) { printf("NETACP-FAL-SELFTEST: PASS\n"); return 0; }
+    printf("NETACP-FAL-SELFTEST: FAIL\n");
     return 1;
 }
 
@@ -2605,7 +2605,7 @@ static int fal_file_matches(const char *spec, const char *const *lines, int nlin
 
 static int run_fal_accept_test(void)
 {
-    printf("DECNETD-I-FALACCEPT, inbound FAL (object 17) COPY -> real SYSUAF auth"
+    printf("NETACP-I-FALACCEPT, inbound FAL (object 17) COPY -> real SYSUAF auth"
            " -> DAP/RMS transfer both directions (rd vms-8c2; oracle"
            " docs/oracle/vax-copy-fal-dap.*)\n");
     int pass = 0, fail = 0;
@@ -2713,9 +2713,9 @@ static int run_fal_accept_test(void)
         close(sv[0]); close(sv[1]);
     }
 
-    printf("DECNETD-I-FALACCEPT, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-FAL-ACCEPT: PASS\n"); return 0; }
-    printf("DECNETD-FAL-ACCEPT: FAIL\n");
+    printf("NETACP-I-FALACCEPT, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-FAL-ACCEPT: PASS\n"); return 0; }
+    printf("NETACP-FAL-ACCEPT: FAIL\n");
     return 1;
 #undef FA_CHECK
 }
@@ -2734,7 +2734,7 @@ static int run_fal_accept_test(void)
  * remote-DEST (PUT) argument pair, and (B) the creds copy_plan parsed out of the
  * spec really drive a REAL object-17 Connect Initiate that FAL refuses with an
  * NSP disconnect when they cannot be authenticated (no /dev/vms here) -- for
- * BOTH directions, over the same threaded socketpair path DECNETD uses on the
+ * BOTH directions, over the same threaded socketpair path NETACP uses on the
  * live datalink. The AUTHENTICATED full GET/PUT transfer of a plan's specs is
  * the domain of --fal-accept-test (the hard gate on /dev/vms + the mounted
  * SYSUAF); this floor never fakes a transfer (INV-6).
@@ -2744,7 +2744,7 @@ static int copy_plan_refused_without_auth(const struct dnet_copy_plan *plan,
 {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
-        fprintf(stderr, "DECNETD-E-COPYSELF, socketpair failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-COPYSELF, socketpair failed: %s\n", strerror(errno));
         return -1;
     }
     const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
@@ -2758,18 +2758,18 @@ static int copy_plan_refused_without_auth(const struct dnet_copy_plan *plan,
         int br = fal_bringup(&L, &R, sv[0], sv[1], &tick,
                              plan->username, plan->password, &auth);
         if (br == 1 && auth != SS$_NORMAL) {
-            printf("DECNETD-I-COPYSELF, %s: the creds copy_plan parsed drove a real"
+            printf("NETACP-I-COPYSELF, %s: the creds copy_plan parsed drove a real"
                    " object-17 connect, REFUSED (status %08X) without auth (INV-6)\n",
                    label, auth);
             rc = 0;
         } else {
-            printf("DECNETD-E-COPYSELF, %s: expected an honest refusal of the"
+            printf("NETACP-E-COPYSELF, %s: expected an honest refusal of the"
                    " unauthenticated connect, got bringup=%d auth=%08X\n",
                    label, br, auth);
             rc = 1;
         }
     } else {
-        fprintf(stderr, "DECNETD-E-COPYSELF, engine init failed\n");
+        fprintf(stderr, "NETACP-E-COPYSELF, engine init failed\n");
         rc = -1;
     }
     close(sv[0]); close(sv[1]);
@@ -2823,9 +2823,9 @@ static int run_copy_selftest(void)
         CP_CHECK(r == 0, "PUT-plan creds drive a real object-17 connect, refused without auth");
     }
 
-    printf("DECNETD-I-COPYSELF, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-COPY-SELFTEST: PASS\n"); return 0; }
-    printf("DECNETD-COPY-SELFTEST: FAIL\n");
+    printf("NETACP-I-COPYSELF, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-COPY-SELFTEST: PASS\n"); return 0; }
+    printf("NETACP-COPY-SELFTEST: FAIL\n");
     return 1;
 #undef CP_CHECK
 }
@@ -3095,7 +3095,7 @@ static int copy_xfer_once(const struct dnet_copy_plan *plan, const char *passwor
  */
 static int run_copy_accept_test(void)
 {
-    printf("DECNETD-I-COPYACCEPT, outbound $ COPY command layer (dnet_copy_plan)"
+    printf("NETACP-I-COPYACCEPT, outbound $ COPY command layer (dnet_copy_plan)"
            " -> object-17 FAL client over the NSP link -> real RMS transfer both"
            " directions, byte-verified (rd vms-ea8)\n");
     int pass = 0, fail = 0;
@@ -3155,9 +3155,9 @@ static int run_copy_accept_test(void)
         }
     }
 
-    printf("DECNETD-I-COPYACCEPT, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-COPY-ACCEPT: PASS\n"); return 0; }
-    printf("DECNETD-COPY-ACCEPT: FAIL\n");
+    printf("NETACP-I-COPYACCEPT, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-COPY-ACCEPT: PASS\n"); return 0; }
+    printf("NETACP-COPY-ACCEPT: FAIL\n");
     return 1;
 #undef CA_CHECK
 }
@@ -3211,7 +3211,7 @@ static void *copy_noauth_server_thread(void *v)
  */
 static int run_copy_transport_selftest(void)
 {
-    printf("DECNETD-I-COPYXPORT, outbound COPY client transport pump: copy_client_run"
+    printf("NETACP-I-COPYXPORT, outbound COPY client transport pump: copy_client_run"
            " brings up an object-17 link + DAP session over the NSP link, honest miss"
            " round-trips (no executive, rd vms-ea8)\n");
     int pass = 0, fail = 0;
@@ -3221,11 +3221,11 @@ static int run_copy_transport_selftest(void)
     struct dnet_copy_plan plan;
     int rp = dnet_copy_plan("OVMXR::DKA0:[X]NOPE.TXT", "DKA0:[X]LOCAL.TXT", &plan);
     CX_CHECK(rp == 0 && plan.is_get == 1, "COPY remote->local parses to a GET plan");
-    if (rp != 0) { printf("DECNETD-COPY-XPORT: FAIL\n"); return 1; }
+    if (rp != 0) { printf("NETACP-COPY-XPORT: FAIL\n"); return 1; }
 
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
-        fprintf(stderr, "DECNETD-E-COPYXPORT, socketpair failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-COPYXPORT, socketpair failed: %s\n", strerror(errno));
         return 1;
     }
     const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
@@ -3254,9 +3254,9 @@ static int run_copy_transport_selftest(void)
     }
     close(sv[0]); close(sv[1]);
 
-    printf("DECNETD-I-COPYXPORT, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-COPY-XPORT: PASS\n"); return 0; }
-    printf("DECNETD-COPY-XPORT: FAIL\n");
+    printf("NETACP-I-COPYXPORT, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-COPY-XPORT: PASS\n"); return 0; }
+    printf("NETACP-COPY-XPORT: FAIL\n");
     return 1;
 #undef CX_CHECK
 }
@@ -3267,7 +3267,7 @@ static void netcli_idle(struct netcli *c)
         if (c->io->idle) c->io->idle(c->io->ctx);
         return;
     }
-    decnetd_wait_ms(5);     /* $SETIMR + $WAITFR (rd vms-d3cd) */
+    netacp_test_wait_ms(5);     /* $SETIMR + $WAITFR (rd vms-d3cd) */
 }
 
 /* The DAP presentation transport over a _NET: link (COPY's FAL client). */
@@ -3494,7 +3494,7 @@ static void usage(const char *argv0)
         "  --type SPEC         $ TYPE NODE\"user\"::spec through NETACP's _NET:\n"
         "  --password-fd N     with --copy: read the FAL access-control password\n"
         "                      from inherited fd N (never from argv or the env)\n",
-        argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT,
+        argv0, NETACP_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT,
         (unsigned)DNET_ROUTER_PRIORITY_DEFAULT);
 }
 /*
@@ -3574,7 +3574,7 @@ static int run_netacp_pool_selftest(void)
         ex.max_links = 9;
         g_netacp_max_links = netacp_pool_size(&ex, NULL);
     }
-    printf("DECNETD-I-POOL, NETACP inbound session pool: %d sessions, %d per node"
+    printf("NETACP-I-POOL, NETACP inbound session pool: %d sessions, %d per node"
            " (rd vms-6af1, R4 G2; size from executor MAXIMUM LINKS, rd vms-f91)\n",
            NETACP_MAX_SESSIONS, NETACP_MAX_PER_SOURCE);
     g_netacp_tx = netacp_tx_capture;
@@ -3676,9 +3676,9 @@ static int run_netacp_pool_selftest(void)
     for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
         netacp_slot_end(&slots[i], -1, 0, 30, "selftest teardown");
     g_netacp_tx = scs_datalink_send;
-    printf("DECNETD-I-POOL, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-POOL-SELFTEST: PASS\n"); return 0; }
-    printf("DECNETD-POOL-SELFTEST: FAIL\n");
+    printf("NETACP-I-POOL, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-POOL-SELFTEST: PASS\n"); return 0; }
+    printf("NETACP-POOL-SELFTEST: FAIL\n");
     return 1;
 #undef PL_CHECK
 }
@@ -3778,13 +3778,13 @@ static void m11_hex(const char *tag, const uint8_t *b, size_t n)
 
 static int run_mail11_accept_test(void)
 {
-    printf("DECNETD-I-MAIL11, inbound DECnet MAIL-11 (object 27) through NETACP's real"
+    printf("NETACP-I-MAIL11, inbound DECnet MAIL-11 (object 27) through NETACP's real"
            " dispatch to a MAIL_SERVER.EXE process, replayed from the real VAX"
            " capture (rd vms-47fd)\n");
     if (!dnet_mail_proc_image_present()) {
-        printf("DECNETD-I-MAIL11-NOIMAGE, SYS$SYSTEM:MAIL_SERVER.EXE is not on this system"
+        printf("NETACP-I-MAIL11-NOIMAGE, SYS$SYSTEM:MAIL_SERVER.EXE is not on this system"
                " disk: no MAIL server can be created, so the MAIL-11 proof cannot run here\n");
-        printf("DECNETD-MAIL11-ACCEPT: NOIMAGE\n");
+        printf("NETACP-MAIL11-ACCEPT: NOIMAGE\n");
         return 1;
     }
     int pass = 0, fail = 0;
@@ -3968,9 +3968,9 @@ static int run_mail11_accept_test(void)
     } else {
         printf("  NOTE: the node database could not name 1.1 VAX1 (From: shows the address)\n");
     }
-    printf("DECNETD-I-MAIL11, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-MAIL11-ACCEPT: PASS\n"); return 0; }
-    printf("DECNETD-MAIL11-ACCEPT: FAIL\n");
+    printf("NETACP-I-MAIL11, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-MAIL11-ACCEPT: PASS\n"); return 0; }
+    printf("NETACP-MAIL11-ACCEPT: FAIL\n");
     return 1;
 #undef M1_CHECK
 }
@@ -3985,7 +3985,7 @@ static int run_mail11_accept_test(void)
  * records -- dnet_broker_xfer, the same marshalling libvms's qio_net_op runs,
  * over an in-process queue standing in for the executive mailboxes. No
  * executive, no CAP_NET_RAW. It proves:
- *   - $ COPY's FAL client (copy_client_run_net, what DECNETD --copy runs on a
+ *   - $ COPY's FAL client (copy_client_run_net, what NETACP_TEST.EXE --copy runs on a
  *     booted node) opens an object-17 link through NETACP -- the OPEN completes
  *     only when the remote's Connect Confirm arrives -- drives a DAP session
  *     both ways over SEND/RECV, and the honest miss round-trips; DEACCESS
@@ -4294,7 +4294,7 @@ static int s3_send_ci(struct dnet_engine *b, int fd, uint16_t lla)
 
 static int run_netacp_broker_selftest(void)
 {
-    printf("DECNETD-I-NETACPBROKER, outbound links brokered through NETACP: _NET:"
+    printf("NETACP-I-NETACPBROKER, outbound links brokered through NETACP: _NET:"
            " broker records -> NETACP's pool -> NSP link to a peer, correlation-"
            "gated, bounded (no executive, rd vms-dda)\n");
     int pass = 0, fail = 0;
@@ -4313,7 +4313,7 @@ static int run_netacp_broker_selftest(void)
 
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
-        fprintf(stderr, "DECNETD-E-NETACPBROKER, socketpair failed: %s\n", strerror(errno));
+        fprintf(stderr, "NETACP-E-NETACPBROKER, socketpair failed: %s\n", strerror(errno));
         return 1;
     }
     g_nb_wire_fd = sv[0];
@@ -4804,9 +4804,9 @@ static int run_netacp_broker_selftest(void)
     g_netacp_reply = netacp_reply_mbx;
     g_netacp_self_set = 0;
     close(sv[0]); close(sv[1]);
-    printf("DECNETD-I-NETACPBROKER, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-NETACP-BROKER-SELFTEST: PASS\n"); return 0; }
-    printf("DECNETD-NETACP-BROKER-SELFTEST: FAIL\n");
+    printf("NETACP-I-NETACPBROKER, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-BROKER-SELFTEST: PASS\n"); return 0; }
+    printf("NETACP-BROKER-SELFTEST: FAIL\n");
     return 1;
 #undef NA_CHECK
 }
@@ -4956,7 +4956,7 @@ static int show_printable(const char *s)
 
 static int run_netacp_show_selftest(void)
 {
-    printf("DECNETD-I-NETACPSHOW, NCP SHOW / SHOW NETWORK read the running NETACP: snapshot"
+    printf("NETACP-I-NETACPSHOW, NCP SHOW / SHOW NETWORK read the running NETACP: snapshot"
            " codec, NETACP serving from its live state, oracle layout (no executive,"
            " rd vms-30e)\n");
     int pass = 0, fail = 0;
@@ -5739,9 +5739,9 @@ static int run_netacp_show_selftest(void)
                   "DCL SHOW NETWORK's DECNET product line matches the real VAX column for column");
     }
 
-    printf("DECNETD-I-NETACPSHOW, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-NETACP-SHOW-SELFTEST: PASS\n"); return 0; }
-    printf("DECNETD-NETACP-SHOW-SELFTEST: FAIL\n");
+    printf("NETACP-I-NETACPSHOW, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-SHOW-SELFTEST: PASS\n"); return 0; }
+    printf("NETACP-SHOW-SELFTEST: FAIL\n");
     return 1;
 #undef NS2_CHECK
 }
@@ -5751,7 +5751,7 @@ static int run_netacp_show_selftest(void)
  * The BOOTED proof that a $QIO on _NET: reaches a NETACP and a real FAL server
  * through it: this process runs a NETACP (its broker request mailbox published
  * as DNET$NETACP_REQ, its pool serving inbound objects) on a thread, and on the
- * main thread a client does exactly what DECNETD --copy does on a booted node:
+ * main thread a client does exactly what NETACP_TEST.EXE --copy does on a booted node:
  * $ASSIGN _NET: and COPY 0"SYSTEM MANAGER"::file over $QIO IO$_ACCESS /
  * WRITEVBLK / READVBLK / DEACCESS -- libvms qio_net_op, the executive
  * mailboxes, NETACP's outbound slot, the local loopback, NETACP's inbound FAL
@@ -6001,7 +6001,7 @@ static int net_req_probe_spawn(struct netreq_probe *v)
 static int run_net_loopback_accept_test(void)
 {
     dnet_tick_t t0 = monotonic_sec();
-    printf("DECNETD-I-NETLOOP, $QIO on _NET: brokered through NETACP: COPY 0\"SYSTEM\"::"
+    printf("NETACP-I-NETLOOP, $QIO on _NET: brokered through NETACP: COPY 0\"SYSTEM\"::"
            " over the local loopback to a FAL.EXE server process (rd vms-dda)\n");
     int pass = 0, fail = 0;
 #define NL_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
@@ -6123,9 +6123,9 @@ static int run_net_loopback_accept_test(void)
         netacp_broker_stop(g_lb_chan);
     }
 
-    printf("DECNETD-I-NETLOOP, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-NET-LOOPBACK-ACCEPT: PASS\n"); return 0; }
-    printf("DECNETD-NET-LOOPBACK-ACCEPT: FAIL\n");
+    printf("NETACP-I-NETLOOP, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-NET-LOOPBACK-ACCEPT: PASS\n"); return 0; }
+    printf("NETACP-NET-LOOPBACK-ACCEPT: FAIL\n");
     return 1;
 #undef NL_CHECK
 }
@@ -6249,13 +6249,13 @@ static int falp_write_private(const char *spec, const char *line)
 
 static int run_fal_proc_accept_test(void)
 {
-    printf("DECNETD-I-FALPROC, inbound FAL access runs in a FAL.EXE server process"
+    printf("NETACP-I-FALPROC, inbound FAL access runs in a FAL.EXE server process"
            " with the AUTHENTICATED user's UIC + privileges, never NETACP's"
            " (rd vms-d85, R4 G3)\n");
     if (!dnet_fal_proc_image_present()) {
-        printf("DECNETD-I-FALPROC-NOIMAGE, SYS$SYSTEM:FAL.EXE is not on this system disk:"
+        printf("NETACP-I-FALPROC-NOIMAGE, SYS$SYSTEM:FAL.EXE is not on this system disk:"
                " no FAL server process can be created, so the persona proof cannot run here\n");
-        printf("DECNETD-FAL-PROC-ACCEPT: NOIMAGE\n");
+        printf("NETACP-FAL-PROC-ACCEPT: NOIMAGE\n");
         return 1;
     }
     int pass = 0, fail = 0;
@@ -6431,9 +6431,9 @@ static int run_fal_proc_accept_test(void)
         pthread_join(th, NULL);
         netacp_broker_stop(g_lb_chan);
     }
-    printf("DECNETD-I-FALPROC, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-FAL-PROC-ACCEPT: PASS\n"); return 0; }
-    printf("DECNETD-FAL-PROC-ACCEPT: FAIL\n");
+    printf("NETACP-I-FALPROC, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("NETACP-FAL-PROC-ACCEPT: PASS\n"); return 0; }
+    printf("NETACP-FAL-PROC-ACCEPT: FAIL\n");
     return 1;
 #undef FP_CHECK
 }
@@ -6454,7 +6454,7 @@ int main(int argc, char **argv)
             return 0;
         }
     }
-    const char *ifname = DECNETD_DEFAULT_IFACE;
+    const char *ifname = NETACP_DEFAULT_IFACE;
     int ifname_explicit = 0;      /* did the caller pin --iface?             */
     const char *addr_s = NULL;
     const char *name = "OVMX";
@@ -6546,7 +6546,7 @@ int main(int argc, char **argv)
             usage(argv[0]);
             return 0;
         } else {
-            fprintf(stderr, "DECNETD-E-BADARG, unknown argument '%s'\n", argv[i]);
+            fprintf(stderr, "NETACP-E-BADARG, unknown argument '%s'\n", argv[i]);
             usage(argv[0]);
             return 1;
         }
@@ -6591,7 +6591,7 @@ int main(int argc, char **argv)
     if (copy_accept_test)
         return run_copy_accept_test();
     /* $ DIRECTORY / $ TYPE / $ COPY node:: are RMS's own remote access now
-     * (rd vms-0a7: src/vmsrms/rms_remote.c); no DECNETD client runs them. */
+     * (rd vms-0a7: src/vmsrms/rms_remote.c); no NETACP client runs them. */
 
     /* A router routes and a --set-host CLIENT bridges a terminal; neither is a
      * NETACP that serves inbound object-42 sessions unless the caller pins it on.

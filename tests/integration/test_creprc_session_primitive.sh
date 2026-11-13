@@ -10,7 +10,7 @@
 # way to "fix" a session bug is to fork+execl the login image right there in
 # the daemon that has the connection, which is exactly how OVMX ended up with
 # three independent login paths (console fork+execl, vmssshd's inline
-# reimplementation, decnetd's unauthenticated execvp). One of them is now
+# reimplementation, netacp's unauthenticated execvp). One of them is now
 # retired; this gate is what stops it coming back, and what will hold the SSH
 # (P3) and DECnet CTERM (P4) callers to the same rule when they land.
 #
@@ -180,11 +180,11 @@ fi
 #       $CREPRC with PRC$M_INTER|PRC$M_LOGINOUT, on a terminal it minted through
 #       the executive. If (a) passed because the code was deleted rather than
 #       moved, (b) fails and the gate still goes red.
-DECNETD_C="$SRC_ROOT/src/vmsdecnet/engine/decnetd.c"
+NETACP_C="$SRC_ROOT/src/vmsdecnet/engine/netacp.c"
 CTERM_HOST_C="$SRC_ROOT/src/vmsdecnet/cterm/dnet_cterm_host.c"
 CTERM_C="$SRC_ROOT/src/vmsdecnet/cterm/dnet_cterm.c"
 
-for f in "$DECNETD_C" "$CTERM_HOST_C" "$CTERM_C"; do
+for f in "$NETACP_C" "$CTERM_HOST_C" "$CTERM_C"; do
     if [ ! -f "$f" ]; then
         echo "FAIL: $f not found -- the DECnet CTERM caller scan cannot run"
         status=1
@@ -192,7 +192,7 @@ for f in "$DECNETD_C" "$CTERM_HOST_C" "$CTERM_C"; do
 done
 
 if [ "$status" -eq 0 ]; then
-    for f in "$DECNETD_C" "$CTERM_HOST_C" "$CTERM_C"; do
+    for f in "$NETACP_C" "$CTERM_HOST_C" "$CTERM_C"; do
         for sym in fork execl execlp execv execvp execve openpty forkpty \
                    posix_spawn login_tty setsid dup2; do
             if grep -nE "(^|[^A-Za-z0-9_])${sym}[[:space:]]*\(" "$f" \

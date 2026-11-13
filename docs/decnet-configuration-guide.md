@@ -238,7 +238,7 @@ name — both forms accept either.
 
 Once the executor is configured, `@SYS$MANAGER:STARTNET` (also run at boot,
 LPBETA phase) finds `SYS$SYSTEM:NETNODE_LOCAL.DAT` and starts NETACP
-(`SYS$SYSTEM:DECNETD.EXE`) detached. NETACP self-sources its address from that
+(`SYS$SYSTEM:NETACP.EXE`) detached. NETACP self-sources its address from that
 file, opens its datalink through the executive on the primary NIC, and sends
 endnode hellos. It needs `PHY_IO`, which it inherits from its creator (SYSTEM);
 without it the executive refuses the datalink with `SS$_NOPRIV` and NETACP exits
@@ -246,7 +246,7 @@ without it the executive refuses the datalink with `SS$_NOPRIV` and NETACP exits
 status lines go to `SYS$MANAGER:NETACP.LOG`, its `/OUTPUT` and `/ERROR` file, a
 new version each time NETACP starts, never to the console. Read it with
 `$ TYPE SYS$MANAGER:NETACP.LOG`. Its first line names the datalink it opened
-(`DECNETD-I-DATALINK`). On an unconfigured node STARTNET is a silent no-op.
+(`NETACP-I-DATALINK`). On an unconfigured node STARTNET is a silent no-op.
 
 ## 3. Remote interactive login — SET HOST
 
@@ -256,7 +256,8 @@ new version each time NETACP starts, never to the console. Read it with
 $ SET HOST VAX2
 ```
 
-DCL activates `SYS$SYSTEM:DECNETD.EXE --set-host <node>` on the caller's
+DCL activates `SYS$SYSTEM:RTPAD.EXE` (no command line; the node comes from the
+SET HOST parameter, rd vms-0a7 S2) on the caller's
 terminal through the real executive image activator (`dcl_activate_image` →
 `imgact_activate` — the same path `RUN` uses), which opens a genuine NSP
 logical link to the remote's Session Control **object 42 (CTERM)** and bridges
@@ -267,7 +268,7 @@ driver) — never raw `tcsetattr`/`cfmakeraw` above the VMS layer. An optional
 **proxy/accounting information only** — the remote always authenticates fresh
 (see below). On teardown, control returns with the canonical
 `%REM-S-END, control returned to node <local>::`
-(`docs/oracle/vax-sethost-cterm.console.txt`). If `DECNETD.EXE` is not staged
+(`docs/oracle/vax-sethost-cterm.console.txt`). If `NETACP.EXE` is not staged
 on the system disk, `SET HOST` reports
 `%SET-I-NOTAVAIL, DECnet is not available on this system` rather than faking a
 session. Register row: `decnet$set-host`, **implemented/real** — proven live
@@ -365,7 +366,7 @@ FAL server reproduces it faithfully:
 The end-to-end proof (a sequential file transferred both directions with real
 SYSUAF/Purdy auth — GUEST accepted, wrong password and `DISUSER` refused — and
 byte-verified through real RMS) runs on a real executive in CI
-(`DECNETD.EXE --fal-accept-test` in the booted acceptance battery); the
+(`NETACP_TEST.EXE --fal-accept-test` in the booted acceptance battery); the
 no-executive floor (`--fal-selftest`: a real object-17 connect carrying creds,
 the honest refusal, the DAP-over-NSP pump) runs anywhere.
 

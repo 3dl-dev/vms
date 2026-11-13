@@ -1,7 +1,7 @@
 /*
  * test_syssvc_sethost_syscall_audit.c - $ SET HOST reaches the remote node
  * through RTPAD.EXE, CLI$GET_VALUE, $QIO on _NET: and $QIO on the terminal --
- * never Linux libc, never DECNETD.EXE (rd vms-0a7 slice S2, vms-18c9; Baron
+ * never Linux libc, never NETACP.EXE (rd vms-0a7 slice S2, vms-18c9; Baron
  * 2026-11-02: "don't drop to linux LIBC, use all VMS-authentic API").
  *
  * WHAT IS AUDITED. DCL's SET HOST checks the command against DCL$TABLES,
@@ -19,7 +19,7 @@
  *   - clone with CLONE_THREAD, or clone3              (a thread);
  *   - socket(AF_INET / AF_INET6 / AF_PACKET / AF_NETLINK)
  *                                                     (host networking);
- *   - execve of anything but that DCL and SYS$SYSTEM:RTPAD.EXE (DECNETD.EXE
+ *   - execve of anything but that DCL and SYS$SYSTEM:RTPAD.EXE (NETACP.EXE
  *     above all: the image SET HOST used to run with --set-host);
  *   - ioctl(TCGETS) or ioctl(TIOCGWINSZ) -- isatty()/tcgetattr(); glibc's
  *     isatty() issues TCGETS, musl's (the static image's) TIOCGWINSZ -- from
@@ -96,7 +96,7 @@ static int sc_read(pid_t pid, struct sc *s)
     /* Linux/Alpha has no PTRACE_GETREGSET (no user_regset view): read the
      * registers one at a time by number, as strace does there -- v0 ($0)
      * carries the syscall number at syscall-entry stop, a0..a2 are $16..$18
-     * (the same reader as test_syssvc_decnetd_syscall_audit). */
+     * (the same reader as test_syssvc_netacp_syscall_audit). */
     static const int regno[4] = { 0, 16, 17, 18 };
     unsigned long val[4];
     (void)iov;
@@ -397,8 +397,8 @@ static void control_child(void)
 #endif
     (void)syscall(SYS_ioctl, 0, TCGETS, &t);        /* glibc isatty: this task counts as RTPAD */
     (void)syscall(SYS_ioctl, 0, TIOCGWINSZ, &ws);   /* musl isatty */
-    char *const av[] = { (char *)"DECNETD.EXE", NULL };
-    (void)syscall(SYS_execve, "/nonexistent/DECNETD.EXE", av, NULL);
+    char *const av[] = { (char *)"NETACP.EXE", NULL };
+    (void)syscall(SYS_execve, "/nonexistent/NETACP.EXE", av, NULL);
     syscall(SYS_exit_group, 0);
     _exit(0);
 }
@@ -573,10 +573,10 @@ int main(int argc, char **argv)
         int honest = 1;
         for (int i = 0; i < 2; i++)
             if (!strchr(R[i].out, '%') || has(&R[i], "BADPARAM") || has(&R[i], "Username:") ||
-                has(&R[i], "DECNETD") || has(&R[i], "REM-S-END"))
+                has(&R[i], "NETACP") || has(&R[i], "REM-S-END"))
                 honest = 0;
         CHECK(honest,
-              "with no NETACP, SET HOST reaches RTPAD, which reads its node from the CLI and fails honestly at the link (no session, no DECNETD)");
+              "with no NETACP, SET HOST reaches RTPAD, which reads its node from the CLI and fails honestly at the link (no session, no NETACP)");
     }
 
     unsigned pipes = 0, waits = 0, threads = 0, socks = 0, execs = 0, ttys = 0;
@@ -596,7 +596,7 @@ int main(int argc, char **argv)
     CHECK(waits == 0, "NO poll/ppoll/select/pselect6/epoll wait from RTPAD.EXE in SET HOST");
     CHECK(threads == 0, "NO thread (clone CLONE_THREAD / clone3) in SET HOST");
     CHECK(socks == 0, "NO socket(AF_INET/INET6/PACKET/NETLINK) in SET HOST");
-    CHECK(execs == 0, "NO exec of DECNETD.EXE or any image but DCL and RTPAD.EXE in SET HOST");
+    CHECK(execs == 0, "NO exec of NETACP.EXE or any image but DCL and RTPAD.EXE in SET HOST");
     /* negctl: rtpad-terminal-via-isatty */
     CHECK(ttys == 0, "NO isatty / ioctl(TCGETS or TIOCGWINSZ) from RTPAD.EXE in SET HOST");
 

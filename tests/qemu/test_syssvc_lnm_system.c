@@ -392,7 +392,7 @@ static void run_seed_needs_sysnam(void)
  * and every teardown deletes them -- both open a seqlock write section on the
  * shared arena. A reader that gave up after a fixed spin budget returned "no
  * such name" for SYS$SYSROOT while a writer ran on another vCPU (measured in
- * DECNETD's FAL persona proof). Here children with copied process names come
+ * NETACP's FAL persona proof). Here children with copied process names come
  * and go while this process translates SYS$SYSROOT continuously: every
  * translation must succeed.
  */

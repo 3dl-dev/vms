@@ -81,7 +81,7 @@
 
 /* Completion statuses carried in dnet_broker_rsp.status. They ARE the VMS SS$_
  * condition values (ssdef.h) -- named here so this pure codec needs no ssdef.h;
- * decnetd and libvms _Static_assert the equality. The DECnet-specific VMS codes
+ * netacp and libvms _Static_assert the equality. The DECnet-specific VMS codes
  * (SS$_LINKDISCON, SS$_REJECT, SS$_NOSUCHNODE, SS$_NOLINKS ...) are not yet in
  * OVMX's ssdef.h, so the nearest existing codes are used, LABELLED (rd vms-dda
  * follow-up): a refused/aborted/disconnected link = ABORT, pool full or the
@@ -179,7 +179,7 @@ DNET_BROKER_API int dnet_broker_corr_match(uint32_t req_corr, uint32_t rsp_corr)
 /* ------------------------------------------------------------------------
  * THE CLIENT SIDE (rd vms-dda) -- what a $QIO on a _NET: channel does with these
  * records, written ONCE here so libvms's qio_net_op (over executive mailboxes)
- * and decnetd's host-floor selftest (over an in-process queue) run the SAME
+ * and netacp's host-floor selftest (over an in-process queue) run the SAME
  * marshalling, correlation and wait logic.
  * ------------------------------------------------------------------------ */
 

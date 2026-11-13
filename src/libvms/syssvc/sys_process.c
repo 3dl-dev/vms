@@ -1176,7 +1176,7 @@ static uint32_t creprc_bind_terminal(const char *devnam, const char *devpath)
  * A VMS file spec such as STARTNET's SYS$MANAGER:NETACP.LOG never opens that
  * way (there is no /vms passthrough), the dup2 was skipped, and the detached
  * NETACP kept the CREATOR's descriptors -- the operator console STARTUP runs
- * on -- so every DECNETD-I- line it wrote landed on OPA0: in the middle of the
+ * on -- so every NETACP-I- line it wrote landed on OPA0: in the middle of the
  * login prompt. A detached process has no terminal; it must never write on the
  * creator's console because a file could not be opened for it.
  */

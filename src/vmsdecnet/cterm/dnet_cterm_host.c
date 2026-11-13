@@ -183,7 +183,7 @@ uint32_t dnet_cterm_host_open_desc(struct dnet_cterm_host_session *hs,
  * the resulting validated descriptor to the privileged control path above. It
  * exists so callers that already hold the wire bytes need not open-code the two
  * steps; NETACP's own serve loop calls the two steps explicitly so the seam is
- * visible at the call site (src/vmsdecnet/engine/decnetd.c).
+ * visible at the call site (src/vmsdecnet/engine/netacp.c).
  *
  * The parse failure maps to SS$_BADPARAM -- the same refusal the privileged
  * path gives an unvalidated descriptor -- so a malformed frame is refused

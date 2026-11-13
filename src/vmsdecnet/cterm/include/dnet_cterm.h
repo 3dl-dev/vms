@@ -273,7 +273,7 @@ int dnet_cterm_encode(const struct dnet_cterm_msg *msg,
  * byte shapes, proven byte-identical against the captured specimen in
  * tests/vmsdecnet/test_dnet_cterm.c. Wiring the FULL foundation sequence
  * (host-speaks-first ordering, the seg-3/seg-4 messages this capture did not
- * decode, decnetd's actual SET HOST driver) is vms-6165.
+ * decode, RTPAD.EXE's actual SET HOST driver) is vms-6165.
  *
  * BOUNDED. Every parse function here runs on bytes that may have arrived off
  * the wire before anyone has authenticated: never reads past `len`, and a
@@ -411,7 +411,7 @@ int dnet_cterm_found_client_termchar_parse(const uint8_t *buf, size_t len,
  *                                          its terminal characteristics
  *        client 03 00 00 00 00 00 <len:2LE> <bytes> <term>  -> READ DATA (input)
  *
- * These functions serve the LIVE --set-host client (decnetd run_set_host_loop).
+ * These functions serve the LIVE SET HOST client (RTPAD.EXE, src/vmsdecnet/rtpad).
  * They are DELIBERATELY SEPARATE from dnet_cterm_rx()/the flat spec-derived PDU
  * set (which the OVMX<->OVMX self-tests still exercise): the real wire never
  * uses the flat PDUs, so the live client speaks only the oracle bytes here.

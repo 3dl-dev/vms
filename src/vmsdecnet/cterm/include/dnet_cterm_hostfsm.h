@@ -6,7 +6,7 @@
  * is the CTERM *host*: it runs LOGINOUT/DCL and drives the remote *server*
  * (the terminal side). This module is the wire half of that role -- a PURE
  * FSM + codec, no socket, no process, no clock of its own, no allocation -- so
- * it links into NETACP (decnetd) and into the unit test and the lab harness
+ * it links into NETACP (netacp) and into the unit test and the lab harness
  * alike. It replaces, for the inbound path, the OVMX-invented flat PDU set
  * (dnet_cterm_bind_accept / dnet_cterm_write / the host arm of dnet_cterm_rx),
  * which a real VMS SET HOST client cannot parse and which waited for the

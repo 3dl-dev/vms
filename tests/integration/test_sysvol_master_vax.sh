@@ -70,11 +70,11 @@ make_image PROVISION.EXE    P 15000
 make_image LOGINOUT.EXE     L 12000
 make_image JOB_CONTROL.EXE  J 11000
 make_image STARTUP.EXE      S  9000
-# DECNETD.EXE (rd vms-c1f): stage_sysvol.sh's BOOT_IMAGES now includes it --
+# NETACP.EXE (rd vms-c1f): stage_sysvol.sh's BOOT_IMAGES now includes it --
 # the DCL acceptance battery's DECnet CTERM section hard-gates on it being on
 # the VAX sysvol, so a stand-in is required here too or stage_sysvol.sh dies
 # "boot image missing from images dir".
-make_image DECNETD.EXE      N  8000
+make_image NETACP.EXE      N  8000
 # NETACP.EXE (rd vms-0a7 S3): the network ACP NCP SET EXECUTOR STATE ON creates.
 make_image NETACP.EXE       N  8000
 # FAL.EXE (rd vms-d85): the FAL network server process, staged beside it.
@@ -119,17 +119,17 @@ echo "PASS: staged system tree round-trips master -> extract byte-exact"
 # ---------------------------------------------------------------------------
 ROOTED="SYS0/SYSCOMMON/SYSEXE"
 for f in DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE \
-         DECNETD.EXE NETACP.EXE RTPAD.EXE SYSUAF.DAT RIGHTSLIST.DAT OVMXVMSSYS.PAR; do
+         NETACP.EXE NETACP.EXE RTPAD.EXE SYSUAF.DAT RIGHTSLIST.DAT OVMXVMSSYS.PAR; do
     [ -f "$OUT/$ROOTED/$f" ] || fail "boot file absent from rooted SYSEXE after round-trip: $ROOTED/$f"
 done
 cmp -s "$IMAGES/DCL.EXE"       "$OUT/$ROOTED/DCL.EXE"       || fail "DCL.EXE not byte-exact at rooted path"
 cmp -s "$IMAGES/PROVISION.EXE" "$OUT/$ROOTED/PROVISION.EXE" || fail "PROVISION.EXE not byte-exact at rooted path"
-cmp -s "$IMAGES/DECNETD.EXE"   "$OUT/$ROOTED/DECNETD.EXE"   || fail "DECNETD.EXE not byte-exact at rooted path"
+cmp -s "$IMAGES/NETACP.EXE"   "$OUT/$ROOTED/NETACP.EXE"   || fail "NETACP.EXE not byte-exact at rooted path"
 cmp -s "$IMAGES/NETACP.EXE"    "$OUT/$ROOTED/NETACP.EXE"    || fail "NETACP.EXE not byte-exact at rooted path"
 cmp -s "$IMAGES/RTPAD.EXE"     "$OUT/$ROOTED/RTPAD.EXE"     || fail "RTPAD.EXE not byte-exact at rooted path"
 cmp -s "$REPO/distro/rootfs/vms/$ROOTED/SYSUAF.DAT" "$OUT/$ROOTED/SYSUAF.DAT" \
     || fail "SYSUAF.DAT not reused byte-exact"
-echo "PASS: DCL.EXE + PROVISION.EXE + DECNETD.EXE + SYSUAF.DAT present + byte-exact at rooted [SYS0.SYSCOMMON.SYSEXE]"
+echo "PASS: DCL.EXE + PROVISION.EXE + NETACP.EXE + SYSUAF.DAT present + byte-exact at rooted [SYS0.SYSCOMMON.SYSEXE]"
 
 # The mastered layout must be ROOTED, never flat: a flat [SYSEXE]DCL.EXE (i.e.
 # SYSEXE directly under the MFD) is the exact shape that halts %OVMX-F-SYSINIT.

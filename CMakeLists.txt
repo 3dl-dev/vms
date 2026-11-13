@@ -496,7 +496,7 @@ if(BUILD_TESTS)
     # session replay + fuzz), the booted two-node SET HOST
     # (tests/qemu/test_decnet_sethost_pair_boot_e2e.sh), the SET HOST syscall
     # audit and the live VAX bench capture. The former veth harness drove
-    # DECNETD.EXE's own --set-host datalink client, which no longer exists.
+    # retired DECnet daemon's own --set-host client, which no longer exists.
 
     # vms-2a9 standing gate: JOB_CONTROL is created by a registered STDRV
     # component (SYS$STARTUP:VMS$VMS.DAT, CONFIG phase), not a hardcoded
@@ -1169,6 +1169,15 @@ if(BUILD_TESTS)
     set_tests_properties(no_scsd_image_gate PROPERTIES
         LABELS "integration;authenticity;cluster" TIMEOUT 60)
 
+    # rd vms-0a7 S4: NETACP.EXE is deleted, not merely unused -- no source, no
+    # build target and no staging line on any arch, with NETACP.EXE, RTPAD.EXE,
+    # FAL.EXE and NCP.EXE staged in its place.
+    add_test(NAME no_decnetd_image_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_no_decnetd_image.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(no_decnetd_image_gate PROPERTIES
+        LABELS "integration;authenticity;decnet" TIMEOUT 60)
+
     # SHOW SYMBOL renders an integer's Hex and Octal columns as a LONGWORD
     # (rd vms-c71), pinned to a side-by-side measurement against OpenVMS VAX
     # V7.3. Two defects lived on one line: a negative sign-extended to 16 hex
@@ -1497,11 +1506,9 @@ if(BUILD_TOOLS)
         vms_initialize       # INITIALIZE.EXE
         vms_sysgen           # SYSGEN.EXE
         vms_cnxtrace         # CNXTRACE.EXE
-        # DECNETD.EXE is retired by rd vms-0a7 S3: it exits SS$_UNSUPPORTED
-        # until S4; NETACP.EXE is the ACP that replaces it. Keep every entry
-        # in `target  # NAME` form with no parentheses on any line of this
-        # list: tools/parity/image_parity.py reads it to derive the VAX set.
-        decnetd_exe          # DECNETD.EXE
+        # Keep every entry in `target  # NAME` form with no parentheses on
+        # any line of this list: tools/parity/image_parity.py reads it to
+        # derive the VAX set.
         netacp_exe           # NETACP.EXE
         fal_exe              # FAL.EXE
         rtpad_exe            # RTPAD.EXE
@@ -1513,22 +1520,20 @@ if(BUILD_TOOLS)
     # (SET/DEFINE/SHOW/CLEAR NODE, SET/SHOW EXECUTOR). Portable C (stdio + the
     # node database) with no arch-specific code, so it ships on BOTH arches --
     # the configuration surface a DECnet manager uses to build the node database.
-    # (The DECNETD.EXE network daemon is deliberately NOT in this aggregate yet:
-    # its AF_PACKET/PTY path needs the netbsd-vax userspace port + a booted proof
-    # before it ships -- tracked under vms-30e, not an allowlist gap.)
-
-    # DECNETD.EXE joins the aggregate on BOTH arches (rd vms-f40). It is not a
-    # diagnostic or a convenience: it is the DECnet Phase IV endnode, and it is
-    # what an inbound $ SET HOST arrives at. A system that claims to serve
-    # object 42 -- to create a LOGINOUT session for a remote user -- and does
-    # not ship the image that answers the connect would be claiming a facility
-    # the installed product does not have (INV-6). Its datalink is substrate-
-    # abstracted the same way the cluster's was (src/libdatalink: AF_PACKET on
-    # Linux, bpf(4) on NetBSD), so there is no Decision-A split here and this
-    # must never become an image-parity allowlist entry.
+    # NETACP.EXE, RTPAD.EXE and FAL.EXE are in the aggregate on BOTH arches
+    # (rd vms-f40, vms-0a7). NETACP is the DECnet Phase IV endnode's ancillary
+    # control process (NCP SET EXECUTOR STATE ON creates it); an inbound
+    # $ SET HOST arrives at it, outbound SET HOST is RTPAD.EXE, and object 17 is
+    # FAL.EXE, created by $CREPRC. A system that claims to serve object 42 and
+    # does not ship the image that answers the connect would be claiming a
+    # facility the installed product does not have (INV-6). The datalink is
+    # substrate-abstracted (src/libdatalink), so there is no Decision-A split
+    # here and none of these may become an image-parity allowlist entry.
+    # There is no NETACP.EXE: rd vms-0a7 S4 removed it, and
+    # tests/integration/test_no_decnetd_image.sh keeps it out.
     #
     # Being SHIPPED is not being STARTED: nothing in the startup procedures
-    # runs it, exactly as staging LIBRARIAN.EXE does not start a librarian.
+    # creates NETACP until STARTNET's NCP SET EXECUTOR STATE ON.
 
     # CNXTRACE.EXE is in the aggregate on PURPOSE, on both arches (E69). It
     # reads the connection manager's join transition ring out of the executive

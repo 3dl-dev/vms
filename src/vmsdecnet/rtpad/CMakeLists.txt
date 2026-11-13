@@ -2,7 +2,7 @@
 # vms-18c9). DCL's command tables send SET HOST to SYS$SYSTEM:RTPAD.EXE, which
 # reads NODE and /USERNAME with CLI$GET_VALUE, opens the CTERM link (object 42)
 # through _NET: ($QIO, brokered by NETACP) and carries the terminal over it with
-# $QIO on the terminal channel. It replaces DECNETD.EXE's former --set-host
+# $QIO on the terminal channel. It replaces the retired DECnet daemon's former --set-host
 # client role; no argv, no stdio, no poll, no thread.
 #
 # rtpad_session: the link- and terminal-independent CTERM client protocol (the

@@ -1,13 +1,13 @@
 /*
- * decnetd_rms_bind.c - force the RMS record services + the binary SYSUAF engine
- * into DECNETD.EXE's static link closure so FAL (--fal-accept-test) can
+ * netacp_rms_bind.c - force the RMS record services + the binary SYSUAF engine
+ * into NETACP.EXE's static link closure so FAL (--fal-accept-test) can
  * authenticate an inbound object-17 connect against the REAL SYS$SYSTEM:SYSUAF
  * and move the transferred file through RMS over the Files-11 ODS-2 ACP
  * (rd vms-8c2, epic vms-30e).
  *
  * WHY THIS OBJECT EXISTS.
  *
- * DECNETD.EXE is a static musl image (distro/Dockerfile.bootable build-static,
+ * NETACP.EXE is a static musl image (distro/Dockerfile.bootable build-static,
  * OVMX_STATIC=ON). Its FAL half authenticates through sysuaf_lookup +
  * sysuaf_authenticate (LIBVMS) and does real file I/O through rms_textfile_*
  * (LIBVMS) -- but BOTH of those reach the executive-backed producers through a
@@ -20,7 +20,7 @@
  * producers without inverting the layering -- hence the weak seam.
  *
  * THE DEFECT THIS CLOSES. Under a static link a WEAK undefined reference does
- * NOT extract the defining archive member. DECNETD linked neither vmsrms nor any
+ * NOT extract the defining archive member. NETACP linked neither vmsrms nor any
  * STRONG reference into it, so sys$open and ovmx_sysuaf_read_user stayed NULL,
  * rms_services_present() read FALSE, sysuaf_lookup() returned "miss" before any
  * ACP call, and --fal-accept-test's GUEST/GUEST auth + source-file creation both
@@ -31,8 +31,8 @@
  *
  * THE FIX. A table of STRONG references to the RMS record services rms_textfile.c
  * needs AND the two binary-SYSUAF engine readers sysuaf.c needs. Compiled into
- * DECNETD.EXE, it forces the static linker to extract rms_core.o + sysuaf_live.o
- * from the vmsrms archive DECNETD now links, so rms_services_present() is TRUE and
+ * NETACP.EXE, it forces the static linker to extract rms_core.o + sysuaf_live.o
+ * from the vmsrms archive NETACP now links, so rms_services_present() is TRUE and
  * the genuine ACP $CREATE/$PUT + the genuine $UAFDEF Purdy read of SYSUAF run. It
  * changes NO behaviour of its own (never called) -- `used` keeps the compiler from
  * discarding the table and the address-taken `volatile const` array keeps the
@@ -62,7 +62,7 @@ extern unsigned int ovmx_sysuaf_read_uic(unsigned int uic, void *out);
 /* A table of the addresses. `used` keeps the compiler from discarding it and
  * `volatile` keeps the linker from folding the references away, so each symbol
  * stays a genuine strong undefined reference that pulls its RMS producer in. */
-void *const volatile decnetd_rms_bind_anchor[] __attribute__((used)) = {
+void *const volatile netacp_rms_bind_anchor[] __attribute__((used)) = {
     (void *)&sys$open,
     (void *)&sys$close,
     (void *)&sys$connect,

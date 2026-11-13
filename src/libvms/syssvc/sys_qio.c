@@ -1202,7 +1202,7 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
 /*
  * qio_terminal_setmode - the P2-selector IO$_SETMODE (IO$K_TT_PASSALL /
  * IO$K_TT_NORMAL) on a channel that is NOT an executive terminal (vms-f54;
- * rd vms-f8c). A $ SET HOST CTERM client (src/vmsdecnet/engine/decnetd.c) asks
+ * rd vms-f8c). A $ SET HOST CTERM client (RTPAD.EXE, src/vmsdecnet/rtpad) asks
  * for pass-all on its terminal; on a terminal unit that request is the
  * executive terminal driver's (qio_terminal_op below, VMS_IOCTL_TT_SETMODE).
  * What reaches HERE is a channel with no terminal behind it -- a pipe or a

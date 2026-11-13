@@ -3297,7 +3297,7 @@ static int lnm_name_eq(const char *a, const char *b, int case_blind)
  * such name": under TCG, with every process registration and teardown now
  * opening a write section (LNM$PROCESS, rd vms-ef21), the budget ran out
  * while a writer on another vCPU finished, and a SYS$SYSROOT / SYS$SYSTEM
- * translation intermittently "failed" (measured: DECNETD's FAL persona proof
+ * translation intermittently "failed" (measured: NETACP's FAL persona proof
  * lost SYS$SYSROOT mid-test). A name that exists never translates as absent
  * because a writer was busy: spin briefly (a write section is a short bounded
  * loop), then yield the CPU each retry so the writer can finish. The bound

@@ -4,7 +4,7 @@
  * image reads it from there.
  *
  * THE BUG THIS GUARDS. Since vms-d01, $QIO/$QIOW return the status of QUEUING
- * a request and put how the I/O ENDED in the IOSB, as on VMS. DECNETD's _NET:
+ * a request and put how the I/O ENDED in the IOSB, as on VMS. NETACP's _NET:
  * client kept reading the service status: a connect NETACP refused
  * (SS$_INVLOGIN) looked like an open link, every later read of that
  * nonexistent link (SS$_FILNOTACC in the IOSB) looked like an empty message,
@@ -18,7 +18,7 @@
  * mailbox it reads, and answers each request on the client's reply mailbox
  * with a status chosen by the test (a refused connect, an accepted one, an
  * empty read). That is the far end of the seam only; the client half under
- * test is the code DECNETD runs. The real NETACP's own refusal is proven by the
+ * test is the code NETACP runs. The real NETACP's own refusal is proven by the
  * booted DECnet e2e.
  */
 #include <stdio.h>

@@ -8,7 +8,7 @@
  * plain RMS clients: RMS ($PARSE/$SEARCH/$OPEN/$GET/$CREATE/$PUT, src/vmsrms/
  * rms_remote.c) $ASSIGNs _NET: and talks DAP to the node's FAL with $QIOW
  * IO$_ACCESS / WRITEVBLK / READVBLK / DEACCESS; DCL no longer activates
- * SYS$SYSTEM:DECNETD.EXE for them. This suite runs the shipped DCL.EXE, one
+ * SYS$SYSTEM:NETACP.EXE for them. This suite runs the shipped DCL.EXE, one
  * command per process (`DCL.EXE -c "<command>"`), as a VMS subprocess the
  * executive created (ovmx_fork_subprocess_st), under ptrace from its first
  * instruction, and sees every system call of it -- and of any process or
@@ -21,7 +21,7 @@
  *   - clone with CLONE_THREAD, or clone3              (a thread);
  *   - socket(AF_INET / AF_INET6 / AF_PACKET / AF_NETLINK)
  *                                                     (host networking);
- *   - execve / execveat of anything but the DCL.EXE under trace (DECNETD.EXE
+ *   - execve / execveat of anything but the DCL.EXE under trace (NETACP.EXE
  *     above all: the image DCL used to run for these verbs).
  *
  * NOT VACUOUS. A trace that saw nothing passes all of that, so for each
@@ -366,8 +366,8 @@ static void control_child(void)
         pthread_join(th, NULL);
     /* an exec of an image that is not the allowed one (it need not exist:
      * the entry is what is classified) */
-    char *const av[] = { (char *)"DECNETD.EXE", NULL };
-    (void)execv("/nonexistent/DECNETD.EXE", av);
+    char *const av[] = { (char *)"NETACP.EXE", NULL };
+    (void)execv("/nonexistent/NETACP.EXE", av);
     _exit(0);
 }
 
@@ -567,12 +567,12 @@ int main(int argc, char **argv)
         /* No NETACP on this rail: each verb still goes down the RMS remote
          * path through the executive and fails honestly AT THE NODE:: SPEC --
          * a DCL error naming that spec (password masked) and a failure
-         * status, never a listing or a record, never a DECNETD helper. */
+         * status, never a listing or a record, never a NETACP helper. */
         int honest = 1;
         for (int i = 0; i < 4; i++)
             if (!exited_fail(&R[i]) || !strchr(R[i].out, '%') ||
                 !has(&R[i], "0\"SYSTEM password\"::") || has(&R[i], "MANAGER") ||
-                has(&R[i], "Total of ") || has(&R[i], "DECNETD"))
+                has(&R[i], "Total of ") || has(&R[i], "NETACP"))
                 honest = 0;
         CHECK(honest,
               "with no NETACP, DIRECTORY / TYPE / COPY (both directions) of a node:: spec fail at the node:: spec with a DCL error and a failure status");
@@ -594,7 +594,7 @@ int main(int argc, char **argv)
     CHECK(waits == 0, "NO poll/ppoll/select/pselect6/epoll wait in DIRECTORY, TYPE or COPY of a node:: spec");
     CHECK(threads == 0, "NO thread (clone CLONE_THREAD / clone3) in DIRECTORY, TYPE or COPY of a node:: spec");
     CHECK(socks == 0, "NO socket(AF_INET/INET6/PACKET/NETLINK) in DIRECTORY, TYPE or COPY of a node:: spec");
-    CHECK(execs == 0, "NO exec of DECNETD.EXE or any image but the DCL under audit in DIRECTORY, TYPE or COPY of a node:: spec");
+    CHECK(execs == 0, "NO exec of NETACP.EXE or any image but the DCL under audit in DIRECTORY, TYPE or COPY of a node:: spec");
 
     printf("=== test_syssvc_dcl_remote_syscall_audit: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

@@ -44,7 +44,7 @@ Measured 2026-10-10, on the first run with an empty list:
   Alpha and VAX, and the list is empty.
 - The census only sees processes alive when it runs. A startup image that ran
   as root and exited is not measured here, and neither is a server the
-  acceptance boot does not start (DECNETD).
+  acceptance boot does not start (NETACP).
 
 ## Substrate identity (vms-ac48, vms-137e)
 
@@ -60,7 +60,7 @@ Measured 2026-10-10, on the first run with an empty list:
   Every place that reads `getuid()`/`getgid()` as a UIC instead reads the PCB:
   - `sys_security.c get_uic`
   - `vms_devtab.c caller_uic`
-  - `decnetd.c`
+  - `netacp.c`
   - RMS file protection
 - **LOGINOUT** keeps its `setuid()` until creator-driven creation (#1591 PR2)
   lands. After that it calls no `setuid()`: the executive re-personas the
@@ -85,7 +85,7 @@ Measured 2026-10-10, on the first run with an empty list:
 | Today (root/capability) | Becomes | Item |
 |---|---|---|
 | `capable(CAP_*)` / kauth gates in vms.ko and the NetBSD module | `vms_prot_require_priv` on the PCB | vms-5df4 |
-| DECNETD raw datalink (`CAP_NET_RAW`, bpf) and its root checks | executive L2 channel (PHY_IO), already on Alpha | vms-ef02 |
+| NETACP raw datalink (`CAP_NET_RAW`, bpf) and its root checks | executive L2 channel (PHY_IO), already on Alpha | vms-ef02 |
 | `reboot(2)` at shutdown | executive shutdown service (CMKRNL) | vms-137e |
 | `sethostname(2)` after bootstrap | done in bootstrap, or executive (SYSNAM) | vms-137e |
 | LOGINOUT `setuid()`/`chown()` of staging dirs | executive persona + executive-owned staging | vms-ac48 |

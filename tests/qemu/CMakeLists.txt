@@ -836,7 +836,7 @@ endif()
 # subject alongside its suite.
 get_property(_qemu_syssvc_test_targets GLOBAL PROPERTY QEMU_SYSSVC_TEST_TARGETS)
 add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc testreal_inproc testextern_inproc testextern_foreign testprod_shr testnonres_inproc testtls_inproc pipe_stage)
-# NETACP.EXE (rd vms-d3cd, vms-0a7 S3): the SUBJECT test_syssvc_decnetd_syscall_audit
+# NETACP.EXE (rd vms-d3cd, vms-0a7 S3): the SUBJECT test_syssvc_netacp_syscall_audit
 # traces -- the shipped executive-datalink NETACP (OVMX_STATIC builds
 # ovmx_datalink_exec). Built with the suites so it arrives with them; staged at
 # SYS$SYSTEM by tests/qemu/Dockerfile.

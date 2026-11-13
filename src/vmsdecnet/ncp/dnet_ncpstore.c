@@ -2,7 +2,7 @@
  * dnet_ncpstore.c - the DECnet Phase IV configuration databases at
  * SYS$SYSTEM:NETNODE_LOCAL.DAT / NETNODE_REMOTE.DAT / NETOBJECT.DAT, reached
  * through the VMS file layer (RMS over the Files-11 ACP), shared by NCP.EXE and
- * NETACP (DECNETD.EXE). See dnet_ncpstore.h for the contract (rd vms-1f69).
+ * NETACP.EXE. See dnet_ncpstore.h for the contract (rd vms-1f69).
  *
  * TWO BACKENDS, chosen per database by ONE rule and never mixed at runtime:
  *   - the host-test override (OVMX_DECNET_* env var set): the path-based POSIX

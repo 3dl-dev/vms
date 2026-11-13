@@ -12,7 +12,7 @@
  * extract the defining archive member, so with nothing else naming them every
  * service stays NULL, rms_services_present() reads FALSE, and NCP SET EXECUTOR
  * would fail %NCP-E-CFGWRERR before any ACP call even on a healthy executive.
- * The same trap decnetd_rms_bind.c / loginout_rms_bind.c /
+ * The same trap netacp_rms_bind.c / loginout_rms_bind.c /
  * tests/qemu/rms_acp_bind.c close for their images.
  *
  * THE FIX. A table of STRONG references to the seven services. It is never

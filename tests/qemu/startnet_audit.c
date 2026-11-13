@@ -24,7 +24,7 @@
  * ASSERTED, over every traced task: no pipe/pipe2; no poll/ppoll/select/
  * pselect6/epoll wait; no clone(CLONE_THREAD)/clone3; no socket(AF_INET/
  * INET6/PACKET/NETLINK); no exec of anything but DCL, NCP, NETACP and FAL
- * (never DECNETD.EXE). NOT VACUOUS: NCP, NETACP and FAL.EXE were each exec'd
+ * (never NETACP.EXE). NOT VACUOUS: NCP, NETACP and FAL.EXE were each exec'd
  * under the trace, the tasks made executive (/dev/vms) calls, the client's
  * byte-verified COPY passed, STARTNET exited success, NETACP exited 0 on the
  * stop. The classifier is proven first on a control child that makes each
@@ -458,8 +458,8 @@ static void control_child(void)
     pthread_t th;
     if (pthread_create(&th, NULL, ctl_thread, NULL) == 0)
         pthread_join(th, NULL);
-    char *const av[] = { (char *)"DECNETD.EXE", NULL };
-    (void)execv("/nonexistent/DECNETD.EXE", av);
+    char *const av[] = { (char *)"RTPAD.EXE", NULL };
+    (void)execv("/nonexistent/RTPAD.EXE", av);
     _exit(0);
 }
 
@@ -601,7 +601,7 @@ int main(int argc, char **argv)
     CHECK(v.bad_wait == 0, "NO poll/ppoll/select/epoll wait");
     CHECK(v.bad_thread == 0, "NO thread (clone CLONE_THREAD / clone3)");
     CHECK(v.bad_socket == 0, "NO host socket (AF_INET/INET6/PACKET/NETLINK)");
-    CHECK(v.bad_exec == 0, "NO exec of anything but DCL, NCP, NETACP and FAL (never DECNETD.EXE)");
+    CHECK(v.bad_exec == 0, "NO exec of anything but DCL, NCP, NETACP and FAL (never NETACP.EXE)");
 
     printf("=== startnet_audit: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

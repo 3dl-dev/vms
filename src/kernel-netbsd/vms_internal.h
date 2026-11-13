@@ -1529,7 +1529,7 @@ int vms_devtab_served_name(uint32_t id, char *out, uint32_t outsz);
  * (vms_ioctl_assign()). `pty_backing` is the short native PTY name (e.g.
  * "pts7"), recorded for provenance only -- the executive never moves bytes
  * over it. Called by the executive (design P1/P3/P4's $CREPRC / vmssshd /
- * decnetd-CTERM callers), never from module init. See vms_devtab.c for the
+ * netacp-CTERM callers), never from module init. See vms_devtab.c for the
  * full contract.
  */
 int vms_devtab_add_terminal(const char *devnam, const char *pty_backing);

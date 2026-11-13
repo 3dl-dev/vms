@@ -33,7 +33,7 @@ mailbox and tells NETACP where to answer.
 ### Topology
 
 ```
-  user process (qio_net_op)                 NETACP (decnetd)
+  user process (qio_net_op)                 NETACP (netacp)
   -------------------------                 ----------------
   per-channel reply mbx  <--- response ---  writes response to req->reply_unit
         (its own MBAr:)                            ^
@@ -43,7 +43,7 @@ mailbox and tells NETACP where to answer.
 ```
 
 - **Shared request mailbox**: NETACP `vms_kif_mbx_create`s it at startup
-  (decnetd.c ≈:3100, after `dnet_engine_init`, before the serve loop) and
+  (netacp.c ≈:3100, after `dnet_engine_init`, before the serve loop) and
   publishes it under an LNM$SYSTEM logical (e.g. `DNET$NETACP_REQ` → `MBAn:`),
   the SYS$NET/ACP-mailbox shape. `maxmsg` raised to hold `DNET_BROKER_REQ_MAX`.
 - **Per-client reply mailbox**: `qio_net_op`, on the first op for a channel,
@@ -79,7 +79,7 @@ AST on the reply mailbox's write-attention). No local fd is ever used.
 ## NETACP serve-loop flow (the /dev/vms server side)
 
 The ruled transport is **IO$M_NOW mailbox reads on the existing serve cadence**
-(decnetd.c serve loop ≈:3172), NOT a `.poll` fop (vms.ko has none) and NOT a
+(netacp.c serve loop ≈:3172), NOT a `.poll` fop (vms.ko has none) and NOT a
 reader thread. Each serve iteration, in addition to the datalink recv:
 
 1. `vms_kif_mbx_read(request_mbx, …, nowait=1)` — drain 0..N pending requests;

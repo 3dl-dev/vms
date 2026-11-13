@@ -28,9 +28,9 @@ int main(void)
     /* --- set / update / uniqueness (keyed by NUMBER) --- */
     struct dnet_objectdb db;
     dnet_objectdb_init(&db);
-    check(dnet_objectdb_set(&db, 42, "CTERM", "SYS$SYSTEM:DECNETD.EXE") == DNET_OBJECTDB_OK,
+    check(dnet_objectdb_set(&db, 42, "CTERM", "SYS$SYSTEM:NETACP.EXE") == DNET_OBJECTDB_OK,
           "SET OBJECT CTERM NUMBER 42 FILE ...");
-    check(dnet_objectdb_set(&db, 17, "FAL", "SYS$SYSTEM:DECNETD.EXE") == DNET_OBJECTDB_OK,
+    check(dnet_objectdb_set(&db, 17, "FAL", "SYS$SYSTEM:NETACP.EXE") == DNET_OBJECTDB_OK,
           "SET OBJECT FAL NUMBER 17");
     check(dnet_objectdb_set(&db, 25, "", "") == DNET_OBJECTDB_OK,
           "SET OBJECT NUMBER 25 (no name/file)");
@@ -104,7 +104,7 @@ int main(void)
             close(fd);
         struct dnet_objectdb a, b;
         dnet_objectdb_init(&a);
-        dnet_objectdb_set(&a, 42, "CTERM", "SYS$SYSTEM:DECNETD.EXE");
+        dnet_objectdb_set(&a, 42, "CTERM", "SYS$SYSTEM:NETACP.EXE");
         dnet_objectdb_set(&a, 17, "FAL", "");
         dnet_objectdb_set(&a, 25, "", "");
         check(dnet_objectdb_save(&a, path) == DNET_OBJECTDB_OK, "save object DB");
@@ -112,7 +112,7 @@ int main(void)
         check(b.count == 3, "loaded count == 3");
         const struct dnet_object_entry *c = dnet_objectdb_by_number(&b, 42);
         check(c && strcmp(c->name, "CTERM") == 0 &&
-              strcmp(c->file, "SYS$SYSTEM:DECNETD.EXE") == 0,
+              strcmp(c->file, "SYS$SYSTEM:NETACP.EXE") == 0,
               "42 round-trips name + file");
         const struct dnet_object_entry *f = dnet_objectdb_by_number(&b, 17);
         check(f && strcmp(f->name, "FAL") == 0 && f->file[0] == '\0',

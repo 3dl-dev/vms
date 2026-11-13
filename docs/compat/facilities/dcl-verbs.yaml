@@ -50,7 +50,7 @@ items:
     vms: "SET HOST — DECnet/LAT terminal connection to another node"
     scope_1_0: in
     evidence: src/vmsdcl/dcl_cmd_set.c:1765
-    notes: "Landed since last census (vms-f54, #1093): SET HOST <node> opens a real interactive DECnet CTERM session to Session Control object 42 (cmd_set_host, dcl_cmd_set.c:1765), resolving the node from DECnet config; /USERNAME sets the CTERM access-control name. Honest failure when DECNETD.EXE is not staged (DECnet not available -> error, no fake session). Partial: outbound DECnet only; LAT SET HOST and inbound not via this verb. Depends on the DECnet lane (see decnet facility)."
+    notes: "Landed since last census (vms-f54, #1093): SET HOST <node> opens a real interactive DECnet CTERM session to Session Control object 42 (cmd_set_host, dcl_cmd_set.c:1765), resolving the node from DECnet config; /USERNAME sets the CTERM access-control name. Honest failure when RTPAD.EXE is not staged (DECnet not available -> error, no fake session). Partial: outbound DECnet only; LAT SET HOST and inbound not via this verb. Depends on the DECnet lane (see decnet facility)."
 
   - id: dcl-verbs$queue-verbs
     kind: command

@@ -113,7 +113,7 @@ int main(void)
          * function fails HONESTLY with SS$_DEVOFFLINE -- the device resolved, its
          * I/O path is inactive -- never SS$_IVCHAN (which would claim a bad
          * channel) and never a fabricated transfer (Rule 9/INV-6). The brokered
-         * path itself is proven by DECNETD --net-loopback-accept-test. */
+         * path itself is proven by NETACP_TEST.EXE --net-loopback-accept-test. */
         struct _iosb nio;
         uint32_t rst = sys$qio(0, chan, IO$_READVBLK, &nio, NULL, 0,
                                NULL, 0, 0, 0, 0, 0);

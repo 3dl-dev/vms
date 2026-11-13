@@ -32,7 +32,7 @@
  * WHY A SYSFS KNOB CREATES THE DEVICE. vms_devtab_add_terminal()/
  * _remove_terminal() (src/kernel-core/vms_devtab.c) are executive-internal
  * entry points -- their real caller is design P1's $CREPRC (a separate,
- * parallel item not yet landed) and P3/P4's vmssshd / decnetd-CTERM. This
+ * parallel item not yet landed) and P3/P4's vmssshd / netacp-CTERM. This
  * item's own hard-acceptance gate needs a REAL /dev/vms round trip proving
  * the device-table primitive TODAY, without waiting on that caller -- the
  * same bring-up posture OVMX_KTEST_CLUSTER_SEAM already established for

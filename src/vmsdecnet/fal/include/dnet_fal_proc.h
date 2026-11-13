@@ -159,7 +159,7 @@ uint32_t dnet_fal_net_start(const char *ncb, const char *prcnam, uint32_t uic,
 /* The link a network server accepted from its SYS$NET. Live: `chan` is the
  * $ASSIGN _NET: channel and every operation is a $QIOW on it. The host
  * selftest sets bc/io instead (the in-process broker queue standing in for
- * the executive mailboxes, as DECNETD's netcli does). */
+ * the executive mailboxes, as NETACP's netcli does). */
 struct dnet_netsrv_net {
     uint16_t chan;
     struct dnet_broker_chan *bc;

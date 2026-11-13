@@ -69,7 +69,7 @@ extern struct vms_pcb *vms_pcb_init(uint64_t initial_privs);
  * Executor, node and object databases live at SYS$SYSTEM:NETNODE_LOCAL.DAT /
  * NETNODE_REMOTE.DAT / NETOBJECT.DAT and are read/written THROUGH THE VMS FILE
  * LAYER (RMS over the ODS-2 ACP) by dnet_ncpstore -- the same store NETACP
- * (DECNETD.EXE) reads at startup, so what NCP DEFINEs is what the network
+ * (NETACP.EXE) reads at startup, so what NCP DEFINEs is what the network
  * starts with, and STARTNET.COM's F$SEARCH gate on NETNODE_LOCAL.DAT sees it.
  * The record layout is OVMX's documented text (labelled in each file's header
  * comment), not the VMS binary indexed format. A write that cannot reach the

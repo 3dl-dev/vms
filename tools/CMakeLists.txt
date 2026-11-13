@@ -372,7 +372,7 @@ add_executable(vms_tcpip_inetd
     # real SYSUAF-over-ACP readers in vmsrms/sysuaf_live.o); a weak ref does NOT
     # extract the archive member, so without this strong reference the per-service
     # persona drop's sysuaf_lookup() returns -1/RMS=0 at runtime (the account never
-    # resolves) even though LIBVMSRMS is linked. Same trap dcl/loginout/decnetd
+    # resolves) even though LIBVMSRMS is linked. Same trap dcl/loginout/netacp
     # close with their own *_rms_bind.c anchors (rd vms-8bd).
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/services/tcpip_inetd_rms_bind.c
 )

@@ -1,6 +1,6 @@
 /*
  * dnet_ncpstore.h - WHERE the DECnet Phase IV configuration databases live,
- * and the one reader/writer NCP.EXE and NETACP (DECNETD.EXE) share for them
+ * and the one reader/writer NCP.EXE and NETACP.EXE share for them
  * (rd vms-1f69; subsumes rd vms-20e).
  *
  * THE VMS FILES. On OpenVMS the DECnet Phase IV permanent databases are files
@@ -32,7 +32,7 @@
  * HOST TEST HOOK. The environment overrides OVMX_DECNET_EXECUTOR /
  * OVMX_DECNET_NODEDB / OVMX_DECNET_OBJECTDB, when set and non-empty, name a
  * host POSIX path for that one database instead (atomic temp+rename writes).
- * They exist so the NCP/DECNETD command dispatch can be unit-tested on a build
+ * They exist so the NCP/NETACP command dispatch can be unit-tested on a build
  * host with no executive; a booted VMS process is never given them.
  */
 #ifndef DNET_NCPSTORE_H

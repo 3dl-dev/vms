@@ -14,7 +14,7 @@
 #                     run-time routine NETACP replaced by writing NETACP.LOG
 #                     through RMS itself).
 #
-# NEGATIVE CONTROL: each forbidden call planted in a copy of decnetd.c, and one
+# NEGATIVE CONTROL: each forbidden call planted in a copy of netacp.c, and one
 # planted in a copy of a DCL file over its baseline, must be caught.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -34,7 +34,7 @@ count() {   # count FILE -> number of forbidden calls (comments + strings stripp
         | grep -cE "$FORBID"
 }
 
-check_tree() {  # check_tree DECNETDIR DCLDIR CMAKE -> prints problems, returns 1 on any
+check_tree() {  # check_tree NETACPDIR DCLDIR CMAKE -> prints problems, returns 1 on any
     local bad=0 f n want
     while IFS= read -r f; do
         n=$(count "$f")
@@ -73,10 +73,10 @@ BASELINE="$T/baseline"
 nc=0; total=0
 for call in 'pthread_create(&t, 0, f, 0);' 'poll(&p, 1, 0);' 'ppoll(&p, 1, 0, 0);' 'select(1, 0, 0, 0, 0);' 'pipe(fds);' 'pipe2(fds, 0);'; do
     total=$((total+1))
-    rm -f "$T/dn/"*; cp src/vmsdecnet/engine/decnetd.c "$T/dn/decnetd.c"
-    printf 'static void planted(void) { %s }\n' "$call" >> "$T/dn/decnetd.c"
+    rm -f "$T/dn/"*; cp src/vmsdecnet/engine/netacp.c "$T/dn/netacp.c"
+    printf 'static void planted(void) { %s }\n' "$call" >> "$T/dn/netacp.c"
     if check_tree "$T/dn" "$T/dcl" src/vmsdecnet/engine/CMakeLists.txt >/dev/null; then
-        echo "FAIL: negative control: '$call' planted in decnetd.c was not caught"; fail=1
+        echo "FAIL: negative control: '$call' planted in netacp.c was not caught"; fail=1
     else nc=$((nc+1)); fi
 done
 rm -f "$T/dn/"*

@@ -57,7 +57,7 @@ Remote Port Info: 1025::SYSTEM          <-- 1025 = DECnet 1.1 (VAX1); source nod
 
 **OVMX consequence (P4):** the CTERM server MUST route the inbound connection through
 `$CREPRC PRC$M_INTER|PRC$M_LOGINOUT` → LOGINOUT on an RTAn:, and LOGINOUT MUST prompt fresh. It MUST
-NOT auto-login from the connect-carried username. (The decnetd `--cterm-server` strawman that spawned
+NOT auto-login from the connect-carried username. (The netacp `--cterm-server` strawman that spawned
 DCL directly with no auth — the original LARP — is exactly wrong; the carried username is proxy info,
 not a bypass.)
 

@@ -1,5 +1,5 @@
 /*
- * test_syssvc_decnetd_syscall_audit.c - the booted NETACP (NETACP.EXE, the
+ * test_syssvc_netacp_syscall_audit.c - the booted NETACP (NETACP.EXE, the
  * executive-datalink build the image ships) reaches its NIC, waits and runs
  * through VMS services, not Linux libc (rd vms-d3cd; Baron 2026-11-02: "don't
  * drop to linux LIBC, use all VMS-authentic API").
@@ -33,14 +33,14 @@
  *
  * NOT VACUOUS. A trace that saw nothing would pass all of that, so the suite
  * also asserts what the run DID: the tracer saw the process's /dev/vms
- * executive ioctls (magic 'V'), DECNETD printed DECNETD-I-DATALINK naming
- * ETH0: and DECNETD-I-STARTED, and exited 0 after its counters. And the
+ * executive ioctls (magic 'V'), NETACP printed NETACP-I-DATALINK naming
+ * ETH0: and NETACP-I-STARTED, and exited 0 after its counters. And the
  * classifier itself is proven on a control child that makes exactly the
  * forbidden calls (socket(AF_INET), poll, a SIOCGIFINDEX ioctl, a thread):
  * each must be flagged, or the audit is not measuring anything.
  *
  * NEGATIVE CONTROL (a product mutation that must redden this suite):
- * tests/qemu/defects.d/decnetd-lan-lookup-via-libc.defect.
+ * tests/qemu/defects.d/netacp-lan-lookup-via-libc.defect.
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -75,8 +75,8 @@
 
 #define EXIT_SKIP 77
 
-#ifndef DECNETD_PATH_DEFAULT
-#define DECNETD_PATH_DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/NETACP.EXE"
+#ifndef NETACP_PATH_DEFAULT
+#define NETACP_PATH_DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/NETACP.EXE"
 #endif
 
 static int pass = 0, fail = 0;
@@ -308,10 +308,10 @@ static void control_child(void)
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    printf("=== test_syssvc_decnetd_syscall_audit (booted NETACP uses VMS services, rd vms-d3cd) ===\n");
+    printf("=== test_syssvc_netacp_syscall_audit (booted NETACP uses VMS services, rd vms-d3cd) ===\n");
 
-    const char *img = getenv("OVMX_DECNETD");
-    if (!img) img = DECNETD_PATH_DEFAULT;
+    const char *img = getenv("OVMX_NETACP");
+    if (!img) img = NETACP_PATH_DEFAULT;
 
     /* ---- 0. the classifier works (anti-vacuity) ------------------------- */
     {
@@ -332,7 +332,7 @@ int main(void)
     }
 
     if (vms_kif_open() < 0) {
-        printf("=== test_syssvc_decnetd_syscall_audit: %d passed, %d failed (SKIPPED: no"
+        printf("=== test_syssvc_netacp_syscall_audit: %d passed, %d failed (SKIPPED: no"
                " /dev/vms -- NETACP's datalink is executive-resident) ===\n", pass, fail);
         return fail > 0 ? 1 : EXIT_SKIP;
     }
@@ -341,7 +341,7 @@ int main(void)
         /* The image build stages it (tests/qemu/Dockerfile); its absence is a
          * harness defect, not a skip. */
         printf("  FAIL: %s is not staged\n", img);
-        printf("=== test_syssvc_decnetd_syscall_audit: %d passed, %d failed ===\n", pass, fail + 1);
+        printf("=== test_syssvc_netacp_syscall_audit: %d passed, %d failed ===\n", pass, fail + 1);
         return 1;
     }
 
@@ -372,12 +372,12 @@ int main(void)
     close(out[1]);
     CHECK(c > 0, "the suite makes a VMS subprocess to run NETACP.EXE");
     if (c <= 0) {
-        printf("=== test_syssvc_decnetd_syscall_audit: %d passed, %d failed ===\n", pass, fail);
+        printf("=== test_syssvc_netacp_syscall_audit: %d passed, %d failed ===\n", pass, fail);
         return 1;
     }
     int st = 0;
     waitpid(c, &st, 0);
-    /* drain DECNETD's output without blocking the trace */
+    /* drain NETACP's output without blocking the trace */
     fcntl(out[0], F_SETFL, O_NONBLOCK);
 
     struct verdict v;
@@ -402,15 +402,15 @@ int main(void)
 
     CHECK(rs >= 0 && WIFEXITED(rs) && WEXITSTATUS(rs) == 0,
           "NETACP.EXE (no command line) ran under the trace, stopped on SIGTERM and exited 0");
-    CHECK(strstr(log, "DECNETD-I-DATALINK, datalink open on ETH0: via the executive") != NULL,
+    CHECK(strstr(log, "NETACP-I-DATALINK, datalink open on ETH0: via the executive") != NULL,
           "it opened its datalink on the LAN unit ETH0: through the executive");
-    CHECK(strstr(log, "DECNETD-I-STARTED") != NULL && strstr(log, "DECNETD-I-COUNTERS") != NULL,
+    CHECK(strstr(log, "NETACP-I-STARTED") != NULL && strstr(log, "NETACP-I-COUNTERS") != NULL,
           "it started, served its loop and reported its counters");
-    CHECK(strstr(log, "DECNETD-I-BROKER") != NULL && strstr(log, "DECNETD-W-REQ") == NULL,
+    CHECK(strstr(log, "NETACP-I-BROKER") != NULL && strstr(log, "NETACP-W-REQ") == NULL,
           "its request mailbox read is a queued $QIO (no $ASSIGN/$QIO refusal reported)");
     CHECK(v.total > 50 && v.vms_ioctls > 10,
           "the trace is not vacuous: it saw the process's executive (/dev/vms) calls");
-    /* negctl: decnetd-lan-lookup-via-libc */
+    /* negctl: netacp-lan-lookup-via-libc */
     CHECK(v.bad_socket == 0 && v.bad_ifioctl == 0,
           "NO host interface lookup: no socket(AF_INET/INET6/PACKET/NETLINK), no SIOCGIF* ioctl");
     /* negctl: netacp-wait-via-poll */
@@ -418,6 +418,6 @@ int main(void)
     CHECK(v.bad_thread == 0, "NO thread (clone CLONE_THREAD / clone3)");
     CHECK(v.bad_pipe == 0, "NO host pipe (pipe / pipe2)");
 
-    printf("=== test_syssvc_decnetd_syscall_audit: %d passed, %d failed ===\n", pass, fail);
+    printf("=== test_syssvc_netacp_syscall_audit: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

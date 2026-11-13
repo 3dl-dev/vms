@@ -96,7 +96,7 @@ if ! grep -qE 'DUA0.* is PRIMARY' "$REPO/src/kernel-netbsd/vms_blockdev_netbsd.c
 fi
 
 # rd vms-9394: the battery's executive-datalink proof opens a REAL interface for
-# an interactive DECNETD image. On x86_64/Alpha that is the Linux loopback "lo";
+# an interactive NETACP image. On x86_64/Alpha that is the Linux loopback "lo";
 # on this rail it is the DELQA, qt0 -- NetBSD's lo0 is not an Ethernet, and the
 # NetBSD executive's L2 binding takes Ethernet interfaces only.
 export DNET_DATALINK_IFACE="${DNET_DATALINK_IFACE:-qt0}"

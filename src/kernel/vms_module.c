@@ -135,7 +135,7 @@ MODULE_PARM_DESC(vms_ktest_bdev_fault,
  * WHY THIS EXISTS. vms_devtab_add_terminal()/_remove_terminal() (vms_devtab.c)
  * are executive-internal entry points: their real caller is design P1's
  * $CREPRC (a separate, parallel item, not yet landed) and P3/P4's vmssshd /
- * decnetd-CTERM. This item's own hard-acceptance gate (§7.5's tell: "$GETDVI
+ * netacp-CTERM. This item's own hard-acceptance gate (§7.5's tell: "$GETDVI
  * RTA0: from a DIFFERENT process, or it's a LARP") needs a REAL /dev/vms
  * round trip proving the device table entry today, without waiting on that
  * caller to land -- exactly the bring-up posture OVMX_KTEST_CLUSTER_SEAM

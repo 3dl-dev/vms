@@ -1071,9 +1071,8 @@ static void stage_boot_images(void)
          * under the MAIL object account for each inbound NODE::USER mail. */
         "MAIL_SERVER.EXE",
         /* NETACP's image: NCP SET EXECUTOR STATE ON $CREPRCs it (rd vms-0a7
-         * S3). DECNETD.EXE: retired, exits SS$_UNSUPPORTED until S4 removes it. */
+         * S3). */
         "NETACP.EXE",
-        "DECNETD.EXE",
         "OPCOM.EXE",       /* PID 1 creates it before STARTUP.COM (vms-798) */
     };
     for (size_t i = 0; i < sizeof(utils) / sizeof(utils[0]); i++) {

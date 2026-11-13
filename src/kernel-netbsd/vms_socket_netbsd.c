@@ -609,7 +609,7 @@ exec_socket_wait_ready(exec_socket_t *s, uint32_t n, const uint32_t *want,
  *
  * WHAT THIS IS. The NetBSD half of exec_kbackend.h SS13: the substrate under
  * src/kernel-core/vms_l2.c, so a NON-ROOT VMS process holding PHY_IO (NETACP,
- * SYS$SYSTEM:DECNETD.EXE) gets its raw Ethernet datalink -- DECnet Phase IV,
+ * SYS$SYSTEM:NETACP.EXE) gets its raw Ethernet datalink -- DECnet Phase IV,
  * ethertype 0x6003 -- from the EXECUTIVE. The facility above owns the policy
  * (PHY_IO at OPEN, the station address, the executive-stamped source field);
  * this binding owns only the frames. NetBSD has no in-kernel socket(9) domain

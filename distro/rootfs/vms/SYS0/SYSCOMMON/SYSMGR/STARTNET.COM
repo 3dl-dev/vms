@@ -28,7 +28,7 @@ $! EXECUTOR) is absent, DECnet is not configured, so STARTNET is a SILENT no-op:
 $! it launches NO NETACP and prints NOTHING to the boot console (an unconfigured
 $! node running no DECnet is not an error, and must not pollute the pristine boot
 $! console the vms-1fb oracle pins). The check is a pure DCL lexical (F$SEARCH),
-$! NEVER a foreground image probe -- a synchronous DECNETD run whose "not
+$! NEVER a foreground image probe -- a synchronous NETACP run whose "not
 $! configured" exit DCL would render as %DCL-E-ABORT is exactly the pollution this
 $! avoids (vms-a70). NETACP ALSO self-checks (defense in depth): launched detached
 $! with no argv it self-sources the executor address and, finding none, logs a
@@ -57,7 +57,7 @@ $! $CREPRC passes no privilege mask, so the detached process gets the creator's
 $! current privileges). It sources every frame from its Phase IV
 $! algorithmic station address AA-00-04-00-<LE16(area*1024+node)>, which the
 $! executive validates and stamps. With no NIC, or no PHY_IO, it fails honestly
-$! (%DECNETD-E-NOSOCKET ... SS$_NOSUCHDEV / SS$_NOPRIV in NETACP.LOG) -- it never
+$! (%NETACP-E-NOSOCKET ... SS$_NOSUCHDEV / SS$_NOPRIV in NETACP.LOG) -- it never
 $! fabricates a per-process listener that serves nothing. The SESSION side is
 $! executive-backed too (an inbound object-42 connect mints RTAn: and $CREPRCs
 $! LOGINOUT through /dev/vms).

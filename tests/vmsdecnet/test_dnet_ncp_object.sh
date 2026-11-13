@@ -29,11 +29,11 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 ncp() { "$NCP" "$@" 2>&1; }
 
 # --- SET OBJECT persists; LIST sees it (a SEPARATE invocation => real DB) ------
-ncp SET OBJECT CTERM NUMBER 42 FILE SYS\$SYSTEM:DECNETD.EXE >/dev/null; rc=$?
+ncp SET OBJECT CTERM NUMBER 42 FILE SYS\$SYSTEM:NETACP.EXE >/dev/null; rc=$?
 [ "$rc" -eq 0 ] && ok "SET OBJECT CTERM NUMBER 42 FILE ... exits 0" \
                 || bad "SET OBJECT CTERM exit $rc"
 out="$(ncp LIST OBJECT CTERM)"
-grep -q "42" <<<"$out" && grep -q "DECNETD.EXE" <<<"$out" \
+grep -q "42" <<<"$out" && grep -q "NETACP.EXE" <<<"$out" \
     && ok "LIST OBJECT CTERM (new invocation) shows number 42 + file (persisted)" \
     || bad "LIST OBJECT CTERM missing 42/file: $out"
 grep -q "Object Permanent Summary" <<<"$out" \
@@ -60,7 +60,7 @@ for what in "KNOWN OBJECTS" "OBJECT CTERM" "OBJECT 17" "KNOWN CIRCUITS" "KNOWN L
     # shellcheck disable=SC2086
     o="$(ncp SHOW $what)"; rc=$?
     if [ "$rc" -ne 0 ] && grep -q "^%NCP-F-OPEFAI, Operation failure" <<<"$o" \
-       && ! grep -qE "Volatile Summary|DECNETD.EXE" <<<"$o"; then
+       && ! grep -qE "Volatile Summary|NETACP.EXE" <<<"$o"; then
         ok "SHOW $what with no NETACP fails %NCP-F-OPEFAI (the permanent file is NOT shown as the running network)"
     else
         bad "SHOW $what with no NETACP should fail honestly (rc=$rc): $o"
@@ -68,9 +68,9 @@ for what in "KNOWN OBJECTS" "OBJECT CTERM" "OBJECT 17" "KNOWN CIRCUITS" "KNOWN L
 done
 
 # --- DEFINE updates an existing number (file added) ---------------------------
-ncp DEFINE OBJECT FAL NUMBER 17 FILE SYS\$SYSTEM:DECNETD.EXE >/dev/null
+ncp DEFINE OBJECT FAL NUMBER 17 FILE SYS\$SYSTEM:FAL.EXE >/dev/null
 out="$(ncp LIST OBJECT 17)"
-grep -q "DECNETD.EXE" <<<"$out" \
+grep -q "FAL\.EXE" <<<"$out" \
     && ok "DEFINE OBJECT updates FAL's file; LIST OBJECT <number> reflects it" \
     || bad "update not reflected: $out"
 

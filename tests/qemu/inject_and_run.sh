@@ -171,11 +171,11 @@ echo "--- rebuilding TCPIP\$DAYTIME.EXE (the subject test_syssvc_tcpip_daytime d
 ( cd /src/repo && cmake --build build-static --target vms_tcpip_daytime \
                         --parallel "$(nproc)" ) || exit 4
 
-# NETACP.EXE is a SUBJECT test_syssvc_decnetd_syscall_audit traces (rd
-# vms-d3cd, vms-0a7 S3), not a suite -- and decnetd-lan-lookup-via-libc targets
-# src/vmsdecnet/engine/decnetd.c, compiled into NETACP.EXE. Rebuilt
+# NETACP.EXE is a SUBJECT test_syssvc_netacp_syscall_audit traces (rd
+# vms-d3cd, vms-0a7 S3), not a suite -- and netacp-lan-lookup-via-libc targets
+# src/vmsdecnet/engine/netacp.c, compiled into NETACP.EXE. Rebuilt
 # unconditionally, same reason as the subjects above.
-echo "--- rebuilding NETACP.EXE (the subject test_syssvc_decnetd_syscall_audit traces) ---"
+echo "--- rebuilding NETACP.EXE (the subject test_syssvc_netacp_syscall_audit traces) ---"
 ( cd /src/repo && cmake --build build-static --target netacp_exe \
                         --parallel "$(nproc)" ) || exit 4
 # RTPAD.EXE: the SET HOST subject test_syssvc_sethost_syscall_audit traces (rd
@@ -319,7 +319,7 @@ cp '/src/repo/build-static/bin/TCPIP$DAYTIME.EXE' \
    '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' || exit 4
 chmod +x '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' || exit 4
 # NETACP.EXE at SYS$SYSTEM (rd vms-d3cd, vms-0a7 S3): the audited NETACP,
-# refreshed so a defect in decnetd.c reaches the traced binary.
+# refreshed so a defect in netacp.c reaches the traced binary.
 cp /src/repo/build-static/bin/NETACP.EXE \
    /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/NETACP.EXE || exit 4
 chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/NETACP.EXE || exit 4

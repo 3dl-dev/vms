@@ -9,7 +9,7 @@
 #
 # The library survives its original caller because it was deliberately written
 # engine-agnostic for a SECOND consumer that now exists: DECnet Phase IV
-# (src/vmsdecnet/engine/decnetd.c, rd vms-30e). Deleting it with the daemon
+# (src/vmsdecnet/engine/netacp.c, rd vms-30e). Deleting it with the daemon
 # would have taken DECnet's transport with it -- which is exactly the "verify
 # no live code dependency first" check the retirement required.
 #
@@ -27,17 +27,17 @@ target_include_directories(ovmx_datalink PUBLIC
 # and the EXECUTIVE backend (the raw L2 wire goes through /dev/vms
 # VMS_IOCTL_L2_*, the kernel owns the socket, the open is gated on the VMS PHY_IO
 # privilege -- no Linux capability). A booted OVMX process has no CAP_NET_RAW,
-# so the booted NETACP (DECNETD.EXE) MUST be built with the executive backend,
+# so the booted NETACP.EXE MUST be built with the executive backend,
 # and that binary then physically contains no AF_PACKET code: there is no
 # runtime fallback between the two (Rule 9 / INV-6).
 #
 # Both are always BUILT (ovmx_datalink = the probe/bpf backend, ovmx_datalink_exec
 # = the executive backend) so every build compiles and host-tests both
-# (tests/vmsdecnet/test_datalink_exec_backend.c). Which one DECNETD.EXE LINKS is
+# (tests/vmsdecnet/test_datalink_exec_backend.c). Which one NETACP.EXE LINKS is
 # the OVMX_DATALINK_VIA_EXECUTIVE option:
 #   Linux  -- ON for the booted-runtime build (OVMX_STATIC: distro/Dockerfile.
 #             bootable and tools/cross-alpha's build-static), OFF for the host
-#             dev build, so a lab probe build of DECNETD keeps AF_PACKET.
+#             dev build, so a lab probe build of NETACP keeps AF_PACKET.
 #   NetBSD -- ON (rd vms-9394). A NetBSD OVMX build IS the booted OVMX/VAX
 #             runtime (tools/cross-vax/toolchain-vax-netbsd.cmake), whose
 #             executive now carries the L2 binding (src/kernel-netbsd/
@@ -51,7 +51,7 @@ else()
     set(_ovmx_dl_exec_default ON)
 endif()
 option(OVMX_DATALINK_VIA_EXECUTIVE
-       "DECNETD.EXE's raw L2 datalink goes through the executive (/dev/vms VMS_IOCTL_L2_*, PHY_IO) instead of a userspace AF_PACKET socket / bpf(4)"
+       "NETACP.EXE's raw L2 datalink goes through the executive (/dev/vms VMS_IOCTL_L2_*, PHY_IO) instead of a userspace AF_PACKET socket / bpf(4)"
        ${_ovmx_dl_exec_default})
 
 add_library(ovmx_datalink_exec STATIC ovmx_datalink.c)
@@ -67,8 +67,8 @@ target_include_directories(ovmx_datalink_exec PRIVATE
 target_link_libraries(ovmx_datalink_exec PUBLIC vmssys)
 
 if(OVMX_DATALINK_VIA_EXECUTIVE)
-    set(OVMX_DECNETD_DATALINK_LIB ovmx_datalink_exec CACHE INTERNAL "")
+    set(OVMX_NETACP_DATALINK_LIB ovmx_datalink_exec CACHE INTERNAL "")
 else()
-    set(OVMX_DECNETD_DATALINK_LIB ovmx_datalink CACHE INTERNAL "")
+    set(OVMX_NETACP_DATALINK_LIB ovmx_datalink CACHE INTERNAL "")
 endif()
-message(STATUS "DECNETD datalink backend: ${OVMX_DECNETD_DATALINK_LIB}")
+message(STATUS "NETACP datalink backend: ${OVMX_NETACP_DATALINK_LIB}")

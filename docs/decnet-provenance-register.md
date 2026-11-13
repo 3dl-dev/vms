@@ -428,7 +428,7 @@ header, never presented as oracle-verified VMS-authentic bytes, and no specimen 
 The well-known **object number 42** is a published DNA well-known object number (not oracle bytes).
 This is exactly the discipline §4.6 applied to the spec-derived CC/data/DI/DC choreography.
 
-**Proven (`tests/vmsdecnet/test_dnet_cterm.c`, also runnable as `DECNETD.EXE --set-host-selftest`):**
+**Proven (`tests/vmsdecnet/test_dnet_cterm.c`, also runnable as `NETACP_TEST.EXE --set-host-selftest`):**
 (1) every CTERM message type round-trips encode→decode; (2) a terminal + host session
 bind/negotiate/carry-I/O/unbind on raw PDUs; (3) two **engines** carry a WHOLE `$ SET HOST` terminal
 session — link to object 42 → Bind/Accept → characteristics → host banner Write → terminal keystroke
@@ -502,7 +502,7 @@ with no authentication**. That path is deleted, and its return is blocked by a s
 (`tests/integration/test_creprc_session_primitive.sh` check 5) that scans the daemon and the CTERM
 host for `fork`/`exec*`/`openpty`/`dup2` in both directions, with its own negative controls.
 
-**Proven against the real executive:** `DECNETD.EXE --cterm-accept-test`, run inside the booted image
+**Proven against the real executive:** `NETACP_TEST.EXE --cterm-accept-test`, run inside the booted image
 by the shared acceptance battery. It opens a REAL NSP link to object 42 over a socketpair datalink,
 dispatches it to `$CREPRC` → LOGINOUT on an executive-minted RTAn:, and then requires **three
 refusals**: an unknown account, a real account with a wrong password, and the seeded `DISABLED`
@@ -536,7 +536,7 @@ The L3–L6 userspace surface (NCP, session, FAL, DCL/RMS integration) is stream
 
 > **Implementation home (2026-09-17).** The cluster stack that §6.0-6.1's `scsd.c`/`SCSD.EXE`
 > citations named as the userspace `AF_PACKET` raw-Ethernet precedent is executive-resident
-> today (`vms.ko`, `src/kernel-core/`). DECnet's own engine (`src/vmsdecnet/`, `DECNETD.EXE`)
+> today (`vms.ko`, `src/kernel-core/`). DECnet's own engine (`src/vmsdecnet/`, `NETACP.EXE`)
 > stays userspace by deliberate design — it has no DLM survival/timing need
 > (`docs/design-decnet-ovmx.md` §2) — independent of where the cluster stack lives.
 
@@ -576,13 +576,13 @@ exactly this second consumer).
 
 **Engine rung 1 landed (rd `vms-449d`).** `src/vmsdecnet/engine/` — `dnet_engine.{c,h}` (the
 socketless engine core: HELLO tx-build + rx-decode + adjacency-SM drive + the VMS presentation
-surface) and `decnetd.c` (**`DECNETD.EXE`**, the daemon that owns the datalink via
+surface) and `netacp.c` (**`NETACP.EXE`**, the daemon that owns the datalink via
 `scs_datalink_*`, the DECnet analogue of `SCSD.EXE`). Proven three ways:
 (a) the engine's built endnode-HELLO for node 1.1 is **byte-identical to the §4.6 specimen #1
 VAX capture** (`tests/vmsdecnet/test_dnet_engine.c`, Rule-8 oracle proof);
 (b) two engine instances drive `DOWN→INITIALIZING→UP→DOWN` over a real `socketpair(2)` and via the
-runnable `DECNETD.EXE --self-test` (no `CAP_NET_RAW`);
-(c) a live `AF_PACKET` on-wire bracket over a `veth` pair in an isolated netns — two `DECNETD.EXE`
+runnable `NETACP_TEST.EXE --self-test` (no `CAP_NET_RAW`);
+(c) a live `AF_PACKET` on-wire bracket over a `veth` pair in an isolated netns — two `NETACP.EXE`
 endnodes exchanged 60-byte HELLOs on the T3 cadence and each listed the other in SHOW ADJACENT
 NODES. **Deferred to children of `vms-30e`:** the NSP logical-link connection service (rd
 `vms-c23`) and the live-VAX oracle adjacency bracket (rd `vms-aac0`, the §4.4 done-bar).
@@ -593,11 +593,11 @@ connection state machine (`CLOSED → CI_SENT/CR_RCVD → RUN → DI_SENT → CL
 (Connect Initiate/Confirm), runs (a data segment carried with its explicit acknowledgement and
 in-order sequencing), and tears down (Disconnect Initiate/**Confirm**) a single logical link — wired
 into `dnet_engine` (a Phase IV **long-data-packet routing header** carrier + one embedded link +
-`link_open/accept/send/close/rx` wrappers) so `DECNETD.EXE` can OPEN a link to a peer node over the
+`link_open/accept/send/close/rx` wrappers) so `NETACP.EXE` can OPEN a link to a peer node over the
 adjacency it already forms. Proven two ways: two `dnet_link` FSMs drive the full choreography
 deterministically (`tests/vmsdecnet/test_dnet_link.c`), and two **engines** open a link, move a data
 segment + ack, and disconnect as full on-wire data frames over a real `socketpair(2)` (also runnable
-via `DECNETD.EXE --nsp-selftest`, no `CAP_NET_RAW`), with the payload round-tripping byte-identical.
+via `NETACP_TEST.EXE --nsp-selftest`, no `CAP_NET_RAW`), with the payload round-tripping byte-identical.
 **Honest oracle scope (Rule 8).** Only the **Connect Initiate** bytes are oracle-verified (the codec,
 §4.6 specimen #3). The **CC / data / ack / DI / DC choreography is SPEC-DERIVED** from the public DNA
 Phase IV NSP spec and proven only by the two-endpoint round-trip — the §4.6 capture never completed a

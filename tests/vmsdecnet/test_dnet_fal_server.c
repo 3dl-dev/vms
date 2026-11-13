@@ -13,7 +13,7 @@
  *
  * File I/O is a stub standing in for RMS over the ACP (the shipped hooks are
  * dnet_fal_search.c; the real ACP verdicts are proven on the booted executive
- * by decnetd --fal-proc-accept-test). The stub's "ACP" refuses DNTEST exactly
+ * by NETACP_TEST.EXE --fal-proc-accept-test). The stub's "ACP" refuses DNTEST exactly
  * where the real VAX refused it, so what this pins is the PROTOCOL: given that
  * refusal, the STATUS bytes OVMX sends are the VAX FAL's.
  *

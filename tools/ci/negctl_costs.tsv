@@ -137,7 +137,7 @@ dclast-super-mode-escalation	127
 decc-heap-linux-mmap	126
 decc-socket-bound-to-musl	125
 decc-socket-read-via-musl	111
-decnetd-lan-lookup-via-libc	114
+netacp-lan-lookup-via-libc	114
 delprc-privcheck-bypassed	96
 devtab-alloc-not-recorded	128
 devtab-dassgn-status-wrong	128

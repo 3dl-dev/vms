@@ -4,7 +4,7 @@
  *                 security guards (bounds-validated decode; correlation ids).
  *
  * Pure logic: no socket, no mailbox, no allocation. The caller (qio_net_op on
- * the executive side, decnetd on the NETACP side) owns the mailbox I/O and hands
+ * the executive side, netacp on the NETACP side) owns the mailbox I/O and hands
  * bytes to/from these functions. CLEAN-ROOM (Rule 8): an OVMX-internal record.
  */
 #ifndef DNET_BROKER_H

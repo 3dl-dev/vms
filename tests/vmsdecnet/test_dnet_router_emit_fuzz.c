@@ -2,7 +2,7 @@
  * test_dnet_router_emit_fuzz.c - isolation proof of the DECnet Phase IV ROUTER
  *                                run-mode EMIT path (rd vms-0a9).
  *
- * WHY THIS EXISTS (⭐⭐ never crash a peer): --router mode makes DECNETD emit a
+ * WHY THIS EXISTS (⭐⭐ never crash a peer): --router mode makes NETACP emit a
  * spec-faithful Ethernet ROUTER-hello so a real Phase IV ENDNODE selects OVMX as
  * its designated router (the rd vms-aac0 live campaign). The router-hello codec
  * is SPEC-DERIVED -- no oracle wire specimen exists (see dnet_router_hello.h) --
@@ -17,7 +17,7 @@
  * adversarial field/cap values.
  *
  * WHAT IT PROVES:
- *   1. ROUND-TRIP: the router-hello DECNETD emits decodes back to every field it
+ *   1. ROUND-TRIP: the router-hello NETACP emits decodes back to every field it
  *      was built with (a real Phase IV endnode must be able to parse it).
  *   2. NODE-TYPE: the emitted IINFO low 2 bits say "L1 router", so an endnode
  *      treats the sender as a designated-router candidate.

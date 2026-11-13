@@ -1,6 +1,6 @@
 /*
  * rtpad_session.c -- the CTERM terminal side of $ SET HOST (RTPAD.EXE).
- * rd vms-0a7 S2 / vms-18c9; moved out of DECNETD.EXE's former --set-host
+ * rd vms-0a7 S2 / vms-18c9; moved out of the retired DECnet daemon's former --set-host
  * client role (rd vms-f54, vms-6165, vms-a353).
  *
  * WHO ECHOES (rd vms-a353). In CTERM the TERMINAL echoes what is typed, as the

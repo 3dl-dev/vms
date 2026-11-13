@@ -175,7 +175,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # fail HONESTLY (never skip). Required targets (DCL/INITIALIZE/AUTHORIZE)
     # cross-build via the same glibc-static toolchain the tests use.
     echo "== build subject images (DCL/INITIALIZE/AUTHORIZE + best-effort MMK/TCC) =="
-    # netacp_exe: NETACP.EXE, the image test_syssvc_decnetd_syscall_audit
+    # netacp_exe: NETACP.EXE, the image test_syssvc_netacp_syscall_audit
     # traces at SYS$SYSTEM (rd vms-d3cd; NETACP.EXE since vms-0a7 S3).
     # vms_install: INSTALL.EXE, the image test_syssvc_dcl_install has DCL run
     # (rd vms-d41). rtpad_exe: RTPAD.EXE, the image SET HOST activates from

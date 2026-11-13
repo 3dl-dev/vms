@@ -9,7 +9,7 @@
  * its request mailbox, every 5 ms while a link is live -- ran out after a few
  * thousand requests: $SETIMR returned SS$_INSFMEM and NETACP stopped in the
  * middle of a 2000-record COPY with a real VAX (live evidence:
- * tests/lab/captures/vms-0a7-s3-20261103/, "DECNETD-F-SETIMR ... 00000124").
+ * tests/lab/captures/vms-0a7-s3-20261103/, "NETACP-F-SETIMR ... 00000124").
  *
  * The test lowers RLIMIT_SIGPENDING to a small value L (raised only if this
  * user's other processes already hold that many), then runs 4*L requests that

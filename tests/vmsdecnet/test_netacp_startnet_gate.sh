@@ -1,5 +1,5 @@
 #!/bin/bash
-# test_decnetd_startnet_gate.sh - the DECnet startup GATE + serve-default
+# test_netacp_startnet_gate.sh - the DECnet startup GATE + serve-default
 # decision SYS$MANAGER:STARTNET.COM relies on (rd vms-a70 direction B).
 #
 # STARTNET.COM starts the persistent NETACP daemon (SYS$SYSTEM:NETACP.EXE; this
@@ -9,9 +9,9 @@
 # behaviours make that work, and this test pins BOTH on the host (no CAP_NET_RAW,
 # no /dev/vms, no wire -- --show-executor opens no socket):
 #
-#   1. THE GATE. `DECNETD --show-executor` SELF-SOURCES the executor address from
+#   1. THE GATE. `NETACP_TEST.EXE --show-executor` SELF-SOURCES the executor address from
 #      the node's DECnet configuration (executor.dat) and exits SUCCESS iff one
-#      is configured, else %DECNETD-E-NOADDRESS. STARTNET branches on that exit
+#      is configured, else %NETACP-E-NOADDRESS. STARTNET branches on that exit
 #      status: a node with no DECnet address starts no NETACP (INV-6 -- there is
 #      NO unconditional success; an unconfigured node is honestly not running
 #      DECnet, exactly as real VMS starts nothing until NCP DEFINE EXECUTOR).
@@ -26,14 +26,14 @@
 # Exit 0 = all checks pass, 1 = a failure.
 set -uo pipefail
 
-BIN="${DECNETD_EXE:-}"
+BIN="${NETACP_EXE:-}"
 if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
     # Fall back to the conventional build location so the script also runs by
     # hand; never a fake pass -- if the binary is genuinely missing, fail.
-    BIN="$(dirname "$0")/../../build/bin/DECNETD.EXE"
+    BIN="$(dirname "$0")/../../build/bin/NETACP.EXE"
 fi
 if [ ! -x "$BIN" ]; then
-    echo "FAIL: DECNETD.EXE not found (set DECNETD_EXE or build decnetd_exe first)"
+    echo "FAIL: NETACP.EXE not found (set NETACP_EXE or build netacp_test_exe first)"
     exit 1
 fi
 
@@ -50,7 +50,7 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 rm -f "$OVMX_DECNET_EXECUTOR"
 out="$("$BIN" --show-executor 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && grep -q "NOADDRESS" <<<"$out"; then
-    ok "unconfigured node: --show-executor exits nonzero with %DECNETD-E-NOADDRESS (STARTNET starts no NETACP)"
+    ok "unconfigured node: --show-executor exits nonzero with %NETACP-E-NOADDRESS (STARTNET starts no NETACP)"
 else
     bad "unconfigured node should exit nonzero + NOADDRESS (rc=$rc): $out"
 fi

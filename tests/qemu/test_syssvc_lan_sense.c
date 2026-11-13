@@ -3,7 +3,7 @@
  * IO$_SENSEMODE from the EXECUTIVE, and the executive datalink opens on that
  * VMS name (rd vms-d3cd), via the PUBLIC sys$ API against a real /dev/vms.
  *
- * WHY. The booted NETACP (DECNETD.EXE, executive datalink build) used to find
+ * WHY. The booted NETACP (NETACP.EXE, executive datalink build) used to find
  * its NIC and MAC with Linux libc -- socket(AF_INET)+SIOCGIFHWADDR, getifaddrs,
  * if_nametoindex. It now does what a VMS program does with a LAN device:
  * $ASSIGN ETH0:, $QIOW IO$_SENSEMODE, read the hardware address out of the

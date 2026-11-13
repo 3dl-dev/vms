@@ -168,12 +168,12 @@ int main(void)
         struct dnet_objectdb a, b;
         dnet_objectdb_init(&a);
         (void)dnet_objectdb_set(&a, 42, "CTERM", "");
-        (void)dnet_objectdb_set(&a, 17, "FAL", "SYS$SYSTEM:DECNETD.EXE");
+        (void)dnet_objectdb_set(&a, 17, "FAL", "SYS$SYSTEM:NETACP.EXE");
         CHECK(dnet_store_save_objects(&a) == DNET_STORE_OK, "SAVE OBJECTS via the hook");
         const struct dnet_object_entry *e = NULL;
         CHECK(dnet_store_load_objects(&b) == DNET_STORE_OK && b.count == 2 &&
               (e = dnet_objectdb_by_number(&b, 17)) != NULL &&
-              strcmp(e->file, "SYS$SYSTEM:DECNETD.EXE") == 0,
+              strcmp(e->file, "SYS$SYSTEM:NETACP.EXE") == 0,
               "the object database round-trips (number/name/file intact)");
     }
     unlink(pe); unlink(pn); unlink(po); rmdir(dir);

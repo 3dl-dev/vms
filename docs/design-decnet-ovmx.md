@@ -25,14 +25,14 @@ architecture).
 >    below as "consume `scs_datalink` directly" — which is exactly what the landed
 >    engine does.
 > 2. **This lane is no longer greenfield.** Much of the design below has LANDED in
->    `src/vmsdecnet/` (the NETACP daemon `engine/decnetd.c`, HELLO/adjacency
+>    `src/vmsdecnet/` (the NETACP daemon `engine/netacp.c`, HELLO/adjacency
 >    `routing/`, NSP `nsp/`, CTERM `cterm/`, FAL `fal/`, DAP `dap/`, NCP node/object
 >    DBs `ncp/`), and outbound `SET HOST` is implemented (`vms-f54`,
 >    `src/vmsdcl/dcl_cmd_set.c:1746`). Re-derive current per-rung status from the
 >    compat register + `src/vmsdecnet/`; §3's "total greenfield" snapshot is
 >    historical. **The companion file `docs/design/faithful-sessions-and-network-
 >    subsystems.md` (rd vms-515) is NOT tracked on `origin/main`** — the NETACP
->    model it held is now recorded in `src/vmsdecnet/engine/decnetd.c`'s header and
+>    model it held is now recorded in `src/vmsdecnet/engine/netacp.c`'s header and
 >    `docs/decnet-provenance-register.md` §6; treat the file-path cites below as
 >    pointers to those.
 
@@ -59,7 +59,7 @@ Phase IV specs, over the generic raw-L2 datalink abstraction
 established; the daemon itself was retired in the 2026-09-02 cluster reset, but the
 engine-agnostic datalink survived and DECnet consumes it directly). The `AF_PACKET`
 socket is **hidden entirely behind the executive device face** (§2b), never exposed
-above the VMS layer. See `src/vmsdecnet/engine/decnetd.c` (the landed NETACP) and
+above the VMS layer. See `src/vmsdecnet/engine/netacp.c` (the landed NETACP) and
 `docs/decnet-provenance-register.md` §6 for the full architecture and the isolation
 rationale (the wire-parsing engine must not run at NETACP's privilege — §2b/§4 below).
 
@@ -153,7 +153,7 @@ No implementation anywhere in `src/`.
   `src/libdatalink/include/scs_datalink.h` (`scs_datalink_{open,send,recv}`,
   engine-agnostic; it survived the 2026-09-02 cluster reset that deleted
   `src/vmsscs/`). The DECnet engine consumes it directly — see
-  `src/vmsdecnet/engine/decnetd.c`.
+  `src/vmsdecnet/engine/netacp.c`.
 
 ## 4. Architecture (layers, bottom-up)
 

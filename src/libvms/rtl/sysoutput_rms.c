@@ -26,7 +26,7 @@
  * not sent (a host file, a terminal). No POSIX fallback.
  *
  * WHICH IMAGES. This TU is compiled into an image as a primary object (as the
- * *_bind.c anchors are), so its constructor runs in that image only: DECNETD
+ * *_bind.c anchors are), so its constructor runs in that image only: NETACP
  * (NETACP, the process STARTNET creates with /OUTPUT=SYS$MANAGER:NETACP.LOG)
  * and the facility suite that proves it. It needs LIBVMSRMS in the image's
  * link closure (rms_textfile reaches RMS through a weak seam).

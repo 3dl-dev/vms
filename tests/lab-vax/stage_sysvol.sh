@@ -18,7 +18,7 @@
 #       STARTUP.EXE      the PID-1 image (also installed as /sbin/init off-disk;
 #                        present here so the SYSEXE tree matches an installed
 #                        volume)
-#       DECNETD.EXE      the DECnet Phase IV endnode (rd vms-c1f/vms-f40); the
+#       NETACP.EXE      the DECnet Phase IV endnode (rd vms-c1f/vms-f40); the
 #                        image the shared DCL/SHOW acceptance battery's DECnet
 #                        CTERM section (--cterm-accept-test) hard-gates against
 #                        on this rail. Shipped, not started: no startup
@@ -94,7 +94,7 @@
 #                        [--sysexe-extra <dir>] \
 #                        <images-dir> <repo-root> <stage-out-dir>
 #   <images-dir> must contain the six ELF32-vax boot images by name:
-#     DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE DECNETD.EXE
+#     DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE NETACP.EXE
 #   --distribution           stage the installer-media shape (see above)
 #   --kit <file>             path to the pre-built OVMX-OS-VAX.KIT to lay at
 #                            SYS$UPDATE: (REQUIRED with --distribution; the kit
@@ -128,7 +128,7 @@ ROOTFS="$REPO/distro/rootfs/vms"
 VAX_SYSTARTUP="$REPO/distro/rootfs-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
 VAX_DISTRIB_SYSTARTUP="$REPO/distro/rootfs-distrib-only-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
 VAX_STATUS_PROOF_SYSTARTUP="$REPO/tests/lab-vax/SYSTARTUP_VMS_STATUS_PROOF.COM"
-BOOT_IMAGES="DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE DECNETD.EXE NETACP.EXE FAL.EXE MAIL_SERVER.EXE MAIL.EXE NCP.EXE RTPAD.EXE OPCOM.EXE"
+BOOT_IMAGES="DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE NETACP.EXE FAL.EXE MAIL_SERVER.EXE MAIL.EXE NCP.EXE RTPAD.EXE OPCOM.EXE"
 OPTIONAL_IMAGES="ROOTAUDIT.EXE"
 KIT_DEST_NAME="OVMX-OS-VAX.KIT"
 

@@ -25,7 +25,7 @@
  * user sees -- an executor node (area.node + name + state), a circuit over the
  * datalink device, and a SHOW ADJACENT NODES adjacency table -- NEVER a raw
  * socket or a Linux interface name. The daemon that owns the actual datalink
- * (decnetd.c) is the ONLY place scs_datalink_{open,send,recv}() is called, the
+ * (netacp.c) is the ONLY place scs_datalink_{open,send,recv}() is called, the
  * same way scsd.c is the only place SCS's datalink is opened.
  *
  * CLEAN-ROOM PROVENANCE (CLAUDE.md Rule 8, HARD; docs/decnet-provenance-
@@ -151,7 +151,7 @@ extern const uint8_t DNET_ROUTER_HELLO_MCAST[DNET_ADDR_LEN];
 
 /*
  * The live routing endnode. Pure state: no socket, no fd, no thread. The
- * daemon (decnetd.c) owns the datalink and injects the clock; this struct is
+ * daemon (netacp.c) owns the datalink and injects the clock; this struct is
  * everything the VMS-visible DECnet surface and the wire logic need.
  */
 struct dnet_engine {
@@ -380,7 +380,7 @@ int dnet_engine_parse_data_frame(const uint8_t *frame, size_t len,
                                  uint8_t dst_id_out[DNET_ADDR_LEN],
                                  const uint8_t **nsp_pdu, size_t *pdu_len);
 
-/* --- single-link connection wrappers (what DECNETD drives) -----------------
+/* --- single-link connection wrappers (what NETACP drives) -----------------
  *
  * Each builds the outbound frame (NSP PDU + routing header) for the operation
  * into frame_out and returns its length in *len_out. The engine owns the one

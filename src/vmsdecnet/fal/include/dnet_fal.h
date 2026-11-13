@@ -23,7 +23,7 @@
  *
  * LAYER BOUNDARY (Rule 1 / executive boundary). This module owns the DAP
  * PRESENTATION logic + the AUTH + the RMS file I/O. It does NOT own the wire:
- * the caller (decnetd, over the live datalink; the selftest, over a socketpair)
+ * the caller (netacp, over the live datalink; the selftest, over a socketpair)
  * owns the NSP logical link and moves each DAP message as an NSP data segment,
  * handed here through a `struct dnet_dap_transport`. That is the same discipline
  * the CTERM host uses (the daemon owns the datalink; the session module owns the

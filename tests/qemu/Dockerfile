@@ -352,9 +352,9 @@ RUN cd /src/repo && \
     echo "--- TCPIP\$DAYTIME.EXE (the standalone RFC 867 service the aux server launches, test_syssvc_tcpip_daytime) ---" && \
     ls -la 'build-static/bin/TCPIP$DAYTIME.EXE' && \
     # NETACP.EXE (rd vms-d3cd, vms-0a7 S3): the shipped executive-datalink NETACP
-    # that test_syssvc_decnetd_syscall_audit.c traces (qemu_syssvc_tests DEPENDS
+    # that test_syssvc_netacp_syscall_audit.c traces (qemu_syssvc_tests DEPENDS
     # on netacp_exe). Absence is FATAL, as for every subject above.
-    echo "--- NETACP.EXE (the NETACP test_syssvc_decnetd_syscall_audit traces) ---" && \
+    echo "--- NETACP.EXE (the NETACP test_syssvc_netacp_syscall_audit traces) ---" && \
     ls -la build-static/bin/NETACP.EXE && \
     # INSTALL.EXE (rd vms-d41): the image test_syssvc_dcl_install has DCL run,
     # whose output and messages that suite reads from DCL's SYS$OUTPUT.
@@ -705,7 +705,7 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
       { echo "FATAL: TCPIP\$DAYTIME.EXE was not built into the static tree -- the auxiliary server's launch of a real shipped image would go unproven against a real executive"; exit 1; }; } && \
     chmod +x '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' && \
     # NETACP.EXE at SYS$SYSTEM (rd vms-d3cd, vms-0a7 S3) -- the NETACP
-    # test_syssvc_decnetd_syscall_audit.c traces (OVMX_DECNETD default
+    # test_syssvc_netacp_syscall_audit.c traces (OVMX_NETACP default
     # /vms/SYS0/SYSCOMMON/SYSEXE/NETACP.EXE). Matches no test_* glob. Absence is
     # FATAL: the audit would otherwise have nothing to audit.
     { cp /src/repo/build-static/bin/NETACP.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/NETACP.EXE || \

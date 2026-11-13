@@ -21,7 +21,7 @@ A user process runs, VMS-native:
 The connect descriptor is exactly what vms-dda rung 1 already builds/parses
 (`dnet_cterm_sc_connect_build_task` / `_parse`, format-1 NAMED). The NSP link FSM
 that carries the bytes is the proven `dnet_engine_link_*` engine, which lives in
-the NETACP daemon (`decnetd.c`) — Option 1: the protocol FSM stays in NETACP; the
+the NETACP daemon (`netacp.c`) — Option 1: the protocol FSM stays in NETACP; the
 executive owns only the device face + the broker.
 
 ## 1. Seam map (grounded on main@940031ff)
@@ -45,7 +45,7 @@ executive owns only the device face + the broker.
   though the executive device is real. Needs an `is_net` branch mirroring `is_bg`
   (`:437-468`).
 - **THE CORE GAP — no exec↔NETACP transport.** NETACP owns the raw datalink and
-  polls it in its own `poll()` loop (`decnetd.c:3301`, `scs_datalink_recv`); the
+  polls it in its own `poll()` loop (`netacp.c:3301`, `scs_datalink_recv`); the
   object-42 dispatch is NETACP-driven, never executive-woken. There is **no**
   primitive by which the executive hands NETACP a user `$QIO` request, and none by
   which NETACP wakes/completes one. This is the design's real work.
@@ -60,7 +60,7 @@ already has this exact shape for files: the ODS-2 ACP path
 `_NET:` broker is the **DECnet ACP** analogue:
 
 ```
- user process            executive (vms.ko)                 NETACP (decnetd.c)
+ user process            executive (vms.ko)                 NETACP (netacp.c)
  ------------            ------------------                 ------------------
  $QIO IO$_ACCESS  --->   qio_net_op / vms_kif_net_access
                           enqueue request on the NET link  --- broker transport -->

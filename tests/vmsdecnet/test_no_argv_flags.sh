@@ -4,7 +4,7 @@
 # (NCP SET EXECUTOR STATE ON creates it; it reads the executor database), a
 # network object its link through SYS$NET, a utility its command line through
 # the CLI -- and the self-tests that used to hide behind --flags in the shipped
-# DECNETD.EXE live in the test image tests/vmsdecnet/netacp_test.c.
+# NETACP.EXE live in the test image tests/vmsdecnet/netacp_test.c.
 #
 # A shipped image is a C file under src/vmsdecnet that defines main(). Inside
 # it, after comments are stripped, the gate flags
@@ -14,7 +14,7 @@
 # (empty since RTPAD.EXE took SET HOST, rd vms-0a7 S2). A flag not in the baseline fails; a baseline
 # line whose flag is gone fails too, so the list only shrinks.
 #
-# NEGATIVE CONTROL: a "--fal-selftest" argv test planted in a copy of decnetd.c,
+# NEGATIVE CONTROL: a "--fal-selftest" argv test planted in a copy of netacp.c,
 # and a getopt() planted in a copy of fal_main.c, must each be caught.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -72,7 +72,7 @@ else
     echo "FAIL: argv flag parsing in a shipped src/vmsdecnet image"; fail=1
 fi
 # NETACP.EXE itself takes no command line at all.
-if awk '/^#if defined\(NETACP_IMAGE\)/,/^#elif/' src/vmsdecnet/engine/decnetd.c | grep -qE '^int main\(void\)$'; then
+if awk '/^#if defined\(NETACP_IMAGE\)/,/^#elif/' src/vmsdecnet/engine/netacp.c | grep -qE '^int main\(void\)$'; then
     echo "ok: NETACP.EXE's entry is main(void)"
 else
     echo "FAIL: NETACP.EXE's entry is not main(void)"; fail=1
@@ -81,8 +81,8 @@ fi
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 nc=0
 mkdir -p "$T/a/engine" "$T/b/fal"
-cp src/vmsdecnet/engine/decnetd.c "$T/a/engine/decnetd.c"
-printf 'int main(int argc, char **argv) { if (!strcmp(argv[1], "--fal-selftest")) return 1; return 0; }\n' >> "$T/a/engine/decnetd.c"
+cp src/vmsdecnet/engine/netacp.c "$T/a/engine/netacp.c"
+printf 'int main(int argc, char **argv) { if (!strcmp(argv[1], "--fal-selftest")) return 1; return 0; }\n' >> "$T/a/engine/netacp.c"
 cp "$BASELINE" "$T/base"
 if check "$T/a" "$T/base" >/dev/null; then echo "FAIL: negative control: a planted --fal-selftest was not caught"; fail=1; else nc=$((nc+1)); fi
 cp src/vmsdecnet/fal/fal_main.c "$T/b/fal/fal_main.c"

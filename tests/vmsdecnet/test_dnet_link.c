@@ -19,7 +19,7 @@
  *   3. ENGINE END-TO-END over a real socketpair(2): two engines exchange full
  *      on-wire data frames (Ethernet header + Phase IV long-data routing header
  *      + NSP PDU) -- genuine write(2)/read(2) of the actual encoded bytes, the
- *      exact build_data_frame -> wire -> link_rx path DECNETD uses -- opening a
+ *      exact build_data_frame -> wire -> link_rx path NETACP uses -- opening a
  *      logical link, moving a data segment with its ack, and disconnecting, with
  *      the payload round-tripping byte-identical. No CAP_NET_RAW.
  *
@@ -261,7 +261,7 @@ static void test_engine_e2e(void)
 }
 
 /* rd vms-c23: dnet_engine_link_tick drives the CI retransmit at the engine
- * boundary (what DECNETD's live loop calls). The retransmitted Connect Initiate
+ * boundary (what NETACP's live loop calls). The retransmitted Connect Initiate
  * must be the link FSM's own PDU wrapped into a real data frame -- never a
  * template copy -- so decode it back and confirm it is a CI. */
 static void test_engine_link_tick(void)

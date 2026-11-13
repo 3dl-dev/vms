@@ -2,7 +2,7 @@
  * tcpip_inetd_rms_bind.c - force-bind anchor for TCPIP$INETD.EXE (rd vms-8bd).
  *
  * THE WEAK-SEAM TRAP (the SAME one dcl_rms_bind.c / loginout_rms_bind.c /
- * decnetd_rms_bind.c / provision_rms_bind.c close): src/libvms/rtl/sysuaf.c
+ * netacp_rms_bind.c / provision_rms_bind.c close): src/libvms/rtl/sysuaf.c
  * `#pragma weak`-references ovmx_sysuaf_read_user()/_uic() -- the REAL
  * SYSUAF-over-ODS-2-ACP readers, defined in src/vmsrms/sysuaf_live.c. A weak
  * UNDEFINED reference does NOT cause the static linker to extract an archive

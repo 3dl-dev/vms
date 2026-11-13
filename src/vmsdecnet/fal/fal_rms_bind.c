@@ -3,7 +3,7 @@
  * closure so the FAL network server process (rd vms-d85) moves the transferred
  * file through RMS over the Files-11 ODS-2 ACP -- checked against its OWN
  * (the authenticated user's) identity. Same pattern and reason as
- * src/vmsdecnet/engine/decnetd_rms_bind.c (rd vms-8c2), which this mirrors.
+ * src/vmsdecnet/engine/netacp_rms_bind.c (rd vms-8c2), which this mirrors.
  *
  * WHY THIS OBJECT EXISTS.
  *

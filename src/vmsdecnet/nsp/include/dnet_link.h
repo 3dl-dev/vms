@@ -18,7 +18,7 @@
  * module serves either engine boundary (docs/design-decnet-ovmx.md sec 4:
  * "the L3-L6 VMS surface is identical either way -- only the engine boundary
  * moves"). The datalink/daemon that actually clocks this SM and puts NSP PDUs on
- * the wire is decnetd.c, via the routing-layer data frames the engine assembles.
+ * the wire is netacp.c, via the routing-layer data frames the engine assembles.
  *
  * LAYER BOUNDARY. This module owns the NSP logical-link FSM ONLY. It consumes
  * struct dnet_nsp_msg (decoded PDUs) and produces struct dnet_nsp_msg (PDUs to

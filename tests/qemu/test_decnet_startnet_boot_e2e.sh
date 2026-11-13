@@ -14,7 +14,7 @@
 #   startnet_audit.c), which ptraces DCL @SYS$MANAGER:STARTNET -> NCP SET
 #   EXECUTOR STATE ON -> the NETACP NCP creates -> the FAL.EXE NETACP creates
 #   for an inbound COPY 0:: (driven by NETACP_TEST.EXE off the same volume),
-#   asserts 0 pipe, 0 poll, 0 thread, 0 host socket, no exec of DECNETD.EXE,
+#   asserts 0 pipe, 0 poll, 0 thread, 0 host socket, no exec of NETACP.EXE,
 #   and stops that NETACP. The wire's negative control is the boot-1 pcap UP TO
 #   the audit; after it, the hellos of the NETACP NCP started are on the wire.
 #   Settle for guest writeback, power off.
@@ -58,7 +58,7 @@
 #         ptraces the shipped DCL.EXE running DIRECTORY / TYPE / COPY (both
 #         directions) of 0"SYSTEM MANAGER":: against THIS NETACP and its
 #         FAL.EXE, and asserts 0 pipe, 0 poll-family wait, 0 thread, 0 host
-#         socket, no exec of DECNETD.EXE (or of anything but that DCL), while
+#         socket, no exec of NETACP.EXE (or of anything but that DCL), while
 #         the trace sees each command's /dev/vms calls and its real output (the
 #         listing's 'Total of', the TYPE record, each COPY read back).
 #         WHY HERE, AS A MOUNTED-VOLUME IMAGE: this is the one place a NETACP
@@ -227,7 +227,7 @@ if [ "$rc" -eq 0 ] && login_system "$LOG1"; then
     printf '%s\n' "$seg" | sed -n '/=== startnet_audit (/,/=== startnet_audit: /p'
     if printf '%s\n' "$seg" | grep >/dev/null -E '^=== startnet_audit: [0-9]+ passed, 0 failed ===$' \
        && ! printf '%s\n' "$seg" | grep >/dev/null -E '^  FAIL: '; then rc=0; else rc=1; fi
-    record "boot 1: @SYS\$MANAGER:STARTNET -> NCP SET EXECUTOR STATE ON -> NETACP -> an inbound FAL.EXE under ptrace: 0 pipe, 0 poll, 0 thread, 0 host socket, no DECNETD.EXE exec; the COPY 0:: through it byte-verified (rd vms-0a7 S3)" "$rc"
+    record "boot 1: @SYS\$MANAGER:STARTNET -> NCP SET EXECUTOR STATE ON -> NETACP -> an inbound FAL.EXE under ptrace: 0 pipe, 0 poll, 0 thread, 0 host socket, no NETACP.EXE exec; the COPY 0:: through it byte-verified (rd vms-0a7 S3)" "$rc"
     if printf '%s\n' "$seg" | grep >/dev/null -F 'PASS: control: the audit flags a pipe, a poll, a socket(AF_INET), a thread and an exec of another image'; then rc=0; else rc=1; fi
     record "NEGCTL boot 1: the STARTNET audit's control child is flagged on the booted node" "$rc"
     # Diagnostics only: what the audited NETACP logged.
@@ -316,7 +316,7 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     off=$(wc -c <"$LOG2")
     send 'DNETACC :== $VDA100:[000000]NETACP_TEST.EXE'; sleep 1
     send 'DNETACC --net-loopback-accept-test'
-    if ! waitfor 'DECNETD-NET-LOOPBACK-ACCEPT:' 240 "$LOG2"; then
+    if ! waitfor 'NETACP-NET-LOOPBACK-ACCEPT:' 240 "$LOG2"; then
         # Diagnostics only (the verdicts below are unchanged): interrupt the
         # stuck image and show what NETACP logged while the proof ran.
         printf '\031' >&4; sleep 3
@@ -324,11 +324,11 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
         send 'TYPE SYS$MANAGER:NETACP.LOG'; sleep 8
     fi
     seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
-    if printf '%s\n' "$seg" | grep >/dev/null -F 'DECNETD-NET-LOOPBACK-ACCEPT: PASS'; then rc=0; else rc=1; fi
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'NETACP-NET-LOOPBACK-ACCEPT: PASS'; then rc=0; else rc=1; fi
     record "boot 2: a \$QIO _NET: link is brokered through the RUNNING NETACP -- COPY 0:: to FAL.EXE and back, byte-verified (vms-dda)" "$rc"
     if printf '%s\n' "$seg" | grep >/dev/null -F 'completes IO$_ACCESS SS$_INVLOGIN'; then rc=0; else rc=1; fi
     record "boot 2: a bad password is refused at IO\$_ACCESS (INVLOGIN) through NETACP" "$rc"
-    if printf '%s\n' "$seg" | grep >/dev/null -F 'DECNETD-I-NETLOOP'; then rc=0; else rc=1; fi
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'NETACP-I-NETLOOP'; then rc=0; else rc=1; fi
     record "NEGCTL boot 2: the brokered-link segment is real output (the test's banner is present)" "$rc"
 
     # rd vms-6a4: OVMX's own DCL DIRECTORY and TYPE of a node:: spec, through
@@ -340,8 +340,8 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     if has 'Directory 0"SYSTEM password"::' && has 'NETLB_SRC.TXT;' && has 'NETLB_GOT.TXT;' \
        && printf '%s\n' "$seg" | grep >/dev/null -E '^Total of [0-9]+ files?\.$'; then rc=0; else rc=1; fi
     record "boot 2: DIRECTORY 0\"SYSTEM MANAGER\":: lists SYSTEM's remote login directory through NETACP + FAL.EXE: VAX header (password masked), the NETLB files, Total line (vms-6a4)" "$rc"
-    if has 'DCL-E-ABORT' || has 'DECNETD-'; then rc=1; else rc=0; fi
-    record "boot 2: ... with no image or DECNETD chatter under it" "$rc"
+    if has 'DCL-E-ABORT' || has 'NETACP-'; then rc=1; else rc=0; fi
+    record "boot 2: ... with no image or NETACP chatter under it" "$rc"
     run_seg 'DIRECTORY 0"SYSTEM MANAGER"::SYS$SYSROOT:[SYSMGR]NETLB_*.TXT' "$LOG2" 'Total of' 120
     if printf '%s\n' "$seg" | grep >/dev/null -E '^Directory 0"SYSTEM password"::.*\]$' \
        && printf '%s\n' "$seg" | grep >/dev/null -E '^NETLB_GOT\.TXT;[0-9]+ +NETLB_SRC\.TXT;[0-9]+ +$' \
@@ -380,7 +380,7 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     if printf '%s\n' "$seg" | grep >/dev/null -F '[booted node: NETACP + FAL]' \
        && printf '%s\n' "$seg" | grep >/dev/null -E '^=== test_syssvc_dcl_remote_syscall_audit: [0-9]+ passed, 0 failed ===$' \
        && ! printf '%s\n' "$seg" | grep >/dev/null -E '^  FAIL: '; then rc=0; else rc=1; fi
-    record "boot 2: DIRECTORY / TYPE / COPY (both directions) of 0\"SYSTEM MANAGER\":: under ptrace -- 0 pipe, 0 poll, 0 thread, 0 host socket, no DECNETD.EXE exec; /dev/vms calls and the real output seen (rd vms-0a7)" "$rc"
+    record "boot 2: DIRECTORY / TYPE / COPY (both directions) of 0\"SYSTEM MANAGER\":: under ptrace -- 0 pipe, 0 poll, 0 thread, 0 host socket, no NETACP.EXE exec; /dev/vms calls and the real output seen (rd vms-0a7)" "$rc"
     if printf '%s\n' "$seg" | grep >/dev/null -F 'PASS: control: the audit flags a pipe, a poll, a socket(AF_INET), a thread and an exec of another image'; then rc=0; else rc=1; fi
     record "NEGCTL boot 2: the audit's control child is flagged on the booted node (the trace can see a pipe, a poll, a socket, a thread, an exec)" "$rc"
 
@@ -441,7 +441,7 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     # rd vms-5843: SET HOST to a node the database does not know says VMS's
     # SS$_NOSUCHNODE (652, "remote node is unknown") once, and nothing about
     # an image the user never ran. It said "%SYSTEM-W-NOSUCHDEV, no such
-    # device" and then "%DCL-E-ABORT, image SYS$SYSTEM:DECNETD.EXE exited
+    # device" and then "%DCL-E-ABORT, image SYS$SYSTEM:NETACP.EXE exited
     # with error status %X00000001".
     run_seg 'SET HOST NOSUCH' "$LOG2" 'NOSUCHNODE' 45
     if has '%SYSTEM-F-NOSUCHNODE, remote node is unknown'; then rc=0; else rc=1; fi
@@ -460,8 +460,8 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     netacp_log_off=$off
     send 'TYPE SYS$MANAGER:NETACP.LOG'; sleep 6
     seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
-    if printf '%s\n' "$seg" | grep >/dev/null -F 'DECNETD-I-DATALINK, datalink open on' &&
-       printf '%s\n' "$seg" | grep >/dev/null -F 'DECNETD-I-STARTED, NETACP up'; then rc=0; else rc=1; fi
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'NETACP-I-DATALINK, datalink open on' &&
+       printf '%s\n' "$seg" | grep >/dev/null -F 'NETACP-I-STARTED, NETACP up'; then rc=0; else rc=1; fi
     record "boot 2: SYS\$MANAGER:NETACP.LOG (NETACP's /OUTPUT, written through RMS) carries its DATALINK and STARTED reports (vms-c89)" "$rc"
     if printf '%s\n' "$seg" | grep >/dev/null -E '%TYPE-W-SEARCHFAIL|%RMS-E-FNF'; then rc=1; else rc=0; fi
     record "boot 2: TYPE finds NETACP.LOG (no SEARCHFAIL / FNF)" "$rc"
@@ -503,11 +503,11 @@ if [ "$rc" -eq 0 ] && login_system "$LOG3"; then
     if has '%MOUNT-I-MOUNTED, DCLAUDIT mounted on _VDA100:'; then rc=0; else rc=1; fi
     record "boot 3 (no NIC): the scratch test volume mounts (VDA100:, DCLAUDIT)" "$rc"
     send 'DNETACC :== $VDA100:[000000]NETACP_TEST.EXE'; sleep 1
-    run_seg 'DNETACC --fal-proc-accept-test' "$LOG3" 'DECNETD-FAL-PROC-ACCEPT:' 300
-    printf '%s\n' "$seg" | grep -aE '^  (PASS|FAIL): |DECNETD-' | head -40
-    if has 'DECNETD-FAL-PROC-ACCEPT: PASS'; then rc=0; else rc=1; fi
+    run_seg 'DNETACC --fal-proc-accept-test' "$LOG3" 'NETACP-FAL-PROC-ACCEPT:' 300
+    printf '%s\n' "$seg" | grep -aE '^  (PASS|FAIL): |NETACP-' | head -40
+    if has 'NETACP-FAL-PROC-ACCEPT: PASS'; then rc=0; else rc=1; fi
     record "boot 3 (no NIC): a FAL access over the local node 0:: works -- \$ASSIGN _NET:, IO\$_ACCESS 0\"user password\"::, a FAL.EXE server process with the user's UIC, SYSTEM served and GUEST refused (rd vms-5ec)" "$rc"
-    if has 'DECNETD-I-FALPROC'; then rc=0; else rc=1; fi
+    if has 'NETACP-I-FALPROC'; then rc=0; else rc=1; fi
     record "NEGCTL boot 3: the FAL segment is real output (the test's banner is present)" "$rc"
 else
     record "boot 3 (no NIC): SYSTEM logs in" 1
@@ -528,7 +528,7 @@ record "boot 2: the wire carries Phase IV endnode hellos to AB-00-00-03-00-00 SO
 # hello periods (the run above sleeps NETACP_SETTLE alone).
 # rd vms-c89: the scan stops where this script TYPEs SYS$MANAGER:NETACP.LOG,
 # which shows NETACP's lines on the terminal because it was asked to.
-nchat=$(head -c "${netacp_log_off:-$(wc -c <"$LOG2")}" "$LOG2" | grep -acE 'DECNETD-I-(DATALINK|STARTED|HELLOSENT|ADJINIT|CTERMLISTEN|BROKER),' || true)
+nchat=$(head -c "${netacp_log_off:-$(wc -c <"$LOG2")}" "$LOG2" | grep -acE 'NETACP-I-(DATALINK|STARTED|HELLOSENT|ADJINIT|CTERMLISTEN|BROKER),' || true)
 if [ "${nchat:-0}" -eq 0 ]; then rc=0; else rc=1; fi
 record "boot 2: NETACP's own status lines never reach the operator console (detached, no terminal; $nchat found)" "$rc"
 

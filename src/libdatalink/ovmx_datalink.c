@@ -839,7 +839,7 @@ int scs_datalink_primary_iface(char *out, size_t n)
 #else  /* !SCS_DATALINK_VIA_EXECUTIVE: the probe/bpf builds */
 
 /* The open's executive answers exist only in the executive build; a probe
- * build looks its interface up on the host (decnetd's probe branch). */
+ * build looks its interface up on the host (netacp's probe branch). */
 int scs_datalink_ifindex(int fd)
 {
     (void)fd;

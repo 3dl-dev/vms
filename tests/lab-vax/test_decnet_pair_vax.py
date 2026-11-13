@@ -4,10 +4,10 @@ booted OVMX/x86 on ONE Ethernet segment: SET HOST both ways (rd vms-9394).
 
 WHAT IS PROVEN (each a PASS/FAIL line; exit 0 iff every one passes):
   VAX side -- OVMX/NetBSD-vax under SIMH, DELQA (qt0) on the segment:
-    1. boot-time STARTNET started NETACP (SYS$SYSTEM:DECNETD.EXE) -- SHOW SYSTEM
+    1. boot-time STARTNET started NETACP (SYS$SYSTEM:NETACP.EXE) -- SHOW SYSTEM
        lists it -- off the executor/node databases on the system disk;
     2. NETACP opened its datalink THROUGH THE EXECUTIVE: its image's backend readout
-       carries DECNETD-I-DATALINK "... via the executive (VMS_IOCTL_L2_OPEN,
+       carries NETACP-I-DATALINK "... via the executive (VMS_IOCTL_L2_OPEN,
        PHY_IO; no CAP_NET_RAW), station address AA-00-04-00-2B-04" (1.43);
     3. nothing runs as substrate root while it does (ROOTAUDIT summary 0) --
        NETACP is a non-root VMS process holding PHY_IO, not a root bpf(4) user;
@@ -33,7 +33,7 @@ host QEMU (KVM when /dev/kvm is writable, else TCG).
 CONSOLES. The VAX console is drive_boot_vax.py's acceptance BRIDGE (RAW file
 + FIFO, the same one the DCL/SHOW battery drives); the x86 console is QEMU's
 serial on stdio. Both are read as append-only logs with offsets, so chatter
-(DECNETD hellos printed on a console) cannot hide or forge a match: every
+(NETACP hellos printed on a console) cannot hide or forge a match: every
 assertion searches only the bytes after its own command was sent.
 
 Configuration: the VAX boots with SYS$SYSTEM:NETNODE_LOCAL.DAT/NETNODE_REMOTE
@@ -533,7 +533,7 @@ def main():
               "VAX: the running NETACP's line is the executive's LAN unit ETH-0 (ETH0:), "
               "state on -- its image is built with the EXECUTIVE datalink backend "
               "(VMS_IOCTL_L2_*, PHY_IO; no bpf(4)) -- NCP SHOW KNOWN LINES readout")
-        check("DECNETD-E-NOSOCKET" not in v.text(0) and "bpf datalink" not in v.text(0),
+        check("NETACP-E-NOSOCKET" not in v.text(0) and "bpf datalink" not in v.text(0),
               "VAX: no datalink refusal and no bpf(4) path on the console")
         seg = v.run("RUN SYS$SYSTEM:ROOTAUDIT", timeout=180)
         m = re.search(r"%ROOTAUDIT-I-SUMMARY, (\d+) process", seg)

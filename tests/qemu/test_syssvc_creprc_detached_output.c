@@ -7,7 +7,7 @@
  * Before rd vms-5843, $CREPRC handed that name straight to open(2): a VMS file
  * spec such as STARTNET's /OUTPUT=SYS$MANAGER:NETACP.LOG never opens that way,
  * the dup2 was skipped, and the detached NETACP kept the CREATOR's descriptors
- * -- the operator console STARTUP runs on -- so every DECNETD-I- status line
+ * -- the operator console STARTUP runs on -- so every NETACP-I- status line
  * it wrote landed on OPA0:, in the middle of the login prompt (measured on a
  * booted V0.7-13 node, 2026-10-21).
  *

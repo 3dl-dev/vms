@@ -75,6 +75,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh driver-gate   # vms-1eb: the VMS-hosted xgcc driver runs cc1+as on OVMX; DCL DUMP of the EVAX object == cross driver object
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh link-gate     # vms-e40: cc1 -> as -> LINK.EXE (all VMS-hosted) -> RUN HELLO.EXE on OVMX/Alpha
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh xgcclink-gate # vms-65a: the VMS-hosted xgcc driver compiles AND links hello.c on OVMX/Alpha (cc1, as, ld -> DCL LINK -> LINK.EXE); RUN prints
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh mmk-gate      # vms-4ac2: MMK.EXE (unchanged MMK, VMS-native LINK) builds, skips and rebuilds a DESCRIP.MMS target from DCL on OVMX/Alpha
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh cc1build-gate # vms-465: BUILD_CC1.COM builds GCC's cc1 on OVMX/Alpha with the native toolchain (GCC/GXX, AR -> LIBRARY, GXX -> LINK); the built cc1 writes the cross cc1's assembly for hello.c (hours under TCG)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh as-gate       # vms-5303e: VMS-hosted cc1 then GNU as run on OVMX; DCL DUMP of the EVAX object == cross-assembled object
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
@@ -576,6 +577,62 @@ assert_lnk() {
   echo "  (d) no activation err : ok=$err_ok"
   [ "$cc1_ok" -eq 1 ] && [ "$as_ok" -eq 1 ] && [ "$ln_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$same" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$ran2" -eq 1 ] && [ "$st2_ok" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
+}
+
+# assert_mmk <console-log> -- THE TEETH for the vms-4ac2 MMK proof (`mmk-gate').
+# MMK.EXE (MadGoat MMK, unchanged, built for the alpha-dec-vms host, linked by the
+# VMS-native LINK) runs from DCL three times on a one-target DESCRIP.MMS. PASS iff
+# (1) run 1 (no target) EXECUTES the action -- its DCL subprocess prints the action
+# line itself (anchored: MMK's own echo of the command is a different line) -- and
+# leaves HELLO.OUT;1 holding the first source, (2) run 2 runs no action and leaves
+# no HELLO.OUT;2, (3) after HELLO.IN gets a new version, run 3 executes the action
+# again and DCL TYPE shows HELLO.OUT;2 holding the second source, (4) each run ends
+# with a success $STATUS, and (5) no activation error or abnormal termination.
+assert_mmk() {
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  python3 -I - "$log" <<'MMKEOF'
+import re, sys
+t = open(sys.argv[1], 'rb').read().decode('latin-1').replace('\r', '')
+L = t.split('\n')
+def span(a, b):
+    try:
+        i = next(k for k, l in enumerate(L) if a in l)
+        j = next(k for k in range(i + 1, len(L)) if b in L[k])
+    except StopIteration:
+        return None
+    return L[i + 1:j]
+def acted(sp):
+    return sp is not None and any(re.match(r'MMK-ACTION: building HELLO\.OUT from HELLO\.IN\s*$', l) for l in sp)
+def status(n):
+    m = re.search(r'MMK-PROOF: RUN%d-STATUS=%%X([0-9A-Fa-f]{8})' % n, t)
+    return m is not None and int(m.group(1), 16) & 1 == 1
+def files(n):
+    m = re.search(r'MMK-PROOF: RUN%d-FILES V1=\[(.*)\] V2=\[(.*)\][ \t]*$' % n, t, re.M)
+    return (bool(m.group(1).strip()), bool(m.group(2).strip())) if m else None
+def typed(a, b, want):
+    sp = span(a, b)
+    return sp is not None and any(l.strip() == want for l in sp) and not any(
+        l.strip().startswith('MMK-SOURCE:') and l.strip() != want for l in sp)
+r1 = span('MMK-PROOF: === RUN 1:', 'MMK-PROOF: RUN1-STATUS=')
+r2 = span('MMK-PROOF: === RUN 2:', 'MMK-PROOF: RUN2-STATUS=')
+r3 = span('MMK-PROOF: === RUN 3:', 'MMK-PROOF: RUN3-STATUS=')
+c = {
+ '1 run 1 executed the action': acted(r1),
+ '1 run 1 left HELLO.OUT;1 only': files(1) == (True, False),
+ '1 HELLO.OUT holds the first source': typed('MMK-PROOF: === RUN1 TYPE HELLO.OUT', 'MMK-PROOF: === RUN 2:', 'MMK-SOURCE: first'),
+ '2 run 2 ran no action (target current)': r2 is not None and not acted(r2) and not any('MMK-ACTION:' in l for l in r2 if not 'WRITE' in l.upper()),
+ '2 run 2 left no HELLO.OUT;2': files(2) == (True, False),
+ '3 run 3 executed the action after the touch': acted(r3),
+ '3 run 3 wrote HELLO.OUT;2': files(3) == (True, True),
+ '3 HELLO.OUT holds the second source': typed('MMK-PROOF: === RUN3 TYPE HELLO.OUT', 'MMK-PROOF: === END ===', 'MMK-SOURCE: second'),
+ '4 every MMK run ended with a success status': status(1) and status(2) and status(3),
+ '5 no activation error / abnormal termination': not re.search(r'%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|ACCVIO|terminated abnormally|%DCL-F-ABORT|%LINK-F', t),
+}
+for k, v in c.items():
+    print('  (%s) %s' % (k, 'ok' if v else 'FAIL'))
+sys.exit(0 if all(c.values()) else 1)
+MMKEOF
 }
 
 # assert_drl <console-log> <ref1.exe> <ref2.exe> -- THE TEETH for the vms-65a
@@ -2477,6 +2534,85 @@ PYEOF2
       exit 0
     fi
     echo "FAIL: the VMS-hosted cc1 -> as -> LINK -> RUN proof did not pass. Full log: $WORK/modgpA.log"
+    tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  mmk-gate)
+    # vms-4ac2 rung 2: MMK.EXE -- MadGoat MMK (tests/corpus/tier3-mmk, unchanged)
+    # compiled by the stage-2 alpha-dec-vms compiler and linked by the VMS-native
+    # LINK.EXE, STRICT (build-host-mmk.sh) -- runs on OVMX/Alpha from DCL: a
+    # one-target DESCRIP.MMS is built, found current, and rebuilt after a touch.
+    JOINT_CRTL_RMS_VENEER=1
+    BOOT_TIMEOUT="${MMK_BOOT_TIMEOUT:-900}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))
+    _st=$(mktemp -d); _fails=0
+    mkmmk() {  # mkmmk <act1> <act2> <act3> <files1> <files2> <files3> <type1> <type3> <st>
+      _a() { [ "$1" = 1 ] && printf '%s\r\n' '$ WRITE SYS$OUTPUT "MMK-ACTION: building HELLO.OUT from HELLO.IN"' \
+        'MMK-ACTION: building HELLO.OUT from HELLO.IN' '$ COPY HELLO.IN HELLO.OUT'; return 0; }
+      _f() { case $1 in 1) echo 'V1=[VDA0:[SYSTMP]HELLO.OUT;1] V2=[]' ;; 2) echo 'V1=[VDA0:[SYSTMP]HELLO.OUT;1] V2=[VDA0:[SYSTMP]HELLO.OUT;2]' ;; *) echo 'V1=[] V2=[]' ;; esac; }
+      printf '%s\r\n' 'MMK-PROOF: === RUN 1: target missing, MMK builds it ==='; _a "$1"
+      printf '%s\r\n' "MMK-PROOF: RUN1-STATUS=$9" "MMK-PROOF: RUN1-FILES $(_f "$4")" \
+        'MMK-PROOF: === RUN1 TYPE HELLO.OUT ===' "$7" 'MMK-PROOF: === RUN 2: target current, MMK does nothing ==='; _a "$2"
+      printf '%s\r\n' "MMK-PROOF: RUN2-STATUS=%X00000001" "MMK-PROOF: RUN2-FILES $(_f "$5")" \
+        'MMK-PROOF: === touch: a new version of HELLO.IN ===' 'MMK-PROOF: === RUN 3: source newer, MMK rebuilds ==='; _a "$3"
+      printf '%s\r\n' "MMK-PROOF: RUN3-STATUS=%X00000001" "MMK-PROOF: RUN3-FILES $(_f "$6")" \
+        'MMK-PROOF: === RUN3 TYPE HELLO.OUT ===' "$8" 'MMK-PROOF: === END ==='
+    }
+    mkmmk 1 0 1 1 1 2 'MMK-SOURCE: first' 'MMK-SOURCE: second' %X00000001 > "$_st/pass.log"
+    mkmmk 0 0 1 1 1 2 'MMK-SOURCE: first' 'MMK-SOURCE: second' %X00000001 > "$_st/noact1.log"
+    mkmmk 1 1 1 1 1 2 'MMK-SOURCE: first' 'MMK-SOURCE: second' %X00000001 > "$_st/notcurrent.log"
+    mkmmk 1 0 0 1 1 2 'MMK-SOURCE: first' 'MMK-SOURCE: second' %X00000001 > "$_st/norebuild.log"
+    mkmmk 1 0 1 0 1 2 'MMK-SOURCE: first' 'MMK-SOURCE: second' %X00000001 > "$_st/nofile1.log"
+    mkmmk 1 0 1 1 2 2 'MMK-SOURCE: first' 'MMK-SOURCE: second' %X00000001 > "$_st/v2early.log"
+    mkmmk 1 0 1 1 1 1 'MMK-SOURCE: first' 'MMK-SOURCE: second' %X00000001 > "$_st/nov2.log"
+    mkmmk 1 0 1 1 1 2 'MMK-SOURCE: first' 'MMK-SOURCE: first' %X00000001 > "$_st/stale.log"
+    mkmmk 1 0 1 1 1 2 '' 'MMK-SOURCE: second' %X00000001 > "$_st/notype.log"
+    mkmmk 1 0 1 1 1 2 'MMK-SOURCE: first' 'MMK-SOURCE: second' %X10000002 > "$_st/badstatus.log"
+    grep -v 'MMK-ACTION: building' "$_st/pass.log" > "$_st/echoonly.log"
+    sed 's/^MMK-ACTION: building/$ WRITE SYS$OUTPUT "MMK-ACTION: building/' "$_st/pass.log" > "$_st/echoonly2.log"
+    grep -v 'MMK-PROOF: === END ===' "$_st/pass.log" > "$_st/noend.log"
+    { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:MMK terminated abnormally (signal 11)'; } > "$_st/crash.log"
+    for _c in pass:0 noact1:1 notcurrent:1 norebuild:1 nofile1:1 v2early:1 nov2:1 stale:1 notype:1 badstatus:1 echoonly:1 echoonly2:1 noend:1 crash:1; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_mmk "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  mmk selftest $_n: PASS"; else echo "  mmk selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "mmk selftest failed -- assert_mmk cannot be trusted"
+    echo ""
+    build_joint_images
+    _tc="${OVMX_CXX_TOOLCHAIN:-$GATE_ROOT/cxxtc}"; _jr="$GATE_ROOT/joint-n3"
+    if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
+      log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long)"
+      mkdir -p "$_tc"
+      docker run --rm --network none -v "$REPO:/src:ro" -v "$_jr:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
+        bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
+        || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed"; }
+    fi
+    log "step 1c2: MMK.EXE for the alpha-dec-vms host (unchanged MMK sources; VMS-native LINK, STRICT)"
+    mkdir -p "$GATE_ROOT/hostmmk"
+    docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostmmk:/w" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/selfhost/build-host-mmk.sh > "$GATE_ROOT/host-mmk.log" 2>&1 \
+      || { tail -60 "$GATE_ROOT/host-mmk.log"; die "host MMK.EXE build/link failed -- see $GATE_ROOT/host-mmk.log"; }
+    grep -E 'objects compiled|HOST-MMK' "$GATE_ROOT/host-mmk.log" | sed 's/^/  | /'
+    _mmk="$GATE_ROOT/hostmmk/host-mmk/mmk.exe"
+    [ -s "$_mmk" ] || die "no host mmk.exe"
+    cp "$_mmk" "$WORK/joint/mmk.exe"
+    for _p in "DECC\$SHR" LIBOTS_SHR LIBVMSRMS\$SHR LIBVMS\$SHR LIBVMSFS\$SHR LIBVMSLNM\$SHR LIBVMSPROCESS\$SHR LIBVMSSYS\$SHR; do
+      [ -s "$_jr/$_p.EXE" ] || die "no $_p.EXE in $_jr"
+      cp "$_jr/$_p.EXE" "$WORK/joint/$_p.EXE"
+    done
+    : > "$WORK/joint/MMK_PROOF"
+    assemble_boot_image
+    log "step 3: BOOT A -- DCL runs MMK.EXE on a one-target DESCRIP.MMS on the REAL executive (up to ${BOOT_TIMEOUT}s)"
+    run_boot_a
+    grep -aE "MMK|%IMGACT|%DCL-|%SYSTEM|%RMS" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_mmk "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: MMK.EXE, built for the alpha-dec-vms host from unchanged MMK sources and"
+      echo "      linked by the VMS-native LINK, builds, skips and rebuilds a target on OVMX/Alpha."
+      exit 0
+    fi
+    echo "FAIL: the MMK proof did not pass. Full log: $WORK/modgpA.log"
     tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

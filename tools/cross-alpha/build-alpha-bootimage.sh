@@ -341,6 +341,14 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_NATIVE_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   NATIVE (vms-3b3f): HELLO/RETST/CSTDIO/MAIN3/MAIN4/MYSHRV2/NOTIMG -> SYS\$SYSTEM; SYS\$PUBLIC_VECTORS + LIBRTL + DECC\$SHR_EV56 + SECURESHRP + MYSHR + full producer graph -> SYS\$SHARE; NATIVE-proof SYSTARTUP staged"
+            elif [ -f "$JOINT/MMK_PROOF" ]; then
+                # vms-4ac2: MadGoat MMK built for the alpha-dec-vms host and linked
+                # by the VMS-native LINK, run from DCL on a one-target DESCRIP.MMS.
+                [ -f "$JOINT/mmk.exe" ] || { echo "FAIL: MMK_PROOF without $JOINT/mmk.exe"; exit 1; }
+                cp "$JOINT/mmk.exe" "$SYSEXE/MMK.EXE"
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_MMK_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   MMK (vms-4ac2): mmk.exe -> SYS\$SYSEXE:MMK.EXE; full RMS producer graph -> SYS\$SHARE; MMK-proof SYSTARTUP staged"
             elif [ -f "$JOINT/CC1_PROOF" ]; then
                 # vms-9a63: the VMS-hosted GCC compiler proper, run by the
                 # launcher JOINT_E2E (vfork+execv) on a DCL-written source.

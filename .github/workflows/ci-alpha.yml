@@ -2175,6 +2175,71 @@ jobs:
             .boot-cache/alpha-modgp-gate/boot/joint/*.EXE
           if-no-files-found: ignore
           retention-days: 7
+  # alpha-mmk (vms-4ac2): MadGoat MMK (tests/corpus/tier3-mmk, unchanged), built for the
+  # alpha-dec-vms host and linked by the VMS-native LINK.EXE (STRICT), runs on OVMX/Alpha
+  # from DCL: a one-target DESCRIP.MMS is built, found current, and rebuilt after a touch.
+  alpha-mmk:
+    name: "OVMX/Alpha self-hosting — MMK.EXE, built for the alpha-dec-vms host from unchanged MMK sources, builds, skips and rebuilds a DESCRIP.MMS target from DCL (vms-4ac2)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'merge_group' && needs.changes.outputs.alpha_vmsgcc == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the stage-2 C/C++ toolchain
+        uses: actions/cache@v4
+        with:
+          path: .cxxtc
+          key: alpha-cxx-tc-${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
+
+      - name: "mmk gate — MMK.EXE strict link, RUN from DCL on qemu-system-alpha + /dev/vms; can-fail selftest first"
+        env:
+          OVMX_CXX_TOOLCHAIN: ${{ github.workspace }}/.cxxtc
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh mmk-gate
+      - name: Keep mmk.exe and the boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-mmk-and-boot-log
+          path: |
+            .boot-cache/alpha-modgp-gate/hostmmk/host-mmk/mmk.exe
+            .boot-cache/alpha-modgp-gate/boot/modgpA.log
+          if-no-files-found: ignore
+          retention-days: 7
   # alpha-xgcclink (vms-65a): the REAL xgcc driver, built for the alpha-dec-vms host, compiles AND
   # links hello.c on OVMX/Alpha (cc1, as, ld -> DCL LINK -> LINK.EXE); DCL DUMP of HELLO.EXE must
   # equal the cross driver's image and RUN HELLO.EXE must print its line.
@@ -2689,6 +2754,7 @@ jobs:
       - alpha-as
       - alpha-driver
       - alpha-link
+      - alpha-mmk
       - alpha-xgcclink
       - alpha-shipped-shareable-activation
       - alpha-activation-selftest

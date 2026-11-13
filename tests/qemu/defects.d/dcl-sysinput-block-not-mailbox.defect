@@ -1,0 +1,31 @@
+# dcl-sysinput-block-not-mailbox -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL command-procedure data block as an image's SYS\$INPUT mailbox (dcl_in.c)";;
+        targets)      echo "vmsdcl/dcl_in.c";;
+        suites_red)   echo "test_syssvc_dcl_image_sysout test_syssvc_dcl_input_route";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "DCL writes the data lines after RUN to their mailbox but never names it SYS\$INPUT: the image's C RTL finds no mailbox to bind and reads its substrate descriptor 0, so the data lines never reach it. One call removed.";;
+        require_fail) cat <<'EOF'
+sysin: the RUN image read the two data lines that follow RUN
+run: the RUN image read the two data records that follow RUN in the SYS$INPUT command file
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+big: the RUN image read all 300 data records
+EOF
+                      ;;
+        knock_on_why) echo "the 72 KB block of test_syssvc_dcl_input_route reaches its image through the same unnamed mailbox";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    st = sys\$crelnm(NULL, &blk_ptab, &blk_lnm, &um, il);$|    st = SS$_NORMAL; /* NEGCTL dcl-sysinput-block-not-mailbox */|' "$_file"
+    :
+}

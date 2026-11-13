@@ -70,6 +70,10 @@
 #define RUN_OUT  "VDA0:[OVMXDIR]IN4D27R.LIS"
 #define ECHO_LOG "VDA0:[OVMXDIR]IN4D27E.LIS"
 #define ECHO_ENV "OVMX_IN4D27_ECHO"
+#define BIGCOM   "VDA0:[OVMXDIR]IN4D27B.COM"
+#define BIG_OUT  "VDA0:[OVMXDIR]IN4D27B.LIS"
+#define BIG_RECS 300                 /* x BIG_RLEN: a 72 KB block, 18x the */
+#define BIG_RLEN 240                 /* mailbox's 4 KB buffer quota        */
 
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
@@ -269,6 +273,37 @@ static int echo_image(void)
     return 0;
 }
 
+/* Data record i of the big block: "BIG<i>:" then a pattern that differs per
+ * record, BIG_RLEN characters in all. */
+static void big_rec(int i, char *out)
+{
+    int n = snprintf(out, BIG_RLEN + 1, "BIG%04d:", i);
+    for (; n < BIG_RLEN; n++)
+        out[n] = (char)('A' + (i + n) % 26);
+    out[BIG_RLEN] = '\0';
+}
+
+/* THE IMAGE, big block: reads its SYS$INPUT to the end, checking every record
+ * against big_rec, and files one summary record. */
+static int echo_image_big(void)
+{
+    char line[1024], want[BIG_RLEN + 1], rec[128];
+    int n = 0, bad = 0;
+    (void)vms_pcb_init(0xFFFFFFFFFFFFFFFFULL);
+    while (fgets(line, sizeof line, stdin)) {
+        size_t l = strlen(line);
+        while (l && (line[l - 1] == '\n' || line[l - 1] == '\r'))
+            line[--l] = '\0';
+        big_rec(n, want);
+        if (strcmp(line, want) != 0)
+            bad++;
+        n++;
+    }
+    snprintf(rec, sizeof rec, "BIGREAD:%d:%d", n, bad);
+    (void)rms_textfile_write_line(ECHO_LOG, rec);
+    return 0;
+}
+
 /* Does `spec`, read through RMS, hold the record `want`? */
 static int file_has(const char *spec, const char *want, int show)
 {
@@ -307,6 +342,38 @@ static int errlog_has(const char *what)
  * image's SYS$INPUT, up to the next '$' record; DCL resumes there (DCL
  * Concepts, "Data Lines"). Here the command file IS the process's SYS$INPUT
  * (LIB$SPAWN INPUT=, RUN/DETACHED/INPUT=), not an @procedure. */
+/* ---- RUN with a data block many times the mailbox's buffer quota ----
+ * VMS DCL feeds an image its data lines record by record, however many: a
+ * 72 KB block reaches the image whole and in order (DCL Concepts, "Data
+ * Lines"); OVMX's DCL feeds the mailbox as the image drains it. */
+static void big_case(const char *self)
+{
+    char runline[300], rec[BIG_RLEN + 1], want[64];
+    snprintf(runline, sizeof runline, "$ RUN \"%s\"", self);
+    int laid = rms_textfile_write_line(BIGCOM, runline) == 0;
+    for (int i = 0; i < BIG_RECS && laid; i++) {
+        big_rec(i, rec);
+        laid &= rms_textfile_append_line(BIGCOM, rec) == 0;
+    }
+    laid &= rms_textfile_append_line(BIGCOM, "$ WRITE SYS$OUTPUT \"BIGRESUMED\"") == 0;
+    laid &= rms_textfile_append_line(BIGCOM, "$ LOGOUT") == 0;
+    CHECK(laid, "big: the command file (RUN, 300 data records of 240 bytes, a WRITE) is laid down through RMS");
+    CHECK(define_system("SYS$INPUT", BIGCOM) & 1, "big: SYS$INPUT names the command file");
+    CHECK(define_system("SYS$OUTPUT", BIG_OUT) & 1, "big: SYS$OUTPUT names a file");
+    setenv(ECHO_ENV, "big", 1);
+    pid_t pid = start_dcl();
+    unsetenv(ECHO_ENV);
+    CHECK(reap(pid), "big: DCL reads LOGOUT from the command file and exits");
+    undefine_system("SYS$INPUT");
+    undefine_system("SYS$OUTPUT");
+    snprintf(want, sizeof want, "BIGREAD:%d:0", BIG_RECS);
+    /* negctl: dcl-sysinput-block-no-feeder */
+    CHECK(file_has(ECHO_LOG, want, 1),
+          "big: the RUN image read all 300 data records (72 KB, 18x the mailbox's buffer quota), each whole and in order");
+    CHECK(file_has(BIG_OUT, "BIGRESUMED", 1) && !errlog_has("SYSINPUT"),
+          "big: DCL fed the whole block and resumed at the '$' record after it");
+}
+
 static void run_case(const char *self)
 {
     char runline[300];
@@ -343,7 +410,7 @@ int main(int argc, char **argv)
 {
     (void)argc; (void)argv;
     if (getenv(ECHO_ENV))
-        return echo_image();
+        return strcmp(getenv(ECHO_ENV), "big") == 0 ? echo_image_big() : echo_image();
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGPIPE, SIG_IGN);
     printf("=== test_syssvc_dcl_input_route (DCL reads SYS$INPUT from a mailbox by $QIO, from a file by RMS, vms-4d27) ===\n");
@@ -378,6 +445,7 @@ int main(int argc, char **argv)
         if (sl > 0) {
             self[sl] = '\0';
             run_case(self);
+            big_case(self);
         } else {
             CHECK(0, "run: this suite's own image path resolves (it is the image RUN)");
         }

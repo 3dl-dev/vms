@@ -20,6 +20,7 @@
 #ifndef DCL_MEMFILE_H
 #define DCL_MEMFILE_H
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stddef.h>
 
@@ -42,15 +43,8 @@ int   dcl_pf_close(struct dcl_pf *pf);
  * under that condition looks fine until the first fwrite. */
 FILE *dcl_scratch_tmpfile(void);
 
-/* write() all of `buf`, retrying EINTR: 0, or -errno (short writes are errors). */
-int dcl_write_all(int fd, const char *buf, size_t len);
-
-/* SYS$INPUT-from-procedure redirection state (dcl_cmd.h, vms-1a9). */
-struct dcl_sysinput { int saved_fd0; };
-
-/* Put `len` bytes on fd 0 for an image activation, saving the old fd 0 in
- * si->saved_fd0. No tmpfs: /dev/null (empty), a pipe (small), else a scratch
- * file whose writes are checked. 0, or -1 with fd 0 untouched. */
-int dcl_sysinput_install(struct dcl_sysinput *si, const char *buf, size_t len);
+/* SYS$INPUT-from-procedure state (dcl_cmd.h, vms-1a9): the data block's
+ * temporary mailbox while it is the image's SYS$INPUT (rd vms-07ae). */
+struct dcl_sysinput { int active; uint16_t chan; };
 
 #endif

@@ -1,0 +1,27 @@
+# dcl-sysinput-block-no-feeder -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL feeding a command-procedure data block larger than its mailbox as the image drains it (dcl_in.c)";;
+        targets)      echo "vmsdcl/dcl_in.c";;
+        suites_red)   echo "test_syssvc_dcl_input_route";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "DCL writes what fits in the data block's mailbox at once, but its read-attention AST refills none of the rest and ends the block with end of file at once: an image given a block over the mailbox's buffer quota reads only its first records. One line of the AST changed.";;
+        require_fail) cat <<'EOF'
+big: the RUN image read all 300 data records
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why) echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    (void)feed_step();$|    g_feed.off = g_feed.len; (void)feed_step(); /* NEGCTL dcl-sysinput-block-no-feeder */|' "$_file"
+    :
+}

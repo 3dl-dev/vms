@@ -289,6 +289,7 @@ static void case_sysin(void)
     show("sysin");
     const char *a = line_eq("SAW:SYSINLINE_ALPHA"), *b = line_eq("SAW:SYSINLINE_BETA");
     const char *eof = line_eq("IMGEOF"), *res = strstr(out, "RESUMED_AT_DOLLAR");
+    /* negctl: dcl-sysinput-block-not-mailbox */
     CHECK(a && b, "sysin: the RUN image read the two data lines that follow RUN");
     CHECK(eof, "sysin: the image saw end of file after the block");
     CHECK(res, "sysin: DCL resumed at the first '$' line after the block");

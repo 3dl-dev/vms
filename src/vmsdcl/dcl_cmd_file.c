@@ -3331,17 +3331,17 @@ int cmd_create(struct dcl_command *cmd)
      *   $ CREATE FILE.TXT
      *   ...data...
      *   $ NEXTCOMMAND
-     * idiom, and the consumer of a DECK/EOD block. dcl_sysinput_setup() points
-     * fd 0 at exactly that block (and is a no-op interactively), so the same
+     * idiom, and the consumer of a DECK/EOD block. dcl_sysinput_setup() makes
+     * exactly that block SYS$INPUT (and is a no-op interactively), so the same
      * read loop serves both. Reference: DCL Dictionary, "CREATE" (input from
      * SYS$INPUT); "DECK"/"EOD". (vms-3983) Each input line becomes one RMS
      * record ($PUT), with the trailing newline stripped (RMS records carry no
      * terminator; the RAT=CR attribute supplies it on read-back). */
     struct dcl_sysinput si;
-    int srt = dcl_sysinput_setup(ctx, &si);
+    int srt = dcl_sysinput_setup_dcl(ctx, &si);
     if (srt)
         return srt;
-    if (ctx->interactive || ctx->proc_depth >= 0 || si.saved_fd0 >= 0) {
+    if (ctx->interactive || ctx->proc_depth >= 0 || si.active) {
         char line[4096];
         /* A ^Z that ended an earlier CREATE left stdin's end-of-file flag
          * set; a terminal's end of file is per read, so clear it, or every

@@ -558,8 +558,9 @@ DEFECT_BAD=0
 run_harness ""
 BASE_RC=$?
 if [ "$BASE_RC" -eq "$BUDGET_RC" ]; then
-    if [ $# -gt 0 ]; then budget_report pristine "$@"
-    else budget_report pristine $(sh "$MANIFEST" list); fi
+    if [ $# -gt 0 ]; then _all="$*"; else _all=$(sh "$MANIFEST" list | tr '\n' ' '); fi
+    # shellcheck disable=SC2086 # one word per defect name
+    budget_report pristine $_all
     echo "Failing: the positive control (budget) -- no negative control ran"
     exit 1
 fi

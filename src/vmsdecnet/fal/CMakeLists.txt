@@ -30,6 +30,10 @@ target_link_libraries(vmsdecnet_fal PUBLIC
 # serves the DAP session as that user, so every file it opens is checked by the
 # executive ACP against the user's identity -- never NETACP's.
 target_sources(vmsdecnet_fal PRIVATE dnet_fal_proc.c)
+# rd vms-0a7 S3: FAL.EXE accepts its link through SYS$NET and moves DAP over
+# $QIOW on a _NET: channel; the host selftest runs the same calls over the
+# broker marshalling (dnet_broker_xfer) on its in-process queue.
+target_link_libraries(vmsdecnet_fal PUBLIC vmsdecnet_broker)
 target_include_directories(vmsdecnet_fal PRIVATE
     ${CMAKE_SOURCE_DIR}/src/libvmssys
     ${CMAKE_SOURCE_DIR}/src/vmsrms/include)

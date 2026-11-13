@@ -1220,6 +1220,19 @@ static void creprc_define_sysinput(const char *spec)
     (void)vms_kif_lnm_define(VMS_LNM_TBL_PROCESS, "SYS$INPUT", vals, 1, 0, 3 /* user mode */);
 }
 
+/* SYS$NET of a NETWORK process (rd vms-0a7 S3): $CREPRC with PRC$M_NETWRK and
+ * an input naming a network connect block -- NETACP creating a network
+ * object's server for an inbound link -- gives the new process SYS$NET (and
+ * SYS$INPUT) translating to that NCB in LNM$PROCESS, as VMS network processes
+ * have; the server $ASSIGNs _NET: and accepts its link with IO$_ACCESS on it.
+ * The same single executive ioctl in the forked child as SYS$INPUT above. */
+static void creprc_define_sysnet(const char *ncb)
+{
+    const char *vals[1] = { ncb };
+    (void)vms_kif_lnm_define(VMS_LNM_TBL_PROCESS, "SYS$NET", vals, 1, 0, 3 /* user mode */);
+    (void)vms_kif_lnm_define(VMS_LNM_TBL_PROCESS, "SYS$INPUT", vals, 1, 0, 3 /* user mode */);
+}
+
 /* A VMS file spec (a device ':' or a directory '[' / '<', not a substrate path
  * beginning '/') that names a FILE, not a bare device such as NL:, OPA0: or
  * MBA3: -- something after the last ':' or a directory part. */
@@ -1605,7 +1618,16 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      * reads through $QIO or RMS.
      */
     char child_sysinput[256] = "";
-    if (input && input->dsc$a_pointer) {
+    /* A network process's input is its NCB (NODE::"..."), never a file to
+     * open or a path to probe (rd vms-0a7 S3). */
+    char child_sysnet[256] = "";
+    if (input && input->dsc$a_pointer && (stsflg & PRC$M_NETWRK)) {
+        char ipath[256];
+        dsc$strncpy(ipath, input, sizeof(ipath));
+        if (strstr(ipath, "::"))
+            snprintf(child_sysnet, sizeof(child_sysnet), "%s", ipath);
+    }
+    if (input && input->dsc$a_pointer && !child_sysnet[0]) {
         char ipath[256];
         dsc$strncpy(ipath, input, sizeof(ipath));
         if (access(ipath, R_OK) != 0) {
@@ -1980,7 +2002,11 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * operator's console with /dev/null.
          */
         if (!interactive) {
-            if (input && input->dsc$a_pointer) {
+            if (child_sysnet[0]) {
+                creprc_define_sysnet(child_sysnet);
+                int nfd = open("/dev/null", O_RDONLY);
+                if (nfd >= 0) { dup2(nfd, STDIN_FILENO); close(nfd); }
+            } else if (input && input->dsc$a_pointer) {
                 char path[256];
                 dsc$strncpy(path, input, sizeof(path));
                 int fd = child_sysinput[0] ? -1 : open(path, O_RDONLY);

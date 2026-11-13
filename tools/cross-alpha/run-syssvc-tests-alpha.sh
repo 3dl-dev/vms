@@ -175,14 +175,14 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # fail HONESTLY (never skip). Required targets (DCL/INITIALIZE/AUTHORIZE)
     # cross-build via the same glibc-static toolchain the tests use.
     echo "== build subject images (DCL/INITIALIZE/AUTHORIZE + best-effort MMK/TCC) =="
-    # decnetd_exe: DECNETD.EXE, the NETACP test_syssvc_decnetd_syscall_audit
-    # traces at SYS$SYSTEM (rd vms-d3cd). vms_install: INSTALL.EXE, the image
-    # test_syssvc_dcl_install has DCL run (rd vms-d41). rtpad_exe: RTPAD.EXE, the image
-    # SET HOST activates from SYS$SYSTEM, which
-    # test_syssvc_sethost_syscall_audit traces (rd vms-0a7 S2).
+    # netacp_exe: NETACP.EXE, the image test_syssvc_decnetd_syscall_audit
+    # traces at SYS$SYSTEM (rd vms-d3cd; NETACP.EXE since vms-0a7 S3).
+    # vms_install: INSTALL.EXE, the image test_syssvc_dcl_install has DCL run
+    # (rd vms-d41). rtpad_exe: RTPAD.EXE, the image SET HOST activates from
+    # SYS$SYSTEM, which test_syssvc_sethost_syscall_audit traces (rd vms-0a7 S2).
     # vms_sysgen/vms_product/PARTS: the images DCL runs in test_syssvc_dcl_image_sysout
     # / _foreign_dispatch (rd vms-380f).
-    for tgt in vmsdcl vms_initialize vms_authorize decnetd_exe vms_sysgen vms_install vms_product PARTS rtpad_exe; do
+    for tgt in vmsdcl vms_initialize vms_authorize netacp_exe vms_sysgen vms_install vms_product PARTS rtpad_exe; do
         cmake --build /work/cmake-alpha --target "$tgt" -j"$(nproc)" >>/work/cmake-subj.log 2>&1 \
             || echo "WARN: subject target $tgt did not build for alpha"
     done
@@ -320,7 +320,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
       [ -f "$B/MMK.EXE" ]        && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE $B/MMK.EXE 755 0 0"
       [ -f "$B/TCC.EXE" ]        && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE $B/TCC.EXE 755 0 0"
       [ -f "$B/INSTALL.EXE" ]    && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/INSTALL.EXE $B/INSTALL.EXE 755 0 0"
-      [ -f "$B/DECNETD.EXE" ]    && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE $B/DECNETD.EXE 755 0 0"
+      [ -f "$B/NETACP.EXE" ]     && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/NETACP.EXE $B/NETACP.EXE 755 0 0"
       [ -f "$B/RTPAD.EXE" ]      && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/RTPAD.EXE $B/RTPAD.EXE 755 0 0"
       # rd vms-380f: the images DCL runs in the dcl_image_sysout/foreign_dispatch
       # suites (INSTALL.EXE: above), and the shipped CLUSTER_CONFIG_LAN.COM

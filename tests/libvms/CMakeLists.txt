@@ -107,6 +107,11 @@ libvms_add_test(test_libvms_lib_rtl_batch3
 libvms_add_test(test_libvms_lib_rtl_batch4
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_rtl_batch4.c)
 
+# Test 3f: $SETIMR requests that expire give back their host POSIX timer (rd
+# vms-0a7 S3: NETACP's $WFLOR loop exhausted RLIMIT_SIGPENDING -> SS$_INSFMEM).
+libvms_add_test(test_libvms_setimr_timer_reuse
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_setimr_timer_reuse.c)
+
 # Test 4c: sys$getjpiw with an ILE3 item list (vms-da9) — regression for the
 # starlet.h signature fix (prcnam/itmlst are void*, so ILE3 item lists compile).
 libvms_add_test(test_libvms_getjpi_ile3

@@ -752,6 +752,7 @@ RUN CC=musl-gcc sh tests/toolchain/mk_tcc_static.sh build-static/bin/TCC.EXE
 # a NETACP and a FAL run. The shipped disks stay byte-identical.
 RUN cmake -B build-static -DBUILD_TESTS=ON >/dev/null && \
     cmake --build build-static --target mmk_native test_syssvc_dcl_remote_syscall_audit \
+        netacp_test_exe startnet_audit \
         --parallel $(nproc) 2>&1
 
 # -- System tree staging (OS kit + distribution image source) -----------------
@@ -880,6 +881,7 @@ RUN . /etc/ovmx-arch.env && mkdir -p /system-stage/dev /system-stage/proc /syste
     # image that implements it would be a claim the installed product cannot
     # honour (INV-6). Shipped, not started: no startup procedure runs it.
     cp build-static/bin/DECNETD.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/NETACP.EXE     /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/LIBRARIAN.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/OVMXDUMP       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # TCP/IP aux server + its first service (rd vms-21b): TCPIP$INETD.EXE +
@@ -1570,6 +1572,13 @@ COPY --from=builder /src/build-static/bin/vmsfs_master /usr/local/bin/vmsfs_mast
 # Test tooling only (rd vms-0a7), see the builder's mmk_native step: the DCL
 # remote-file ptrace audit the DECnet boot e2e masters onto a scratch volume.
 COPY --from=builder /src/build-static/bin/test_syssvc_dcl_remote_syscall_audit /usr/local/lib/ovmx-test/DCLNETAUDIT.EXE
+# Test tooling only (rd vms-0a7 S3): NETACP_TEST.EXE, every DECnet self-test the
+# shipped NETACP.EXE no longer carries; the boot e2e and the DCL battery master it
+# onto a scratch volume beside DCLNETAUDIT.EXE.
+COPY --from=builder /src/build-static/bin/NETACP_TEST.EXE /usr/local/lib/ovmx-test/NETACP_TEST.EXE
+# ... and STARTNETAUDIT.EXE (gate (c)): the ptrace audit of STARTNET -> NCP ->
+# NETACP -> an inbound FAL.EXE the boot e2e runs from that same scratch volume.
+COPY --from=builder /src/build-static/bin/startnet_audit /usr/local/lib/ovmx-test/STARTNETAUDIT.EXE
 # Negative controls for test_executive_integral.sh only — never a runtime.
 COPY --from=builder /boot/initramfs-ovmx-noexec.cpio.gz /boot/initramfs-ovmx-noexec.cpio.gz
 COPY --from=builder /boot/initramfs-ovmx-nodev.cpio.gz /boot/initramfs-ovmx-nodev.cpio.gz

@@ -331,9 +331,10 @@ static int trace_all(pid_t root, struct verdict *v, int bound_s, struct sink *ou
     while (live > 0) {
         int st = 0;
         pid_t p = waitpid(-1, &st, __WALL);
+        int werr = (p < 0) ? errno : 0;  /* before the drain's EAGAIN clobbers it */
         sink_drain(out);
         if (p < 0) {
-            if (errno == EINTR) continue;
+            if (werr == EINTR) continue;
             break;
         }
         int k;

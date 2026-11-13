@@ -512,19 +512,27 @@ def main():
         # they are not on the console and there is no NETACP.LOG to TYPE.
         # The proof is read from the system instead, three ways that only
         # together say "through the executive":
-        #   - the NETACP image on this disk is BUILT with the executive
-        #     datalink backend (no bpf/AF_PACKET code in it) -- its own
-        #     --show-executor dry-run says so, opening no socket;
+        #   - the RUNNING NETACP's line is the executive's LAN unit: NCP SHOW
+        #     KNOWN LINES reads NETACP's volatile database and names the line
+        #     ETH-0 (the executive's ETH0:), state on. NETACP takes no argv
+        #     (rd vms-0a7 S3); it names ETH0: as its line only when its image
+        #     is BUILT with the executive datalink backend (VMS_IOCTL_L2_*,
+        #     PHY_IO) -- a bpf(4)/AF_PACKET build auto-detects the substrate
+        #     interface (qt0 -> a "QT-0"-style line) instead -- and "on" only
+        #     once that datalink is open;
         #   - NETACP is RUNNING (SHOW SYSTEM, above): it exits on any datalink
         #     failure, so a running NETACP has its datalink open;
         #   - no process runs as substrate root (ROOTAUDIT, below) and the
         #     wire carries this node's Phase IV station (WIRE, below): the
         #     executive opened it and stamps the source, nobody else could.
-        v.run('DNETACC :== $SYS$SYSTEM:DECNETD.EXE', timeout=60)
-        seg = v.run("DNETACC --show-executor", timeout=180)
-        check("Datalink backend = executive" in seg,
-              "VAX: NETACP's image is built with the EXECUTIVE datalink backend "
-              "(VMS_IOCTL_L2_*, PHY_IO; no bpf(4)) -- its --show-executor readout")
+        v.run("NCP :== $SYS$SYSTEM:NCP.EXE", timeout=60)
+        seg = v.run("NCP SHOW KNOWN LINES", timeout=180)
+        check("Known Line Volatile Summary" in seg
+              and re.search(r"^  ETH-0 +on\s*$", seg.replace("\r", ""), re.M) is not None
+              and "%NCP-F-" not in seg,
+              "VAX: the running NETACP's line is the executive's LAN unit ETH-0 (ETH0:), "
+              "state on -- its image is built with the EXECUTIVE datalink backend "
+              "(VMS_IOCTL_L2_*, PHY_IO; no bpf(4)) -- NCP SHOW KNOWN LINES readout")
         check("DECNETD-E-NOSOCKET" not in v.text(0) and "bpf datalink" not in v.text(0),
               "VAX: no datalink refusal and no bpf(4) path on the console")
         seg = v.run("RUN SYS$SYSTEM:ROOTAUDIT", timeout=180)

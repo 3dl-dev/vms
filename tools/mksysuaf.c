@@ -19,7 +19,9 @@
  *   SYSTEM   [1,4]   ALL                      password MANAGER
  *   OPERATOR [1,6]   OPER,SYSPRV,TMPMBX,NETMBX  (no password -> cannot log in)
  *   DEFAULT  [128,128] TMPMBX,NETMBX            (no password -> template acct)
- *   GUEST    [128,129] TMPMBX                  password GUEST
+ *   GUEST    [128,129] TMPMBX,NETMBX            password GUEST (vms-f76: VMS's
+ *            DEFAULT template's privileges, so a GUEST network server process
+ *            -- FAL.EXE on _NET: -- can $ASSIGN its link)
  *   USER1    [128,130] TMPMBX,NETMBX            (no password)
  *   USER2    [128,131] TMPMBX,NETMBX            (no password)
  *   DISABLED [128,132] TMPMBX, flags DISUSER   password DISABLED (rd vms-f40:
@@ -93,7 +95,7 @@ static const struct seed_acct g_seed[] = {
     { "SYSTEM",   1,   4,   "SYS$SYSROOT:[SYSMGR]",          "", "ALL",                     "MANAGER", &g_quota_system },
     { "OPERATOR", 1,   6,   "SYS$SYSROOT:[SYSMGR]",          "", "OPER,SYSPRV,TMPMBX,NETMBX", NULL,    NULL },
     { "DEFAULT",  128, 128, "SYS$SYSDEVICE:[USERS.DEFAULT]", "", "TMPMBX,NETMBX",           NULL,      NULL },
-    { "GUEST",    128, 129, "SYS$SYSDEVICE:[USERS.GUEST]",   "", "TMPMBX",                  "GUEST",   NULL },
+    { "GUEST",    128, 129, "SYS$SYSDEVICE:[USERS.GUEST]",   "", "TMPMBX,NETMBX",           "GUEST",   NULL },
     { "USER1",    128, 130, "SYS$SYSDEVICE:[USERS.USER1]",   "", "TMPMBX,NETMBX",           NULL,      NULL },
     { "USER2",    128, 131, "SYS$SYSDEVICE:[USERS.USER2]",   "", "TMPMBX,NETMBX",           NULL,      NULL },
     /*

@@ -63,13 +63,14 @@
 ! that against a real boot).
 !
 ! DECnet Phase IV (rd vms-a70 direction B). STARTNET.COM starts the network
-! ancillary control process (NETACP = SYS$SYSTEM:DECNETD.EXE, detached) ONLY when
+! ancillary control process (SYS$SYSTEM:NETACP.EXE, created detached by NCP SET
+! EXECUTOR STATE ON, rd vms-0a7 S3) ONLY when
 ! an executor address is configured (NCP SET EXECUTOR ADDRESS); an unconfigured
 ! node starts nothing and says so. NETACP then serves inbound $ SET HOST
 ! (Session Control object 42 -> LOGINOUT on an executive-minted RTAn:).
 !
 ! PHASE = LPBETA, for the SAME dependency reason JOB_CONTROL is at END: NETACP
-! (DECNETD.EXE) resolves its shareable-image dependencies (LIBVMS, LIBVMSRMS)
+! (NETACP.EXE) resolves its shareable-image dependencies (LIBVMS, LIBVMSRMS)
 ! through dynamic activation, which needs SYSTARTUP_VMS.COM's Priority 1 INSTALL
 ! ADD registrations -- and SYSTARTUP_VMS.COM is the last real action of the
 ! LPMAIN phase. LPBETA runs strictly AFTER LPMAIN completes (so the INSTALL ADDs

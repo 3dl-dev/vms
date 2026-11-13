@@ -105,11 +105,11 @@ struct vms_device_result {
     /*
      * vms-cdee (a1-0): nonzero if this name identifies the DECnet device face
      * _NET: (or NET:). Like a BG or ACP file channel it is executive-resident:
-     * _NET: is a pre-existing shareable DC$_SCOM device born on the primary NIC
-     * (vms_devtab_probe_net), so $ASSIGN grants a channel to it through the
-     * GENERIC executive assign (vms_kif_assign) rather than creating a unit; the
-     * fd stays -1 and $QIO will route through qio_net_op() to the NETACP broker
-     * (rd vms-799/vms-22c). No NIC / no executive -> SS$_NOSUCHDEV, no fake.
+     * _NET: is a pre-existing shareable DC$_SCOM device the executive enters
+     * on every node, NIC or not (vms_devtab_probe_net, rd vms-5ec), so $ASSIGN
+     * grants a channel to it through the GENERIC executive assign
+     * (vms_kif_assign) rather than creating a unit; the fd stays -1 and $QIO will route through qio_net_op() to the NETACP broker
+     * (rd vms-799/vms-22c). No executive -> SS$_NOSUCHDEV, no fake.
      */
     int  is_net;
     /*
@@ -352,8 +352,8 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
      * the physical-name form the DECnet lane uses; NET: is the same device).
      * The trailing ':' is already stripped above, so both arrive as "_NET"/"NET".
      * A pre-existing executive device -- resolved by the generic exec assign, not
-     * created (unlike BG/mailbox). Gated on the primary NIC in the executive
-     * (no NIC -> the row does not exist -> vms_kif_assign fails SS$_NOSUCHDEV).
+     * created (unlike BG/mailbox). Present whenever the executive is (rd
+     * vms-5ec); with no executive vms_kif_assign fails SS$_NOSUCHDEV.
      */
     if (strcmp(upper, "_NET") == 0 || strcmp(upper, "NET") == 0) {
         result->is_net = 1;
@@ -677,19 +677,19 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
              * vms-cdee (a1-0): $ASSIGN _NET: -- the DECnet device face. Unlike
              * BG/mailbox (which CREATE a fresh unit), _NET: is a pre-existing
              * shareable DC$_SCOM template device born in the executive I/O
-             * database on the primary NIC (vms_devtab_probe_net); $ASSIGN just
+             * database on every node (vms_devtab_probe_net); $ASSIGN just
              * grants a channel to it through the GENERIC executive assign, the
              * same path the console terminal uses. The channel's fd stays -1;
              * $QIO will route through qio_net_op() to the NETACP broker once it
-             * lands (PCB_CHAN_NET, rd vms-799/vms-22c). No NIC / no executive ->
+             * lands (PCB_CHAN_NET, rd vms-799/vms-22c). No executive ->
              * vms_kif_assign returns SS$_NOSUCHDEV, no per-process fake (INV-6).
              */
             uint32_t net_exec_chan = 0;
             uint32_t st = vms_kif_assign(name, &net_exec_chan);
             if (!(st & 1)) {
                 /*
-                 * The DECnet device face is unavailable -- no executive, or no
-                 * primary NIC (the _NET: row is NIC-gated in vms_devtab_probe_net).
+                 * The DECnet device face is unavailable -- no executive (the
+                 * executive enters _NET: on every node, vms_devtab_probe_net).
                  * Report the honest $ASSIGN device-not-available status,
                  * SS$_NOSUCHDEV, exactly as the BG/mailbox/file branches do; never
                  * leak the raw transport status (the generic vms_kif_assign is

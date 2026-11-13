@@ -1,0 +1,16 @@
+22:11:57 T0 share ci6evac-221157 on pod lab5fa2; OVMX node OVMXE; volume EVAC5FA = VAX1 $2$DUA2:; [CI6E11022211]; capture /home/baron/projects/vms/.worktrees/cluster-5fa-r2/tests/lab/captures/vms-5fa-shared-volume-r2-20261102/ci6evac-221157
+22:13:04 STAGED EVACWL.EXE on VAX1
+22:14:11 S1 OVMXE names VAX1's $2$DUA2: as VAX1$DUA16386:
+22:15:09 S1 EVAC5FA mounted on VAX1 ($2$DUA2:) and OVMXE (VAX1$DUA16386:)
+22:15:16 S2 round 1: VAX1 EVACWL 10 (EX), then OVMXE EVACWL 10 queued behind it
+22:16:14 S2 round 2: VAX1 EVACWL 10 (EX), then OVMXE EVACWL 10 queued behind it
+22:17:23 S3 VAX1 EVACWL (EX, forever); OVMXE EVACWL STANDBY 15 queued
+22:18:16 ABORT: OVMXE took EX while VAX1 ran
+22:35:58 HAND: driver aborted on S3 window false positive (took-EX lines are S2's); continuing the S3/S4 sequence by hand via lab-console
+22:36:32 HAND S3 VAX1 SDA EVAC$WORKLOAD: granted EX 0E0006B6 (VAX1), conversion NL->EX 260006C3; EVACVAX1 HIB
+22:36:32 HAND S3 EVACUATE: STOP EVACVAX1 on VAX1
+22:36:4x HAND TAKEOVER: EVACWL: OVMXE took EVAC$WORKLOAD EX at seq 1170
+22:37:57 HAND S4 OVMXE DISMOUNT VAX1$DUA16386:
+22:38:22 HAND S4 VAX1 TYPE EVAC.DAT, ANALYZE/DISK_STRUCTURE
+22:41:03 END (hand)
+22:42:37 HAND post: VAX1 DUMP/HEADER EVAC.DAT (retrieval pointers)

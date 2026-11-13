@@ -110,6 +110,16 @@ if [ -n "${OVMX_KTEST_ONLY:-}" ]; then
     esac
 fi
 
+# ORDERED SUITE LIST (rd vms-3264). OVMX_KTEST_SUITES="a b c" (or a,b,c)
+# forwards ovmx.suites=a,b,c; init.sh then runs exactly those suites in that
+# order and ends the run. The facility negative-control runner sets it for a
+# defect's image (its declared suites); UNSET = every suite, as before. A
+# value that is not suite names is forwarded as-is so init.sh refuses it
+# loudly instead of this script silently running everything.
+if [ -n "${OVMX_KTEST_SUITES:-}" ]; then
+    KCMD_ONLY="$KCMD_ONLY ovmx.suites=$(echo $OVMX_KTEST_SUITES | tr ' ' ',')"
+fi
+
 # CORPUS RUNTIME MODE (rd vms-44a, R2.3). OVMX_CORPUS_RT=1 boots the same guest
 # but init.sh runs the corpus programs staged in /tests/corpus_rt instead of the
 # executive suites and prints one "CORPUS-RT <name> rc=.. signaled=.." line per

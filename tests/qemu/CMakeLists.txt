@@ -923,6 +923,16 @@ add_test(
 )
 set_tests_properties(facility_negctl_total_death_check PROPERTIES LABELS "harness")
 
+# rd vms-3264: which suites a facility defect's image runs (its declared set,
+# in the manifest's order). Feeds the REAL fnrs_run_set() a realistic run
+# order and every manifest entry. No QEMU.
+add_test(
+    NAME facility_negctl_run_set_check
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_negctl_run_set_check.sh
+            ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(facility_negctl_run_set_check PROPERTIES LABELS "harness")
+
 # ---------------------------------------------------------------------------
 # THE TWO BOOT ARCHIVES (rd vms-802f). tests/qemu/pack_initramfs.sh packs the
 # staged tree into an executive archive (no /tests/corpus_rt) and a corpus

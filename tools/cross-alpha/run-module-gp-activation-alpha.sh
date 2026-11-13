@@ -2604,8 +2604,16 @@ PYEOF2
     : > "$WORK/joint/MMK_PROOF"
     assemble_boot_image
     log "step 3: BOOT A -- DCL runs MMK.EXE on a one-target DESCRIP.MMS on the REAL executive (up to ${BOOT_TIMEOUT}s)"
+    export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
+    export P0_SEAM_IMAGE=MMK          # MMK.EXE and its shareables land in P0
+    export BOOT_QEMU_EXTRA=""
+    if [ -n "${MMK_PEEK:-}" ]; then   # MMK_PEEK="1234 0xPC r16[dR] LEN" (or "1234 W 0xADDR LEN"): see gdb_peek.pl
+        export BOOT_QEMU_EXTRA="-gdb tcp:127.0.0.1:1234" BOOT_PEEK="$MMK_PEEK"
+        cp "$REPO/tools/cross-alpha/gdb_peek.pl" "$WORK/gdb_peek.pl"
+    fi
     run_boot_a
-    grep -aE "MMK|%IMGACT|%DCL-|%SYSTEM|%RMS" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    sed 's/^/  | PEEK: /' "$WORK/peek.log" 2>/dev/null || true
+    grep -aE "MMK|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM|%RMS|fatal signal|pc=" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_mmk "$WORK/modgpA.log"; then
       echo ""
       echo "PASS: MMK.EXE, built for the alpha-dec-vms host from unchanged MMK sources and"

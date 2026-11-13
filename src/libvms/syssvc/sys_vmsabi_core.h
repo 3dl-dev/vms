@@ -204,6 +204,9 @@ uint32_t ovmx_vmsabi_set_symbol(const struct ovmx_abi_dx *sym, const struct ovmx
                                 const uint32_t *tbl);
 uint32_t ovmx_vmsabi_get_symbol(const struct ovmx_abi_dx *sym, struct ovmx_abi_dx *val,
                                 uint16_t *len, uint32_t *tbl);
+/* LIB$GET_FOREIGN into a descriptor of either form (vms-7b3). */
+uint32_t ovmx_vmsabi_get_foreign(struct ovmx_abi_dx *res, const struct ovmx_abi_dx *prompt,
+                                 uint16_t *len, uint32_t *flags);
 uint32_t ovmx_vmsabi_delete_symbol(const struct ovmx_abi_dx *sym, const uint32_t *tbl);
 uint32_t ovmx_vmsabi_find_file(const struct ovmx_abi_dx *spec, struct ovmx_abi_dx *result,
                                uint32_t *ctx, const struct ovmx_abi_dx *def,

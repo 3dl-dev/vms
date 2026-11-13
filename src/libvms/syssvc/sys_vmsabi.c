@@ -27,6 +27,7 @@
 #include <vms/ssdef.h>
 #include <vms/starlet.h>
 #include "sys_vmsabi_core.h"
+#include "vmsabi_dsc.h"     /* the two descriptor forms (vms-7b3) */
 #include "libdef.h"       /* LIB$_BADBLOADR, LIB$_BADBLOSIZ, LIB$_INSVIRMEM */
 
 #define ABI_MAXITEMS 64
@@ -41,14 +42,8 @@ struct ile3_32 {
 };
 #pragma __required_pointer_size __restore
 
-/* The 64-bit forms (DSC64 / ILEB_64): MBO word, MBMO longword, quadwords. */
-struct dsc64 {
-    unsigned short mbo;
-    unsigned char  dtype, cls;
-    int            mbmo;
-    unsigned long long len;
-    unsigned long long ptr;
-};
+/* The 64-bit item form (ILEB_64): MBO word, MBMO longword, quadwords. The
+ * descriptor forms are read through vmsabi_dsc.h. */
 struct ileb64 {
     unsigned short mbo;
     unsigned short code;
@@ -63,15 +58,10 @@ static int dsc_string(const void *d, const char **p, unsigned *len)
 {
     if (!d)
         return 0;
-    const struct dsc64 *d64 = d;
-    if (d64->mbo == 1 && d64->mbmo == -1) {
-        *p = (const char *)(uintptr_t)d64->ptr;
-        *len = (unsigned)d64->len;
-        return 1;
-    }
-    const struct dsc$descriptor_s *d32 = d;
-    *p = d32->dsc$a_pointer;
-    *len = d32->dsc$w_length;
+    struct ovmx_vmsabi_dsc x;
+    ovmx_vmsabi_dsc_read(d, &x);
+    *p = (const char *)(uintptr_t)x.ptr;
+    *len = (unsigned)x.len;
     return 1;
 }
 
@@ -84,7 +74,7 @@ static int items_in(const void *list, struct ovmx_abi_item *out, unsigned max)
     const unsigned char *p = list;
     for (;;) {
         const struct ileb64 *e64 = (const struct ileb64 *)p;
-        if (e64->mbo == 1 && e64->mbmo == -1) {
+        if (ovmx_vmsabi_is_dsc64(e64)) {        /* ILEB_64: same MBO/MBMO */
             if (n == max)
                 return -1;
             out[n].len = (uint16_t)e64->len;
@@ -739,20 +729,13 @@ static void dx_get(void *d, struct ovmx_abi_dx *x)
     memset(x, 0, sizeof *x);
     if (!d)
         return;
-    const struct dsc64 *d64 = d;
+    struct ovmx_vmsabi_dsc r;
+    ovmx_vmsabi_dsc_read(d, &r);
     x->given = 1;
-    if (d64->mbo == 1 && d64->mbmo == -1) {
-        x->len = (uint16_t)d64->len;
-        x->dtype = d64->dtype;
-        x->cls = d64->cls;
-        x->ptr = (char *)(uintptr_t)d64->ptr;
-        return;
-    }
-    const struct dsc$descriptor_s *d32 = d;
-    x->len = d32->dsc$w_length;
-    x->dtype = d32->dsc$b_dtype;
-    x->cls = d32->dsc$b_class;
-    x->ptr = d32->dsc$a_pointer;
+    x->len = (uint16_t)r.len;
+    x->dtype = r.dtype;
+    x->cls = r.cls;
+    x->ptr = (char *)(uintptr_t)r.ptr;
 }
 
 /* Write a class-D result's length and address back into the caller's
@@ -761,15 +744,7 @@ static void dx_put(void *d, const struct ovmx_abi_dx *x)
 {
     if (!d || !x->given || x->cls != DSC$K_CLASS_D)
         return;
-    struct dsc64 *d64 = d;
-    if (d64->mbo == 1 && d64->mbmo == -1) {
-        d64->len = x->len;
-        d64->ptr = (unsigned long long)(uintptr_t)x->ptr;
-        return;
-    }
-    struct dsc$descriptor_s *d32 = d;
-    d32->dsc$w_length = x->len;
-    d32->dsc$a_pointer = x->ptr;
+    ovmx_vmsabi_dsc_write(d, x->len, (uint64_t)(uintptr_t)x->ptr);
 }
 
 /* Take argument i (0-based, counting the named ones) into var when the caller
@@ -964,6 +939,29 @@ int LIB$GET_SYMBOL(void *sym, void *val, ...)
     dx_get(val, &v);
     int st = (int)ovmx_vmsabi_get_symbol(&s, &v, len, tbl);
     dx_put(val, &v);
+    return st;
+}
+
+/* LIB$GET_FOREIGN (vms-7b3): get-str, [user-prompt], [out-len], [force-prompt].
+ * The command line goes into the caller's descriptor of either form; a class-D
+ * one gets storage below 2 GB, as for every LIBRTL string result here. */
+int LIB$GET_FOREIGN(void *res, ...)
+{
+    va_list ap;
+    va_start(ap, res);
+    unsigned n = ABI_VA_COUNT(ap, 1);
+    void *prompt = 0;
+    ABI_OPT(ap, n, 1u, prompt);
+    unsigned short *len = 0;
+    ABI_OPT(ap, n, 2u, len);
+    unsigned int *flags = 0;
+    ABI_OPT(ap, n, 3u, flags);
+    va_end(ap);
+    struct ovmx_abi_dx r, pr;
+    dx_get(res, &r);
+    dx_get(prompt, &pr);
+    int st = (int)ovmx_vmsabi_get_foreign(&r, &pr, len, flags);
+    dx_put(res, &r);
     return st;
 }
 

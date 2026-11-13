@@ -314,8 +314,12 @@ engine_run_bounded() {
 budget_report() {
     _label=$1; shift
     echo "  FAIL: NEGCTL SHARD BUDGET EXHAUSTED (NEGCTL_DEADLINE $(date -u -d "@$NEGCTL_DEADLINE" +%FT%TZ 2>/dev/null || echo "$NEGCTL_DEADLINE")) while running '$_label'."
-    echo "        The guest was stopped there; it had not finished. Its console so far"
-    echo "        is kept as $LIVE_DIR/$_label.console. Last 60 lines:"
+    echo "        The guest was stopped there; it had not finished."
+    if [ ! -s "$LIVE_DIR/$_label.console" ]; then
+        echo "        It has NO console yet: QEMU had not started (the container was still"
+        echo "        injecting the defect and rebuilding), so nothing of the guest is lost."
+    fi
+    echo "        Its console so far is kept as $LIVE_DIR/$_label.console. Last 60 lines:"
     tail -60 "$LIVE_DIR/$_label.console" 2>/dev/null | tr -d '\r' | sed 's/^/  | /'
     echo "        Its suite transcript so far ($LIVE_DIR/$_label.console.assert), last 40 lines:"
     tail -40 "$LIVE_DIR/$_label.console.assert" 2>/dev/null | tr -d '\r' | sed 's/^/  | /'

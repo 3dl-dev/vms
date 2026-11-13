@@ -60,9 +60,9 @@ for t in netacp_exe rtpad_exe fal_exe; do
 done
 
 # Nothing activates it: no DCL procedure or NCP object entry names the file.
-if grep -rnE '^[^!]*DECNETD' "$SRC_ROOT/distro/rootfs" >/dev/null 2>&1; then
+if grep -arnE '^[^!]*DECNETD' "$SRC_ROOT/distro/rootfs" >/dev/null 2>&1; then
     fail "a shipped procedure still names DECNETD" \
-         "$(grep -rnE '^[^!]*DECNETD' "$SRC_ROOT/distro/rootfs" | sed 's/^/       | /')"
+         "$(grep -arnE '^[^!]*DECNETD' "$SRC_ROOT/distro/rootfs" | sed 's/^/       | /')"
 else
     echo "  OK: no shipped procedure names DECNETD"
 fi

@@ -141,6 +141,14 @@ fi
 # the aarch64 branch below is left on the single-console (round-1) shape,
 # disclosed, not silently assumed fixed -- see the comment there.
 ASSERT_TRANSCRIPT=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
+# rd vms-6a1b: with KE_CONSOLE_LOG set, the assertion transcript (the suites'
+# PASS/FAIL lines, ttyS1) is written beside it, live, so a run its caller stops
+# early leaves the suite it was in on disk too. Removed on a normal exit.
+if [ -n "${KE_CONSOLE_LOG:-}" ]; then
+    rm -f "$ASSERT_TRANSCRIPT"
+    ASSERT_TRANSCRIPT="$KE_CONSOLE_LOG.assert"
+    : >"$ASSERT_TRANSCRIPT" || { echo "run_tests.sh: cannot write $ASSERT_TRANSCRIPT" >&2; exit 2; }
+fi
 
 # Seven virtio disks (vms-3e8 + vms-0044 + vms-3e8e + vms-7e7e + vms-3ea). The executive enumerates the
 # node's virtio block devices into DK units (VDA0: from vda, VDA100: from vdb,

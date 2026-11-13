@@ -275,7 +275,7 @@ engine_run_bounded() {
     _label=$1; shift
     _cname="ovmx-negctl-$$-$_label"
     _flag="$LIVE_DIR/.budget.$$"
-    rm -f "$LIVE_DIR/$_label.console" "$_flag"
+    rm -f "$LIVE_DIR/$_label.console" "$LIVE_DIR/$_label.console.assert" "$_flag"
     printf '%s\tstarted %s\tdeadline %s\n' "$_label" "$(date -u +%FT%TZ)" \
         "${NEGCTL_DEADLINE:-none}" >"$LIVE_DIR/inflight.txt"
     if [ -n "${NEGCTL_DEADLINE:-}" ] && [ "$(date +%s)" -ge "$NEGCTL_DEADLINE" ]; then
@@ -299,7 +299,7 @@ engine_run_bounded() {
     if [ -n "$_wpid" ]; then wait "$_wpid" 2>/dev/null; fi
     if [ -f "$_flag" ]; then rm -f "$_flag"; return $BUDGET_RC; fi
     # Completed: the whole console is in the run's output; keep live/ small.
-    rm -f "$LIVE_DIR/$_label.console"
+    rm -f "$LIVE_DIR/$_label.console" "$LIVE_DIR/$_label.console.assert"
     return $_rc
 }
 
@@ -311,6 +311,8 @@ budget_report() {
     echo "        The guest was stopped there; it had not finished. Its console so far"
     echo "        is kept as $LIVE_DIR/$_label.console. Last 60 lines:"
     tail -60 "$LIVE_DIR/$_label.console" 2>/dev/null | tr -d '\r' | sed 's/^/  | /'
+    echo "        Its suite transcript so far ($LIVE_DIR/$_label.console.assert), last 40 lines:"
+    tail -40 "$LIVE_DIR/$_label.console.assert" 2>/dev/null | tr -d '\r' | sed 's/^/  | /'
     if [ "$#" -gt 0 ]; then
         echo "  NOT RUN (the budget was gone): $*"
     fi

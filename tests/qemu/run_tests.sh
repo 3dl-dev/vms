@@ -110,6 +110,16 @@ if [ -n "${OVMX_KTEST_ONLY:-}" ]; then
     esac
 fi
 
+# ORDERED SUITE LIST (rd vms-3264). OVMX_KTEST_SUITES="a b c" (or a,b,c)
+# forwards ovmx.suites=a,b,c; init.sh then runs exactly those suites in that
+# order and ends the run. The facility negative-control runner sets it for a
+# defect's image (its declared suites); UNSET = every suite, as before. A
+# value that is not suite names is forwarded as-is so init.sh refuses it
+# loudly instead of this script silently running everything.
+if [ -n "${OVMX_KTEST_SUITES:-}" ]; then
+    KCMD_ONLY="$KCMD_ONLY ovmx.suites=$(echo $OVMX_KTEST_SUITES | tr ' ' ',')"
+fi
+
 # CORPUS RUNTIME MODE (rd vms-44a, R2.3). OVMX_CORPUS_RT=1 boots the same guest
 # but init.sh runs the corpus programs staged in /tests/corpus_rt instead of the
 # executive suites and prints one "CORPUS-RT <name> rc=.. signaled=.." line per
@@ -141,6 +151,14 @@ fi
 # the aarch64 branch below is left on the single-console (round-1) shape,
 # disclosed, not silently assumed fixed -- see the comment there.
 ASSERT_TRANSCRIPT=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
+# rd vms-6a1b: with KE_CONSOLE_LOG set, the assertion transcript (the suites'
+# PASS/FAIL lines, ttyS1) is written beside it, live, so a run its caller stops
+# early leaves the suite it was in on disk too. Removed on a normal exit.
+if [ -n "${KE_CONSOLE_LOG:-}" ]; then
+    rm -f "$ASSERT_TRANSCRIPT"
+    ASSERT_TRANSCRIPT="$KE_CONSOLE_LOG.assert"
+    : >"$ASSERT_TRANSCRIPT" || { echo "run_tests.sh: cannot write $ASSERT_TRANSCRIPT" >&2; exit 2; }
+fi
 
 # Seven virtio disks (vms-3e8 + vms-0044 + vms-3e8e + vms-7e7e + vms-3ea). The executive enumerates the
 # node's virtio block devices into DK units (VDA0: from vda, VDA100: from vdb,
@@ -315,6 +333,17 @@ else
     SECOND_SERIAL=(-serial "file:$ASSERT_TRANSCRIPT")
 fi
 
+# rd vms-6a1b: KE_CONSOLE_LOG, when set, also writes the guest console to that
+# file AS IT IS PRODUCED (QEMU's chardev logfile). The console is otherwise only
+# captured into $OUTPUT below and printed once QEMU exits, so a run its CALLER
+# stops early (the negctl shard budget, a CI job limit) left no trace of where
+# the guest was. Unset, the console path is exactly -serial stdio as before.
+if [ -n "${KE_CONSOLE_LOG:-}" ]; then
+    FIRST_SERIAL=(-chardev "stdio,id=ovmxcon0,logfile=$KE_CONSOLE_LOG" -serial chardev:ovmxcon0)
+else
+    FIRST_SERIAL=(-serial stdio)
+fi
+
 echo "=== OVMX QEMU Test Runner ==="
 echo "Architecture: $ARCH"
 echo "QEMU: $QEMU"
@@ -350,7 +379,7 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -netdev user,id=net0 \
     -device virtio-net-pci,netdev=net0,romfile= \
     -nodefaults \
-    -serial stdio \
+    "${FIRST_SERIAL[@]}" \
     "${SECOND_SERIAL[@]}" \
     -drive if=none,id=ovmxdisk0,file="$OVMX_DISK0",format=raw \
     -device virtio-blk-pci,drive=ovmxdisk0 \

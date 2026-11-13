@@ -529,7 +529,8 @@ wait_for 'logged out' "$STEP_TIMEOUT" "$LOGIN_OFFSET" || fail_with_console "ERRO
 # system, because a system where EVERYONE can write SYS$SYSTEM: passes every
 # assertion session 1 makes. The refusal has to be shown too, and it can
 # only be shown by an account that is not SYSTEM. GUEST is the least
-# privileged account SYSUAF ships (UIC [200,201], TMPMBX only).
+# privileged account SYSUAF ships (UIC [200,201], TMPMBX,NETMBX -- VMS's
+# DEFAULT template, vms-f76).
 #
 # Every wait below is anchored to LOGIN_OFFSET -- the byte offset captured
 # immediately BEFORE 'LOGOUT' was sent -- because every string being waited
@@ -1008,7 +1009,7 @@ check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'NOPRIV'
 check_not_response 'SET TIME 1-JAN-2030:00:00:00' 'NOPRIV|-[EFW]-'
 check_response_at "$IDX_TIME_SHOW" '1-JAN-2030'
 
-# THE OTHER SIDE OF EACH GATE: GUEST (SYSUAF TMPMBX only) holds neither OPER
+# THE OTHER SIDE OF EACH GATE: GUEST (SYSUAF TMPMBX,NETMBX) holds neither OPER
 # nor ALTPRI. On OpenVMS VAX V7.3 a raise above the authorized priority
 # without ALTPRI SUCCEEDS at the authorized priority, silently
 # (docs/oracle/semantics/privchk PRI.*; the executive clamps, vms-768), and

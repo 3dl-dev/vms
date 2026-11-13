@@ -121,6 +121,23 @@ rm -f "$DISK" "$LOG" "$FIFO"
 cp "$DISTRIB_IMG" "$DISK"
 mkfifo "$FIFO"
 
+# rd vms-0a7 S3: the DECnet self-tests are the TEST image NETACP_TEST.EXE, not
+# part of any shipped image. It rides a scratch ODS-2 volume of its own (the
+# shipped disk carries no test tool); the battery MOUNTs it and runs it as a
+# foreign command (DNET_TEST_MOUNT / DNET_TEST_IMAGE, the battery's contract).
+DNET_TEST_SRC="${OVMX_NETACP_TEST:-/usr/local/lib/ovmx-test/NETACP_TEST.EXE}"
+DNET_TEST_DISK=/tmp/dcl-acceptance-dnettest.img
+DNET_TEST_TREE=/tmp/dcl-acceptance-dnettest-tree
+rm -rf "$DNET_TEST_TREE" "$DNET_TEST_DISK"; mkdir -p "$DNET_TEST_TREE"
+if [ -f "$DNET_TEST_SRC" ] && cp "$DNET_TEST_SRC" "$DNET_TEST_TREE/NETACP_TEST.EXE" \
+   && vmsfs_master --ods2 master "$DNET_TEST_DISK" DNETTEST "$DNET_TEST_TREE" 16 >/dev/null; then
+    export DNET_TEST_MOUNT="VDA100: DNETTEST"
+    export DNET_TEST_IMAGE='VDA100:[000000]NETACP_TEST.EXE'
+else
+    echo "NOTE: no test volume (NETACP_TEST.EXE at $DNET_TEST_SRC / vmsfs_master); the battery's DECnet proofs will report the test image missing"
+    truncate -s 16M "$DNET_TEST_DISK"
+fi
+
 # Whole-VM hard cap: boot + a settle + ~13 commands, each bounded by CMD_TIMEOUT,
 # plus the session-primitive section (vms-3e9): a LOGOUT, a second console
 # session to reach Username: again (up to 60s of CR feeding, as at boot), a
@@ -132,7 +149,7 @@ mkfifo "$FIFO"
 # disconnected. That is ~90s of WAIT, so the cap grows by 120.
 WALL=$((BOOT_TIMEOUT + CMD_TIMEOUT * 20 + 360))
 
-cleanup() { exec 4>&- 2>/dev/null || true; [ -n "${QPID:-}" ] && kill "$QPID" 2>/dev/null; rm -f "$FIFO"; }
+cleanup() { exec 4>&- 2>/dev/null || true; [ -n "${QPID:-}" ] && kill "$QPID" 2>/dev/null; rm -f "$FIFO"; rm -rf "$DNET_TEST_TREE" "$DNET_TEST_DISK"; }
 trap cleanup EXIT
 
 # shellcheck disable=SC2086
@@ -141,6 +158,7 @@ timeout "$WALL" $QEMU $MACHINE \
     -nographic -append "$CONSOLE loglevel=3 quiet" \
     -m 512M -smp 2 -nic none -nodefaults -serial stdio \
     -drive file="$DISK",format=raw,if=virtio,cache=writethrough \
+    -drive file="$DNET_TEST_DISK",format=raw,if=virtio,cache=writethrough \
     -no-reboot <"$FIFO" >"$LOG" 2>&1 &
 QPID=$!
 exec 4>"$FIFO"

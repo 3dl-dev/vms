@@ -836,12 +836,12 @@ endif()
 # subject alongside its suite.
 get_property(_qemu_syssvc_test_targets GLOBAL PROPERTY QEMU_SYSSVC_TEST_TARGETS)
 add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg_inproc testreal_inproc testextern_inproc testextern_foreign testprod_shr testnonres_inproc testtls_inproc pipe_stage)
-# DECNETD.EXE (rd vms-d3cd): the SUBJECT test_syssvc_decnetd_syscall_audit
+# NETACP.EXE (rd vms-d3cd, vms-0a7 S3): the SUBJECT test_syssvc_decnetd_syscall_audit
 # traces -- the shipped executive-datalink NETACP (OVMX_STATIC builds
 # ovmx_datalink_exec). Built with the suites so it arrives with them; staged at
 # SYS$SYSTEM by tests/qemu/Dockerfile.
-if(TARGET decnetd_exe)
-    add_dependencies(qemu_syssvc_tests decnetd_exe)
+if(TARGET netacp_exe)
+    add_dependencies(qemu_syssvc_tests netacp_exe)
 endif()
 # RTPAD.EXE (rd vms-0a7 S2): the SET HOST client test_syssvc_sethost_syscall_audit
 # traces DCL activating; staged at SYS$SYSTEM by tests/qemu/Dockerfile.
@@ -922,6 +922,16 @@ add_test(
             ${CMAKE_SOURCE_DIR}
 )
 set_tests_properties(facility_negctl_total_death_check PROPERTIES LABELS "harness")
+
+# rd vms-3264: which suites a facility defect's image runs (its declared set,
+# in the manifest's order). Feeds the REAL fnrs_run_set() a realistic run
+# order and every manifest entry. No QEMU.
+add_test(
+    NAME facility_negctl_run_set_check
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_negctl_run_set_check.sh
+            ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(facility_negctl_run_set_check PROPERTIES LABELS "harness")
 
 # ---------------------------------------------------------------------------
 # THE TWO BOOT ARCHIVES (rd vms-802f). tests/qemu/pack_initramfs.sh packs the
@@ -1385,3 +1395,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME ptrace_hold_selftest COMMAND ptrace_hold_selftest)
     set_tests_properties(ptrace_hold_selftest PROPERTIES TIMEOUT 300)
 endif()
+
+# STARTNETAUDIT.EXE (rd vms-0a7 S3 gate (c)): TEST TOOLING for the booted DECnet
+# e2e, never a harness suite and never on a mastered disk. It ptraces DCL running
+# @SYS$MANAGER:STARTNET -> NCP SET EXECUTOR STATE ON -> NETACP, and the FAL.EXE
+# NETACP creates for an inbound connect, and asserts no thread/poll/pipe/host
+# socket. distro/Dockerfile.bootable builds it and copies it beside DCLNETAUDIT.EXE.
+qemu_syssvc_add_test(startnet_audit startnet_audit.c STANDALONE)

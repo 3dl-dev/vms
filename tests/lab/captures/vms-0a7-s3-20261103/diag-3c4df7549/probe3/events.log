@@ -1,0 +1,14 @@
+03:32:47 VAXC logged in
+03:32:57 VAXC licensed
+03:32:58 VAXC DECnet on
+03:33:17 OVMXA logged in
+03:33:17 sample P0 before
+03:33:17 P0f STOP NETACP 10000004
+03:33:43 P1 VAXC SET HOST OVMXA
+03:33:43 sample P1 at Username: (console busy: NETACP in the foreground)
+03:33:44 P2 after wrong password: expect index 0
+03:33:44 sample P2 after wrong password (console busy: NETACP in the foreground)
+03:33:45 P3 after right password: expect index 1 (0 = session ended)
+03:33:47 sample P3 after right password (console busy: NETACP in the foreground)
+03:34:50 P4f NETACP still running
+03:34:51 DONE

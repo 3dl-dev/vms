@@ -5,7 +5,7 @@
  * WHAT THIS PROVES. Before a1-0, resolve_vms_device() (src/libvms/syssvc/
  * sys_assign.c) had no _NET: case, so $ASSIGN _NET: through libvms returned
  * SS$_NOSUCHDEV even though the executive device is real (born on the primary
- * NIC by vms_devtab_probe_net, class DC$_SCOM, shareable). a1-0 adds the is_net
+ * executive I/O database by vms_devtab_probe_net, class DC$_SCOM, shareable). a1-0 adds the is_net
  * branch that routes _NET: to the GENERIC executive assign (vms_kif_assign) --
  * the same path the console terminal uses -- so a user process gets a channel
  * (fd = -1, exec_chan set, PCB_CHAN_NET). This is the entry point every _NET:
@@ -13,10 +13,10 @@
  * DEACCESS -> the NETACP broker) are the next rungs (vms-799/vms-22c).
  *
  * FAIL-HONEST (Rule 9 / INV-6): with no executive, $ASSIGN _NET: MUST fail
- * SS$_NOSUCHDEV, never a private per-process fake. With an executive but no
- * primary NIC, the _NET: device does not exist and the assign is honestly
- * SS$_NOSUCHDEV too (NIC-gated) -- reported as a note here, exactly as the
- * DCL acceptance battery treats an absent _NET: face. The is_net path is
+ * SS$_NOSUCHDEV, never a private per-process fake. With an executive the
+ * _NET: device ALWAYS exists, NIC or not (rd vms-5ec: VMS's NETDRIVER is
+ * present on a node with no LAN adapter; only the circuit needs one), so the
+ * assign must grant a channel. The is_net path is
  * SPECIFIC: an unknown device name still fails SS$_NOSUCHDEV (negative control).
  */
 #include <stdio.h>
@@ -101,8 +101,8 @@ int main(void)
     struct dsc$descriptor_s net = mkdsc("_NET:");
     uint32_t st = sys$assign(&net, &chan, 0, NULL);
 
-    CHECK(st == SS$_NORMAL || st == SS$_NOSUCHDEV,
-          "$ASSIGN _NET: returns a clean status -- a channel, or SS$_NOSUCHDEV when NIC-gated, never a fake");
+    CHECK(st == SS$_NORMAL,
+          "$ASSIGN _NET: grants a channel -- the executive enters the DECnet device face on every node, NIC or not (rd vms-5ec)");
 
     if (st == SS$_NORMAL) {
         CHECK(chan != 0, "_NET: assign yielded a valid channel (the DECnet device face resolved)");
@@ -135,9 +135,6 @@ int main(void)
 
         CHECK(sys$dassgn(chan) == SS$_NORMAL,
               "$DASSGN releases the _NET: channel -- the real exec_chan round-trips");
-    } else {
-        printf("  NOTE: _NET: is absent on this node (no primary NIC) -- $ASSIGN honestly"
-               " returned SS$_NOSUCHDEV (NIC-gated, INV-6), the positive path is not exercised here\n");
     }
 
     printf("=== test_syssvc_net_assign: %d passed, %d failed ===\n", pass, fail);

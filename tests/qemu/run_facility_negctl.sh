@@ -118,12 +118,25 @@
 #   FACILITY_NEGCTL_REQUIRE_RECORD 1 to fail when NO record is committed in the
 #                                  tree (default 0 -- see the comparison block
 #                                  at the bottom of this script)
+#   FACILITY_NEGCTL_BASE_TAG       the harness image tag (default
+#                                  ovmx-ktest-negctl-base:latest). A private tag
+#                                  keeps a local run off another run's image.
+#   NEGCTL_DEADLINE                epoch second by which this run must have
+#                                  stopped (rd vms-6a1b). Unset: no budget. Set:
+#                                  the guest still running at the deadline is
+#                                  stopped, the run reports the defect it was
+#                                  on with its partial console, names the
+#                                  defects it never reached, and exits 1.
+#   NEGCTL_DEATH_DIR               where consoles worth keeping go (default
+#                                  $RUNNER_TEMP/negctl-deaths); its live/
+#                                  holds inflight.txt and the console of the
+#                                  run in progress, written as the guest runs.
 
 set -u
 
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 MANIFEST="$REPO_ROOT/tests/qemu/facility_defects.sh"
-BASE_TAG=${FACILITY_NEGCTL_BASE_TAG:-ovmx-ktest-negctl-base:latest}   # a private tag keeps lanes apart
+BASE_TAG="${FACILITY_NEGCTL_BASE_TAG:-ovmx-ktest-negctl-base:latest}"
 
 # The execution-sourced attribution record (rd vms-d894, rd vms-659). This
 # script is the only thing in the program that executes anything, and until
@@ -163,6 +176,12 @@ if [ ! -f "$TOTAL_DEATH_LIB" ]; then
     exit 2
 fi
 . "$TOTAL_DEATH_LIB"
+
+# The suites a defect's image runs (rd vms-3264): its declared set, in the
+# manifest's order -- see facility_negctl_run_set.sh's header.
+RUN_SET_LIB="$REPO_ROOT/tests/qemu/facility_negctl_run_set.sh"
+[ -f "$RUN_SET_LIB" ] || { echo "FATAL: $RUN_SET_LIB is missing"; exit 2; }
+. "$RUN_SET_LIB"
 COMMITTED_RECORD=$(fnr_record_path "$REPO_ROOT/tests/qemu")
 # Defaults to a temp file: this script must never dirty the checkout it is
 # judging. Set FACILITY_NEGCTL_RECORD_OUT to keep the emitted record at a known
@@ -241,6 +260,74 @@ RUNLOG=$(mktemp)
 trap 'rm -f "$OUTFILE" "$OUTFILE.raw" "$OUTFILE.map" "$OUTFILE.map.scoped" "$RUNLOG"
       if [ "$LIVE_RECORD_IS_TEMP" -eq 1 ]; then rm -f "$LIVE_RECORD"; fi' EXIT INT TERM
 
+# ---------------------------------------------------------------------------
+# rd vms-6a1b: a hung guest must end the run RED, naming the defect, never as a
+# CI job cancelled at its limit with the log thrown away. Two parts:
+#  - live/: before each guest starts, live/inflight.txt names it, and the
+#    guest's console is written to live/<label>.console as it is produced
+#    (run_tests.sh KE_CONSOLE_LOG). Whatever stops the job, that is on disk.
+#  - NEGCTL_DEADLINE: a guest still running at the deadline is stopped
+#    (`engine kill`) and run_harness returns BUDGET_RC; the callers report it.
+#    The per-guest wall (KE_WALL_TIMEOUT) is unchanged; this bounds the SUM.
+# ---------------------------------------------------------------------------
+DEATH_DIR="${NEGCTL_DEATH_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/negctl-deaths}"
+LIVE_DIR="$DEATH_DIR/live"
+mkdir -p "$LIVE_DIR" && chmod 0777 "$LIVE_DIR" || {
+    echo "FATAL: cannot create $LIVE_DIR for the live guest console"; exit 2; }
+BUDGET_RC=252
+
+# engine_run_bounded <label> <engine run args...>
+engine_run_bounded() {
+    _label=$1; shift
+    _cname="ovmx-negctl-$$-$_label"
+    _flag="$LIVE_DIR/.budget.$$"
+    rm -f "$LIVE_DIR/$_label.console" "$LIVE_DIR/$_label.console.assert" "$_flag"
+    printf '%s\tstarted %s\tdeadline %s\n' "$_label" "$(date -u +%FT%TZ)" \
+        "${NEGCTL_DEADLINE:-none}" >"$LIVE_DIR/inflight.txt"
+    if [ -n "${NEGCTL_DEADLINE:-}" ] && [ "$(date +%s)" -ge "$NEGCTL_DEADLINE" ]; then
+        return $BUDGET_RC
+    fi
+    "$ENGINE" run --rm --name "$_cname" -v "$LIVE_DIR:/negctl-live" \
+        -e "KE_CONSOLE_LOG=/negctl-live/$_label.console" "$@" &
+    _pid=$!
+    if [ -n "${NEGCTL_DEADLINE:-}" ]; then
+        ( while kill -0 "$_pid" 2>/dev/null; do
+              if [ "$(date +%s)" -ge "$NEGCTL_DEADLINE" ]; then
+                  : >"$_flag"; "$ENGINE" kill "$_cname" >/dev/null 2>&1; exit 0
+              fi
+              sleep 5
+          done ) &
+        _wpid=$!
+    else
+        _wpid=""
+    fi
+    wait "$_pid"; _rc=$?
+    if [ -n "$_wpid" ]; then wait "$_wpid" 2>/dev/null; fi
+    if [ -f "$_flag" ]; then rm -f "$_flag"; return $BUDGET_RC; fi
+    # Completed: the whole console is in the run's output; keep live/ small.
+    rm -f "$LIVE_DIR/$_label.console" "$LIVE_DIR/$_label.console.assert"
+    return $_rc
+}
+
+# budget_report <label> <defects never started...>: name the guest the budget
+# stopped and what it was doing, then the defects that never ran.
+budget_report() {
+    _label=$1; shift
+    echo "  FAIL: NEGCTL SHARD BUDGET EXHAUSTED (NEGCTL_DEADLINE $(date -u -d "@$NEGCTL_DEADLINE" +%FT%TZ 2>/dev/null || echo "$NEGCTL_DEADLINE")) while running '$_label'."
+    echo "        The guest was stopped there; it had not finished."
+    if [ ! -s "$LIVE_DIR/$_label.console" ]; then
+        echo "        It has NO console yet: QEMU had not started (the container was still"
+        echo "        injecting the defect and rebuilding), so nothing of the guest is lost."
+    fi
+    echo "        Its console so far is kept as $LIVE_DIR/$_label.console. Last 60 lines:"
+    tail -60 "$LIVE_DIR/$_label.console" 2>/dev/null | tr -d '\r' | sed 's/^/  | /'
+    echo "        Its suite transcript so far ($LIVE_DIR/$_label.console.assert), last 40 lines:"
+    tail -40 "$LIVE_DIR/$_label.console.assert" 2>/dev/null | tr -d '\r' | sed 's/^/  | /'
+    if [ "$#" -gt 0 ]; then
+        echo "  NOT RUN (the budget was gone): $*"
+    fi
+}
+
 # run_harness <defect|"">  -> normalised output in $OUTFILE
 # Returns the harness exit status, or:
 #   3     BROKEN FIXTURE (the injection did not land -- NOT a verdict)
@@ -250,6 +337,7 @@ trap 'rm -f "$OUTFILE" "$OUTFILE.raw" "$OUTFILE.map" "$OUTFILE.map.scoped" "$RUN
 #         handling of this code)
 run_harness() {
     _defect="$1"
+    _suites="${2:-}"
     if [ -z "$_defect" ]; then
         # PRISTINE positive control. It runs the image's default CMD
         # (/run_tests.sh) DIRECTLY -- it does NOT go through
@@ -273,7 +361,8 @@ run_harness() {
         # slows an uncontended boot (which still finishes in ~250s and never
         # reaches the wall); it only lets a starved boot complete instead of
         # SIGTERMing the run-order tail into a false-red rc=MISSING mass.
-        "$ENGINE" run --rm -e KE_WALL_TIMEOUT="${NEGCTL_WALL:-1800}" "$BASE_TAG" >"$OUTFILE.raw" 2>&1
+        engine_run_bounded pristine -e KE_WALL_TIMEOUT="${NEGCTL_WALL:-1800}" \
+            "$BASE_TAG" >"$OUTFILE.raw" 2>&1
     else
         # Defect run: same env-configurable wall. inject_and_run.sh honours an
         # inherited KE_WALL_TIMEOUT (its own default is also 1800), so passing it
@@ -281,7 +370,10 @@ run_harness() {
         # gets 2700 -- pristine and each defect run boot the full suite set at the
         # same cost, so both walls must move together or the flake just relocates
         # from the pristine control to the first defect run.
-        "$ENGINE" run --rm -e "FACILITY_DEFECT=$_defect" \
+        # rd vms-3264: the guest runs ONLY $_suites (the defect's run set,
+        # see defect_run_set), in that order, then ends -- init.sh ovmx.suites=.
+        engine_run_bounded "$_defect" -e "FACILITY_DEFECT=$_defect" \
+            -e "OVMX_KTEST_SUITES=$_suites" \
             -e KE_WALL_TIMEOUT="${NEGCTL_WALL:-1800}" "$BASE_TAG" \
             /inject_and_run.sh >"$OUTFILE.raw" 2>&1
     fi
@@ -481,6 +573,13 @@ echo "--- positive control: pristine image, every suite green ---"
 DEFECT_BAD=0
 run_harness ""
 BASE_RC=$?
+if [ "$BASE_RC" -eq "$BUDGET_RC" ]; then
+    if [ $# -gt 0 ]; then _all="$*"; else _all=$(sh "$MANIFEST" list | tr '\n' ' '); fi
+    # shellcheck disable=SC2086 # one word per defect name
+    budget_report pristine $_all
+    echo "Failing: the positive control (budget) -- no negative control ran"
+    exit 1
+fi
 if [ "$BASE_RC" -eq 124 ]; then
     # timeout(1)'s exit code: the QEMU wall (run_tests.sh) fired before the
     # full suite finished, so the guest was SIGTERM'd mid-run and every suite
@@ -582,9 +681,32 @@ for defect in $DEFECT_LIST; do
     echo "  facility: $facility"
     echo "  defect:   $why"
     echo "  may go red: $red_globs   (isolation: $isolation)"
+    # shellcheck disable=SC2086
+    RUN_SET=$(fnrs_run_set "$EXEC_ORDER" "$isolation" $red_globs)
+    if [ -z "$RUN_SET" ]; then
+        bad "no suite in the checkout matches [$red_globs] -- the manifest entry is broken (nothing to run)"
+        fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect"; echo ""; continue
+    fi
+    echo "  runs:     $(echo $RUN_SET)   (the declared set only; vms-3264)"
 
-    run_harness "$defect"
+    # A fatal defect boots init.sh's normal order (no list): the guest dies at
+    # the declared suite anyway, and that prefix would overrun the kernel
+    # command line if spelled out.
+    if [ "$isolation" = "fatal" ]; then
+        run_harness "$defect" ""
+    else
+        run_harness "$defect" "$(echo $RUN_SET)"
+    fi
     RUN_RC=$?
+
+    if [ "$RUN_RC" -eq "$BUDGET_RC" ]; then
+        _rest=$(echo $DEFECT_LIST | tr ' ' '\n' | sed -n "/^$defect\$/,\$p" | sed 1d | tr '\n' ' ')
+        budget_report "$defect" $_rest
+        fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect(budget)"
+        for _d in $_rest; do fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $_d(not-run)"; done
+        echo ""
+        break
+    fi
 
     # Distinguish a broken FIXTURE from a broken GATE. facility_defects.sh
     # refuses to continue when its sed anchor no longer matches, and that is a
@@ -632,7 +754,7 @@ for defect in $DEFECT_LIST; do
     fi
     # shellcheck disable=SC2086
     if [ "$isolation" != "fatal" ] && \
-       [ "$(fnd_all_suites_missing "$OUTFILE" $EXEC_ORDER)" = "1" ]; then
+       [ "$(fnd_all_suites_missing "$OUTFILE" $RUN_SET)" = "1" ]; then
         bad "TOTAL GUEST DEATH: not ONE of the $N_EXPECTED expected suites produced a verdict -- not even ones unrelated to '$facility' (e.g. the first test_kmod_* probe). An isolated defect cannot reach that; this is a boot/infrastructure failure (crash before any suite ran, QEMU never came up, or the whole-VM wall fired before FINAL RESULTS), NOT a verdict about '$defect'. Re-run. Last 40 lines:"
         tail -40 "$OUTFILE" | sed 's/^/  | /'
         # vms-898a: the LAST 40 lines are only the post-mortem dmesg dump and name
@@ -693,7 +815,7 @@ for defect in $DEFECT_LIST; do
     #    init.sh runs (EXEC_ORDER) up to the one that kills the guest.
     reached=0
     _kept=0
-    for s in $EXEC_ORDER; do
+    for s in $RUN_SET; do
         if [ "$isolation" = "fatal" ] && [ "$s" = "$stop_at" ]; then break; fi
         if [ "$(suite_rc "$s")" = "MISSING" ]; then
             # vms-898a: a PARTIAL run (some suites ran, the rest never did) is the second
@@ -739,7 +861,7 @@ for defect in $DEFECT_LIST; do
     #    `fatal` defect the claim is narrower and honest: everything that ran
     #    BEFORE the facility's suite stayed green. Nothing runs after.
     strays=""
-    for s in $EXEC_ORDER; do
+    for s in $RUN_SET; do
         if [ "$isolation" = "fatal" ] && [ "$s" = "$stop_at" ]; then break; fi
         rc=$(suite_rc "$s")
         # shellcheck disable=SC2086
@@ -827,6 +949,10 @@ EOF
     blind=$(sh "$MANIFEST" field "$defect" blind_suites)
     if [ -n "$blind" ]; then
         for s in $blind; do
+            if ! printf '%s\n' $RUN_SET | grep -qFx "$s"; then
+                echo "  (blind suite $s not run under the defect -- a non-gating declaration; vms-3264)"
+                continue
+            fi
             rc=$(suite_rc "$s")
             case "$rc" in
             0)      ok "KNOWN GAP confirmed: $s stayed GREEN though it drives this facility -- it cannot see this defect" ;;

@@ -177,4 +177,11 @@ uint32_t ovmx_mmk_lib_get_foreign(void *result, ...);
     32,31,30,29,28,27,26,25,24,23,22,21,20,19,18,17, \
     16,15,14,13,12,11,10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
 
+/* lib$find_image_symbol: OVMX's <lib$routines.h> does not declare it (no RTL
+ * provides it yet); MMK's companion ovmx_mmk_builtins.c supplies the honest
+ * "not found" MMK's optional dynamic-load feature falls back on. Declared here
+ * so a compiler that rejects implicit declarations (GCC 14, the alpha-dec-vms
+ * port) sees the routine misc.c calls (vms-59a). */
+unsigned int lib$find_image_symbol(void *image, void *symbol, void *symval, ...);
+
 #endif /* OVMX_MMK_COMPAT_H */

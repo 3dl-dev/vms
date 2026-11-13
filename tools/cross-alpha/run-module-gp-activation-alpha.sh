@@ -896,6 +896,13 @@ assert_veneer() {
 assert_vmsabi() {
   local log="$1" fid region
   grep -aq "OVMX VMSABI RMS test: OK" "$log" || { echo "  assert_vmsabi: the image did not report every check OK" >&2; return 1; }
+  # vms-7b3: STR$/LIB$ by VMS name with both descriptor forms, and
+  # LIB$GET_FOREIGN into each form on its own activation.
+  grep -aq 'VMSABI-DSC32: st=%X00000001,%X00000001 "ODS2-VMSABI"' "$log" || { echo "  assert_vmsabi: STR\$PREFIX into a 32-bit descriptor did not give ODS2-VMSABI" >&2; return 1; }
+  grep -aq 'VMSABI-DSC64: st=%X00000001,%X00000001 mbo=1 mbmo=-1 "ODS2-VMSABI"' "$log" || { echo "  assert_vmsabi: STR\$PREFIX into a DSC64 did not give ODS2-VMSABI" >&2; return 1; }
+  grep -aq 'VMSABI-FOREIGN32: st=%X00000001 len=8 "DSCPROBE"' "$log" || { echo "  assert_vmsabi: LIB\$GET_FOREIGN into a 32-bit descriptor did not return the command line" >&2; return 1; }
+  grep -aq 'VMSABI-FOREIGN64: st=%X00000001 len=8 "DSCPROBE"' "$log" || { echo "  assert_vmsabi: LIB\$GET_FOREIGN into a DSC64 did not return the command line" >&2; return 1; }
+  grep -aq "OVMX VMSABI DSC64 run: OK" "$log" || { echo "  assert_vmsabi: the DSC64 activation did not report OK" >&2; return 1; }
   fid=$(grep -aoE "VMSABI-FID: \([0-9]+,[0-9]+,[0-9]+\)" "$log" | head -1 | sed 's/VMSABI-FID: //')
   [ -n "$fid" ] || { echo "  assert_vmsabi: no File ID from SYS\$SEARCH" >&2; return 1; }
   region=$(awk '/VMSABI-PROOF: === INDEPENDENT READER/{f=1} f{print} /VMSABI-PROOF: === END INDEPENDENT READER/{f=0}' "$log")
@@ -946,6 +953,10 @@ assert_crtlvm() {
     || { echo "  assert_crtlvm: no ENOMEM exhaustion below the bound followed by SS\$_EXQUOTA: '$line'" >&2; return 1; }
   tr -d '\r' < "$log" | grep >/dev/null -aE "^CRTLVM: after free: SYS\\\$EXPREG %X[0-9A-F]{7}[13579BDF], malloc 1 MB ok$" \
     || { echo "  assert_crtlvm: the charge did not come back after free" >&2; return 1; }
+  # rd vms-b85: the heap re-creates the holes it deleted ($CRETVA) -- 1.6 GB of
+  # churn under a live block never runs P0 out
+  tr -d '\r' < "$log" | grep >/dev/null -aE "^CRTLVM: churn 400 x 4 MB under a live block: 400 ok$" \
+    || { echo "  assert_crtlvm: the heap ran out of P0 in the churn (deleted holes not re-created)" >&2; return 1; }
   return 0
 }
 
@@ -3518,6 +3529,7 @@ EOF
       echo "CRTLVM: small+large malloc in P0=1"
       echo "CRTLVM: heap exhausted after 18 MB: malloc NULL errno=ENOMEM, then SYS\$EXPREG %X0000001C"
       echo "CRTLVM: after free: SYS\$EXPREG %X00000001, malloc 1 MB ok"
+      echo "CRTLVM: churn 400 x 4 MB under a live block: 400 ok"
       echo "OVMX CRTL-VM test: OK (the heap is P0 charged to PGFLQUOTA)"
       echo "CRTLVM-END"
     } > "$_st/pass.log"
@@ -3528,8 +3540,10 @@ EOF
     sed 's/errno=ENOMEM/errno=other/' "$_st/pass.log" > "$_st/noerrno.log"
     sed 's/after free: SYS\$EXPREG %X00000001/after free: SYS$EXPREG %X0000001C/' "$_st/pass.log" > "$_st/nocredit.log"
     sed 's/test: OK (the heap/test: FAILED (the heap/' "$_st/pass.log" > "$_st/checkfail.log"
+    # the heap never re-creates what it deleted: P0 runs out partway through the churn
+    sed 's/under a live block: 400 ok/under a live block: 233 ok/' "$_st/pass.log" > "$_st/vasfull.log"
     { cat "$_st/pass.log"; echo "%DCL-F-ABORT, image terminated abnormally"; } > "$_st/crash.log"
-    for _c in "pass:0" "linuxheap:1" "nocharge:1" "noerrno:1" "nocredit:1" "checkfail:1" "crash:1"; do
+    for _c in "pass:0" "linuxheap:1" "nocharge:1" "noerrno:1" "nocredit:1" "vasfull:1" "checkfail:1" "crash:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_crtlvm "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  crtlvm selftest $_n: PASS"; else echo "  crtlvm selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -3573,7 +3587,12 @@ EOF
     {
       echo "VMSABI-FID: (34,1,0)"
       echo "VMSABI-QIOFID: (34,1,0)"
+      echo 'VMSABI-DSC32: st=%X00000001,%X00000001 "ODS2-VMSABI"'
+      echo 'VMSABI-DSC64: st=%X00000001,%X00000001 mbo=1 mbmo=-1 "ODS2-VMSABI"'
+      echo 'VMSABI-FOREIGN32: st=%X00000001 len=8 "DSCPROBE"'
       echo "OVMX VMSABI RMS test: OK (\$PARSE/\$SEARCH over VMS-layout FAB/NAM)"
+      echo 'VMSABI-FOREIGN64: st=%X00000001 len=8 "DSCPROBE"'
+      echo "OVMX VMSABI DSC64 run: OK"
       echo "VMSABI-PROOF: === INDEPENDENT READER: DIRECTORY/FULL ==="
       echo "VMSABI-QIOCRE: %X00BC3AB5C5957000"
       echo "JOINT_E2E.EXE;1                File ID:  (34,1,0)"
@@ -3590,7 +3609,10 @@ EOF
     sed 's/VMSABI-QIOCRE: %X00BC3AB5C5957000/VMSABI-QIOCRE: %X00BC3AB5CCBC7E00/' "$_st/pass.log" > "$_st/crelie.log"
     sed 's/VMSABI-QIOCRE: %X00BC3AB5C5957000/VMSABI-QIOCRE: %X0000000000000000/' "$_st/pass.log" > "$_st/crezero.log"
     sed 's/VMSABI-QIOCRE: %X00BC3AB5C5957000/VMSABI-QIOCRE: %X0000000000000000/; s/Created:   8-OCT-2026 14:00:00.00/Created:  <not recorded>/' "$_st/pass.log" > "$_st/notrecorded.log"
-    for _c in "pass:0" "mismatch:1" "notok:1" "nolnm:1" "qiofid:1" "noqio:1" "nocre:1" "crelie:1" "crezero:1" "notrecorded:1"; do
+    sed 's/mbo=1 mbmo=-1 "ODS2-VMSABI"/mbo=1 mbmo=-1 "VMSABI"/' "$_st/pass.log" > "$_st/dsc64.log"
+    grep -v "VMSABI-FOREIGN64" "$_st/pass.log" > "$_st/nofor64.log"
+    sed 's/VMSABI-DSC32: st=%X00000001,%X00000001 "ODS2-VMSABI"/VMSABI-DSC32: st=%X00000001,%X00000001 "ODS2-"/' "$_st/pass.log" > "$_st/dsc32.log"
+    for _c in "dsc64:1" "nofor64:1" "dsc32:1" "pass:0" "mismatch:1" "notok:1" "nolnm:1" "qiofid:1" "noqio:1" "nocre:1" "crelie:1" "crezero:1" "notrecorded:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_vmsabi "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  vmsabi selftest $_n: PASS"; else echo "  vmsabi selftest $_n: FAIL"; _fails=$((_fails+1)); fi

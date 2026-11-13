@@ -45,124 +45,50 @@ target_link_libraries(vmsdecnet_engine PUBLIC vmsdecnet_routing vmsdecnet_nsp)
 # /OUTPUT=/ERROR=SYS$MANAGER:NETACP.LOG; this image-start routine $CREATEs that
 # file through RMS and files each line DECNETD writes there (vmsrms below is in
 # the link closure, decnetd_rms_bind.c binds it; Threads for its reader).
-add_executable(decnetd_exe decnetd.c decnetd_rms_bind.c
-               ${CMAKE_SOURCE_DIR}/src/libvms/rtl/sysoutput_rms.c)
-target_include_directories(decnetd_exe PRIVATE
+# NETACP.EXE (rd vms-0a7 S3): the network ancillary control process. NCP SET
+# EXECUTOR STATE ON $CREPRCs it detached with no parameters; it takes no argv
+# (decnetd.c NETACP_IMAGE entry). It writes SYS$MANAGER:NETACP.LOG through RMS
+# itself (netacp_log in decnetd.c) -- no sysoutput_rms reader thread -- and
+# links no Threads: the libc ratchet (tests/dcl/test_no_libc_io.sh) and the
+# booted syscall audit hold it to no thread, no poll(), no pipe.
+#
+# decnetd.c is ONE translation unit compiled per image: NETACP_IMAGE for
+# NETACP.EXE, and without it by the test image tests/vmsdecnet/netacp_test.c,
+# which holds every self-test.
+#
+# decnetd_rms_bind.c: force-bind anchor (vms-8c2) -- the RMS record services +
+# the binary SYSUAF engine are reached through LIBVMS's `#pragma weak` seam; a
+# weak-only reference does not extract the vmsrms archive member under a static
+# link, so the anchor takes their address.
+set(_netacp_includes
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libdatalink/include       # scs_datalink.h
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include   # dnet_cterm.h (--set-host-selftest)
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/dap/include     # dnet_dap.h (--fal-* COPY presentation)
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include     # dnet_fal.h (--fal-* FAL server + client)
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/broker/include  # dnet_broker.h (--net-broker-selftest, T1)
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include   # dnet_cterm.h
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/dap/include     # dnet_dap.h
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include     # dnet_fal.h
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/broker/include  # dnet_broker.h
     ${CMAKE_SOURCE_DIR}/src/libvms/include            # ovmx_identity.h, rms_textfile.h, ssdef.h
     ${CMAKE_SOURCE_DIR}/src/vmsfs/include             # transitive header of ovmx_identity.h
-)
-# vmsdecnet_cterm: the CTERM terminal-service protocol (rd vms-4d2) that rides on
-# the logical link -- the daemon's --set-host-selftest proves a full $ SET HOST
-# terminal session over a socketpair.
-# vmsdecnet_cterm_host (rd vms-f40): the CTERM HOST SESSION -- an inbound
-# object-42 connect mints an RTAn: in the executive and $CREPRCs LOGINOUT.EXE
-# onto it, so a remote $ SET HOST is AUTHENTICATED. It pulls in libvms (the VMS
-# system services) and libvmssys (the executive interface); the daemon itself
-# still contains no fork/exec/openpty (gated by
-# tests/integration/test_creprc_session_primitive.sh).
-# vmsdecnet_fal (rd vms-8c2): the FAL server (object 17) + the COPY node:: client
-# behind $ COPY node"user pw"::file. It authenticates the connect-carried creds
-# (real SYSUAF/Purdy, in libvms) and moves the file through RMS over the ACP; it
-# pulls in vmsdecnet_dap (the DAP codec). The --fal-* proofs run the server and
-# client as two blocking peers, so decnetd links Threads.
-find_package(Threads REQUIRED)
-# vmsrms: the binary RMS record services + the $UAFDEF Purdy SYSUAF engine that
-# the FAL half's rms_textfile_* and sysuaf_lookup weak-seam onto (vms-8c2). Its
-# archive must be in DECNETD's link closure for decnetd_rms_bind.c's strong
-# references to extract rms_core.o + sysuaf_live.o; PROVISION.EXE links it the
-# same way. Ordered after vmsdecnet_fal so its members satisfy the anchors.
-target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm
-                                          vmsdecnet_cterm_host vmsdecnet_fal
-                                          vmsdecnet_mail
-                                          vmsdecnet_dap vmsdecnet_broker
-                                          vmsdecnet_ncpstore
-                                          ${OVMX_DECNETD_DATALINK_LIB}
-                                          vmsrms
-                                          Threads::Threads)
-target_include_directories(decnetd_exe PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/libvmssys                 # vms_kif.h ($GETDVI readback)
-    ${CMAKE_SOURCE_DIR}/src/vmsrms                    # rms_io.h (FAL persona fixture protection)
+    ${CMAKE_SOURCE_DIR}/src/libvmssys                 # vms_kif.h
+    ${CMAKE_SOURCE_DIR}/src/vmsrms                    # rms_io.h
     ${CMAKE_SOURCE_DIR}/src/vmsrms/include            # rms/*.h, transitive of rms_io.h
-)
-set_target_properties(decnetd_exe PROPERTIES
-    OUTPUT_NAME "DECNETD"
-    SUFFIX ".EXE"
-)
-install(TARGETS decnetd_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+    CACHE INTERNAL "")
+set(_netacp_libs vmsdecnet_engine vmsdecnet_cterm vmsdecnet_cterm_host
+                 vmsdecnet_fal vmsdecnet_mail vmsdecnet_dap vmsdecnet_broker
+                 vmsdecnet_ncpstore ${OVMX_DECNETD_DATALINK_LIB} vmsrms
+    CACHE INTERNAL "")
 
-# vms-15a/a70 regression: the live $ SET HOST client must emit NONZERO format-2
-# source group/user codes (sourced from the running process), never the
-# zero/zero pair real OpenVMS session control silently discards. The selftest
-# builds the CI exactly as run_set_host_loop does and asserts nonzero codes; it
-# runs anywhere (no /dev/vms -> POSIX identity fallback, still nonzero).
-if(BUILD_TESTS)
-    add_test(NAME decnetd_sethost_src_codes
-             COMMAND decnetd_exe --set-host-src-codes-selftest)
-    # rd vms-ea8/vms-6a4: the OUTBOUND $ COPY command layer floor -- copy_plan
-    # direction/creds/spec derivation (GET + PUT) and the parsed creds driving a
-    # real object-17 connect refused without auth, both directions. No executive.
-    add_test(NAME decnetd_copy_selftest
-             COMMAND decnetd_exe --copy-selftest)
-    # rd vms-dda: the TASK-TO-TASK client host floor -- open a logical link by NAME
-    # (format-1 NAMED descriptor, NODE::"TASK=x"), the passive side decodes the
-    # name, a request + reply move BOTH directions byte-verified, then disconnect.
-    # The generic-object addressing + bidirectional pump the _NET: $QIO broker
-    # (Option 1, NETACP-brokered) will expose. No executive.
-    add_test(NAME decnetd_task_selftest
-             COMMAND decnetd_exe --task-selftest)
-    # rd vms-22c (a1-2): the exec<->NETACP T1 broker record codec floor -- request/
-    # response round-trip, bounds-validated decode (200k-mutation + truncated-prefix
-    # fuzz, ASan/UBSan-clean), and the correlation-id anti-cross-talk guard. No
-    # executive; the mailbox seam + qio_net_op + NETACP servicing build on it.
-    # rd vms-22c (a1-2): the NCB connect-block parser floor -- NODE::"TASK=name"
-    # -> {node, task/object}, bounds-safe refusal of malformed input, fuzzed. A
-    # spec-derived LOCAL API parser (never a wire field); no executive.
-    add_test(NAME decnetd_net_ncb_selftest
-             COMMAND decnetd_exe --net-ncb-selftest)
-    add_test(NAME decnetd_net_broker_selftest
-             COMMAND decnetd_exe --net-broker-selftest)
-    # rd vms-22c (a1-2 integration): the NETACP broker SERVICE DISPATCH floor --
-    # dnet_broker_serve driving OPEN/SEND/RECV/CLOSE against the NSP link engine
-    # over a socketpair, correlation-matched, with honest never-crash refusals
-    # (unknown op, too-short OPEN). No executive; the mailbox $CREMBX seam +
-    # qio_net_op marshalling + the IO$M_NOW serve loop build on it.
-    add_test(NAME decnetd_net_service_selftest
-             COMMAND decnetd_exe --net-service-selftest)
-    # rd vms-dda: OUTBOUND links brokered through NETACP -- the host floor. A real
-    # NETACP pool serves clients that reach it ONLY through broker records
-    # (dnet_broker_xfer, the marshalling libvms's qio_net_op runs) over an
-    # in-process queue standing in for the executive mailboxes; a second engine
-    # across a socketpair is the remote. COPY's FAL client end to end through
-    # NETACP, a remote access-control rejection (INVLOGIN), the local loopback
-    # (0::), per-process share + full-pool refusals (EXQUOTA), handle-ownership
-    # and correlation-id refusals, a silent NETACP (DEVOFFLINE). No executive;
-    # the booted $QIO _NET: proof is --net-loopback-accept-test in the battery.
-    add_test(NAME decnetd_netacp_broker_selftest
-             COMMAND decnetd_exe --netacp-broker-selftest)
-    set_tests_properties(decnetd_netacp_broker_selftest PROPERTIES TIMEOUT 120)
-    # rd vms-30e: NCP SHOW / DCL SHOW NETWORK read the RUNNING NETACP -- the host
-    # floor. The snapshot record codec (round-trip, every truncated prefix,
-    # over-bound counts/strings, control bytes, 200k mutations); a real NETACP
-    # pool serving IO$_ACPCONTROL queries through broker records from its live
-    # state (node database on disk, an adjacency from a real hello, one link that
-    # completed its NSP handshake and one connecting, the high-water counter,
-    # paging, BADPARAM / BUFFEROVF / DEVOFFLINE); and the formatters diffed line
-    # for line against the real OpenVMS VAX V7.3 transcripts in
-    # docs/oracle/vax-ncp-show (timestamps normalized). No executive.
-    add_test(NAME decnetd_netacp_show_selftest
-             COMMAND decnetd_exe --netacp-show-selftest
-                     --oracle-dir ${CMAKE_SOURCE_DIR}/docs/oracle/vax-ncp-show)
-    # rd vms-ea8: the OUTBOUND $ COPY client transport PUMP floor -- copy_client_run
-    # (the same client the live $ COPY drives) brings up an object-17 link + NSP
-    # link-service + a DAP session over the copy_wire transport against a threaded
-    # test-double server; an honest miss round-trips end to end. No executive (the
-    # authenticated byte-verified transfer is --copy-accept-test in the battery).
-    add_test(NAME decnetd_copy_transport_selftest
-             COMMAND decnetd_exe --copy-transport-selftest)
-endif()
+add_executable(netacp_exe decnetd.c decnetd_rms_bind.c)
+target_compile_definitions(netacp_exe PRIVATE NETACP_IMAGE)
+target_include_directories(netacp_exe PRIVATE ${_netacp_includes})
+target_link_libraries(netacp_exe PRIVATE ${_netacp_libs})
+set_target_properties(netacp_exe PROPERTIES OUTPUT_NAME "NETACP" SUFFIX ".EXE")
+install(TARGETS netacp_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
+# DECNETD.EXE: retired (rd vms-0a7). RTPAD.EXE took SET HOST (S2) and NETACP.EXE
+# the ACP (S3); nothing activates it. Until S4 removes it and the staging that
+# lists it, it is a tiny image that exits SS$_UNSUPPORTED (decnetd_retired.c).
+add_executable(decnetd_exe decnetd_retired.c)
+target_link_libraries(decnetd_exe PRIVATE vms vmssys)
+set_target_properties(decnetd_exe PROPERTIES OUTPUT_NAME "DECNETD" SUFFIX ".EXE")
+install(TARGETS decnetd_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

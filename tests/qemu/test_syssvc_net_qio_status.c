@@ -106,9 +106,13 @@ static void *responder(void *v)
         snprintf(dev, sizeof dev, "MBA%u:", (unsigned)req.reply_unit);
         if (dnet_broker_rsp_encode(&rsp, rec, sizeof rec, &n) == DNET_BROKER_OK &&
             (vms_kif_mbx_assign(dev, &rc) & 1)) {
+            /* Count BEFORE the reply goes out: the client's $QIOW completes
+             * on this write, and the main thread checks g_served at once, so
+             * a count taken after the write raced the check (the last
+             * request, IO$_DEACCESS, was answered but not yet counted). */
+            g_served++;
             (void)vms_kif_mbx_write(rc, rec, (uint32_t)n);
             (void)vms_kif_dassgn(rc);
-            g_served++;
         }
     }
     vms_kif_close();

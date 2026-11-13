@@ -1400,12 +1400,17 @@ static void vms_devtab_probe_nic(void)
  * proof: a green produced without the executive device table carrying this row
  * would be a LARP.
  *
- * GATED ON THE NIC (INV-6). `_NET:` is entered ONLY when the node actually has
- * the primary Ethernet unit ETH0: DECnet would ride; on a node with no NIC no
- * `_NET:` is entered, so $ASSIGN/$GETDVI _NET: is SS$_NOSUCHDEV -- the honest
- * "this node cannot do DECnet" state, never a fabricated device. Its existence
- * is the device FACE being present, not a claim that a circuit is turned ON
- * (that is NETACP's runtime state, read from NETACP, not asserted here).
+ * PRESENT WHENEVER THE EXECUTIVE IS UP, NIC OR NOT (rd vms-5ec). On VMS the
+ * network device NET0: is NETDRIVER's: it is loaded with the network software
+ * whether or not the node has a LAN adapter, and a node with no circuit still
+ * serves task-to-task and file access to itself over node 0:: (the local
+ * loopback NETACP keeps inside the node). So `_NET:` is entered on every node,
+ * exactly like the console. What IS adapter-dependent stays adapter-dependent:
+ * the circuit/line (ETH-0 over ETH0:) and the datalink NETACP opens on it. A
+ * node with no NIC has no ETH0:, so NETACP has no circuit and reaches no
+ * remote node -- the honest "no circuit" state, read from NETACP's runtime
+ * state, never asserted here. The device's existence claims only that the
+ * DECnet device face is present, not that any circuit is ON.
  *
  * PROVENANCE (Rule 8, published-doc-derived; the `_NET:` name and template-
  * device shape are VMS-authentic, from the DECnet for OpenVMS Networking
@@ -1428,16 +1433,11 @@ static void vms_devtab_probe_net(void)
     struct vms_device *net;
     int have_nic;
 
-    /* Ride the SAME primary net device ETH0: was entered from. If the executive
-     * entered no ETH0: (no NIC), it enters no _NET: either -- honest INV-6. */
+    /* Whether the node has the ETH0: a circuit would ride decides only what
+     * the log line says: the device face is entered either way (vms-5ec). */
     exec_lock(&vms_device_list_lock);
     have_nic = devtab_lookup_locked(VMS_NIC_DEVNAM) != NULL;
     exec_unlock(&vms_device_list_lock);
-    if (!have_nic) {
-        pr_info("vms: no Ethernet unit %s; DECnet device %s not created\n",
-                VMS_NIC_DEVNAM, VMS_DECNET_DEVNAM);
-        return;
-    }
 
     net = vms_devtab_create(VMS_DECNET_DEVNAM, DC__SCOM, VMS_DT_UNKNOWN,
                             1 /* shareable -- a template device */,
@@ -1447,8 +1447,13 @@ static void vms_devtab_probe_net(void)
                 VMS_DECNET_DEVNAM);
         return;
     }
-    pr_info("vms: DECnet device face %s created (NETACP layers its circuit"
-            " over %s)\n", VMS_DECNET_DEVNAM, VMS_NIC_DEVNAM);
+    if (have_nic)
+        pr_info("vms: DECnet device face %s created (NETACP layers its circuit"
+                " over %s)\n", VMS_DECNET_DEVNAM, VMS_NIC_DEVNAM);
+    else
+        pr_info("vms: DECnet device face %s created; no Ethernet unit %s, so"
+                " no circuit (local node 0:: only)\n", VMS_DECNET_DEVNAM,
+                VMS_NIC_DEVNAM);
 }
 
 /*
@@ -1605,10 +1610,10 @@ int vms_devtab_init(void)
     vms_devtab_probe_nic();
 
     /*
-     * Enter the DECnet device face _NET: over that NIC the same way (vms-9ab,
-     * P5). Gated on ETH0: existing, so a NIC-less node has no _NET: and
-     * $GETDVI _NET: is SS$_NOSUCHDEV (INV-6). Born here in the I/O database
-     * before /dev/vms; no process introduces it -- the §7.5 cross-process tell.
+     * Enter the DECnet device face _NET: (vms-9ab, P5) -- on every node, NIC
+     * or not, as VMS's NETDRIVER is (vms-5ec): a NIC-less node has no circuit,
+     * but local 0:: access works. Born here in the I/O database before
+     * /dev/vms; no process introduces it -- the §7.5 cross-process tell.
      */
     vms_devtab_probe_net();
 

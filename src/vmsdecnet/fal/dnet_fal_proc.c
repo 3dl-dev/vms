@@ -23,6 +23,10 @@
 #include "prcdef.h"
 #include "vms_kif.h"
 #include "vms/logical.h"     /* lnm_define_login_logicals (SYS$LOGIN)        */
+#include "iodef.h"            /* IO$_ACCESS ... on the _NET: channel           */
+#include "lnmdef.h"           /* LNM$_STRING ($TRNLNM SYS$NET)                 */
+#include "dnet_broker.h"      /* the selftest's in-process broker marshalling  */
+#include "dnet_netqio.h"      /* dnet_net_qiow3: the IOSB is the ending        */
 
 #define FAL_IMAGE_SPEC DNET_FAL_IMAGE_SPEC
 
@@ -140,23 +144,6 @@ uint32_t dnet_netsrv_proc_start(struct dnet_fal_proc *p, const char *image_spec,
     p->uic = uic;
     p->active = 1;
     return SS$_NORMAL;
-}
-
-uint32_t dnet_fal_proc_start(struct dnet_fal_proc *p, uint32_t uic,
-                             uint64_t def_privs, const char *username,
-                             const char *default_dir)
-{
-    if (!p || !username || uic == 0)
-        return SS$_BADPARAM;
-    struct dnet_falp_linkblk lb;
-    memset(&lb, 0, sizeof lb);
-    snprintf(lb.username, sizeof lb.username, "%s", username);
-    snprintf(lb.default_dir, sizeof lb.default_dir, "%s", default_dir ? default_dir : "");
-    /* THE PERSONA: the server runs with the authenticated user's UIC and
-     * DEFAULT privileges -- the identity the executive ACP checks every file
-     * open against. Never NETACP's own. */
-    return dnet_netsrv_proc_start(p, FAL_IMAGE_SPEC, DNET_FALP_PRCNAM_FMT, uic,
-                                  def_privs, &lb);
 }
 
 int dnet_fal_proc_put(struct dnet_fal_proc *p, const uint8_t *seg, size_t len)
@@ -289,30 +276,141 @@ void dnet_netsrv_exit(struct dnet_netsrv_link *l, uint32_t status)
     (void)put_rec(l->ch_out, DNET_FALP_REC_EXIT, sb, sizeof sb);
 }
 
-static int fal_tsend(void *ctx, const uint8_t *seg, size_t len)
+/* ---- FAL over SYS$NET (rd vms-0a7 S3) ---------------------------------------- */
+
+uint32_t dnet_fal_net_start(const char *ncb, const char *prcnam, uint32_t uic,
+                            uint64_t privs, uint32_t *pid, const char **fail_stage)
 {
-    return dnet_netsrv_send(ctx, seg, len);
+    if (fail_stage) *fail_stage = NULL;
+    if (!ncb || !ncb[0] || !prcnam || !prcnam[0] || !pid || uic == 0)
+        return SS$_BADPARAM;
+    *pid = 0;
+    char img[512];
+    if (!srv_image_path(FAL_IMAGE_SPEC, img, sizeof img)) {
+        if (fail_stage) *fail_stage = "image lookup";
+        return SS$_NOSUCHFILE;
+    }
+    struct dsc$descriptor_s img_d = dsc$init(img);
+    struct dsc$descriptor_s in_d  = dsc$init((char *)ncb);
+    struct dsc$descriptor_s nam_d = dsc$init((char *)prcnam);
+    uint64_t pv = privs;
+    /* THE PERSONA: the authenticated user's UIC + DEFAULT privileges, never
+     * NETACP's own. PRC$M_NETWRK: a network object's server process (F$MODE()
+     * NETWORK), and with an NCB as its input, its SYS$NET (sys_process.c). */
+    uint32_t st = sys$creprc(pid, &img_d, &in_d, NULL, NULL, &pv, NULL, &nam_d,
+                             0, uic, 0, PRC$M_DETACH | PRC$M_NETWRK);
+    if (!(st & 1)) {
+        *pid = 0;
+        if (fail_stage) *fail_stage = "$CREPRC";
+    }
+    return st;
 }
 
-static int fal_trecv(void *ctx, uint8_t *buf, size_t cap, size_t *len)
+/* One logical-link operation on the accepted link: a $QIOW on the _NET:
+ * channel (the selftest: the same broker marshalling over its in-process
+ * queue). p3 is the IO$_ACCESS accept-information buffer size (0 = none). */
+static uint32_t net_op(struct dnet_netsrv_net *n, uint16_t op, void *buf, size_t len,
+                       size_t cap, size_t *xfer)
 {
-    return dnet_netsrv_recv(ctx, buf, cap, len);
+    if (xfer) *xfer = 0;
+    if (n->io) {
+        int isin = (op == DNET_BROKER_OP_OPEN || op == DNET_BROKER_OP_SEND);
+        return dnet_broker_xfer(n->bc, n->io, op, isin ? buf : NULL, isin ? len : 0,
+                                op == DNET_BROKER_OP_SEND ? NULL : buf,
+                                op == DNET_BROKER_OP_SEND ? 0 : cap, xfer);
+    }
+    uint32_t func;
+    switch (op) {
+    case DNET_BROKER_OP_OPEN:  func = IO$_ACCESS;    break;
+    case DNET_BROKER_OP_SEND:  func = IO$_WRITEVBLK; break;
+    case DNET_BROKER_OP_RECV:  func = IO$_READVBLK;  len = cap; cap = 0; break;
+    case DNET_BROKER_OP_CLOSE: func = IO$_DEACCESS;  buf = NULL; len = 0; cap = 0; break;
+    default: return SS$_ILLIOFUNC;
+    }
+    return dnet_net_qiow3(n->chan, func, buf, (uint32_t)len, (uint32_t)cap, xfer);
 }
 
-uint32_t dnet_fal_proc_serve(void)
+uint32_t dnet_netsrv_net_accept(struct dnet_netsrv_net *n, const char *ncb, size_t ncblen,
+                                struct dnet_falp_linkblk *lb)
 {
-    static struct dnet_dap_transport t;
-    static struct dnet_netsrv_link l;
-    struct dnet_falp_linkblk lb;
-    uint32_t ast = dnet_netsrv_attach("FAL_%u_%u", &l, &lb);
-    if (!(ast & 1)) return ast;
+    if (!n || !ncb || !lb || ncblen == 0 || ncblen > DNET_NSP_MAX_DATA)
+        return SS$_BADPARAM;
+    memset(lb, 0, sizeof *lb);
+    /* The NCB goes in; the network job's information comes back in its place. */
+    static uint8_t buf[DNET_NSP_MAX_DATA];
+    memcpy(buf, ncb, ncblen);
+    size_t x = 0;
+    uint32_t st = net_op(n, DNET_BROKER_OP_OPEN, buf, ncblen, sizeof buf, &x);
+    if (!(st & 1))
+        return st;
+    if (st != SS$_NORMAL || x != sizeof *lb) {
+        /* Accepted, but not the information NETACP gives: never guess a user
+         * or a login directory -- disconnect and say so. */
+        dnet_netsrv_net_close(n);
+        return SS$_BADPARAM;
+    }
+    memcpy(lb, buf, sizeof *lb);
+    lb->username[sizeof lb->username - 1] = '\0';
+    lb->default_dir[sizeof lb->default_dir - 1] = '\0';
+    lb->remote_node[sizeof lb->remote_node - 1] = '\0';
+    lb->local_node[sizeof lb->local_node - 1] = '\0';
+    return SS$_NORMAL;
+}
 
+int dnet_netsrv_net_send(struct dnet_netsrv_net *n, const uint8_t *seg, size_t len)
+{
+    size_t x = 0;
+    if (n->ended) return -1;
+    if (!(net_op(n, DNET_BROKER_OP_SEND, (void *)seg, len, 0, &x) & 1)) {
+        n->ended = 1;
+        return -1;
+    }
+    return 0;
+}
+
+int dnet_netsrv_net_recv(struct dnet_netsrv_net *n, uint8_t *buf, size_t cap, size_t *len)
+{
+    size_t x = 0;
+    if (n->ended) return -1;
+    /* The waiting IO$_READVBLK: it completes with the next message, or when
+     * the link is gone -- the remote disconnected, or NETACP ended an idle
+     * session (DNET_FALP_IDLE_SEC, NETACP's bound on an inbound link). */
+    uint32_t st = net_op(n, DNET_BROKER_OP_RECV, buf, 0, cap, &x);
+    if (!(st & 1)) {
+        n->ended = 1;
+        return -1;
+    }
+    *len = x;
+    return 0;
+}
+
+void dnet_netsrv_net_close(struct dnet_netsrv_net *n)
+{
+    size_t x = 0;
+    if (!n) return;
+    (void)net_op(n, DNET_BROKER_OP_CLOSE, NULL, 0, 0, &x);
+    n->ended = 1;
+}
+
+static int fal_net_tsend(void *ctx, const uint8_t *seg, size_t len)
+{
+    return dnet_netsrv_net_send(ctx, seg, len);
+}
+
+static int fal_net_trecv(void *ctx, uint8_t *buf, size_t cap, size_t *len)
+{
+    return dnet_netsrv_net_recv(ctx, buf, cap, len);
+}
+
+uint32_t dnet_fal_net_run(struct dnet_netsrv_net *n, const struct dnet_falp_linkblk *lb)
+{
+    if (!n || !lb) return SS$_BADPARAM;
     /* A relative filespec from the peer resolves in the USER's login
      * directory, as a VMS network job's does: $SETDDIR sets the executive's
      * default directory, which RMS completes every relative spec from
      * (rd vms-872). */
-    if (lb.default_dir[0]) {
-        struct dsc$descriptor_s d = dsc$init(lb.default_dir);
+    if (lb->default_dir[0]) {
+        struct dsc$descriptor_s d = dsc$init((char *)lb->default_dir);
         (void)sys$setddir(&d, NULL, NULL);
         /* The network job's SYS$LOGIN / SYS$LOGIN_DEVICE, job-wide, from the
          * SYSUAF record -- the same LNM$JOB logicals a LOGINOUT session gets
@@ -321,15 +419,53 @@ uint32_t dnet_fal_proc_serve(void)
          * [USERS] default. */
         lnm_manager_t *mgr = lnm_get_manager();
         if (mgr)
-            (void)lnm_define_login_logicals(mgr, LNM_JOB_TABLE, lb.default_dir);
+            (void)lnm_define_login_logicals(mgr, LNM_JOB_TABLE, lb->default_dir);
     }
-
-    /* 3. The DAP session, every file open checked against THIS process's
+    /* The DAP session, every file open checked against THIS process's
      * identity (the user's UIC + default privileges). */
-    t.send = fal_tsend;
-    t.recv = fal_trecv;
-    t.ctx  = &l;
+    static struct dnet_dap_transport t;
+    t.send = fal_net_tsend;
+    t.recv = fal_net_trecv;
+    t.ctx  = n;
     uint32_t status = dnet_fal_server_run(&t);
-    dnet_netsrv_exit(&l, status);
+    dnet_netsrv_net_close(n);
     return status;
+}
+
+uint32_t dnet_fal_net_serve(void)
+{
+    /* 1. SYS$NET: the NCB NETACP created this process with. */
+    static const char tab[] = "LNM$PROCESS";
+    static const char lnm[] = "SYS$NET";
+    struct dsc$descriptor_s dtab = { sizeof tab - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)tab };
+    struct dsc$descriptor_s dnam = { sizeof lnm - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)lnm };
+    char ncb[256];
+    uint16_t rl = 0;
+    struct item_list_3 il[2];
+    memset(il, 0, sizeof il);
+    il[0].item_code = LNM$_STRING;
+    il[0].buflen = sizeof ncb - 1;
+    il[0].bufaddr = ncb;
+    il[0].retlen = &rl;
+    uint32_t st = sys$trnlnm(NULL, &dtab, &dnam, NULL, il);
+    if (!(st & 1) || rl == 0)
+        return SS$_NOLOGNAM;
+    if (rl >= sizeof ncb) rl = sizeof ncb - 1;
+    ncb[rl] = '\0';
+
+    /* 2. $ASSIGN _NET: and ACCEPT the link with that NCB (the non-transparent
+     * form: IO$_ACCESS carries the NCB the server's SYS$NET names). */
+    static struct dnet_netsrv_net n;
+    memset(&n, 0, sizeof n);
+    $DESCRIPTOR(dev, "_NET:");
+    st = sys$assign(&dev, &n.chan, 0, NULL);
+    if (!(st & 1))
+        return st;
+    struct dnet_falp_linkblk lb;
+    st = dnet_netsrv_net_accept(&n, ncb, rl, &lb);
+    memset(ncb, 0, sizeof ncb);
+    if (st & 1)
+        st = dnet_fal_net_run(&n, &lb);
+    (void)sys$dassgn(n.chan);
+    return st;
 }

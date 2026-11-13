@@ -1043,7 +1043,7 @@ static void stage_boot_images(void)
     static const char *const utils[] = {
         /* Boot/startup needs these resident: STARTUP.COM runs INSTALL and
          * SYSGEN, SYSTARTUP runs AUTHORIZE, the cluster daemon is SCSD, and
-         * NETACP $CREPRCs the network servers and DECNETD (a $CREPRC has no lazy
+         * NCP $CREPRCs NETACP, which $CREPRCs the network servers (a $CREPRC has no lazy
          * staging path). Every OTHER SYS$SYSTEM utility (MAIL, MONITOR,
          * INITIALIZE, PRODUCT, LIBRARIAN, HELP, TCC, LINK) is staged on first
          * use by DCL (dcl_exec_utility -> dcl_resolve_activatable), not here:
@@ -1070,7 +1070,9 @@ static void stage_boot_images(void)
         /* The DECnet MAIL-11 network server (rd vms-47fd): NETACP $CREPRCs it
          * under the MAIL object account for each inbound NODE::USER mail. */
         "MAIL_SERVER.EXE",
-        /* NETACP's own image (rd vms-c6d1). */
+        /* NETACP's image: NCP SET EXECUTOR STATE ON $CREPRCs it (rd vms-0a7
+         * S3). DECNETD.EXE: retired, exits SS$_UNSUPPORTED until S4 removes it. */
+        "NETACP.EXE",
         "DECNETD.EXE",
         "OPCOM.EXE",       /* PID 1 creates it before STARTUP.COM (vms-798) */
     };

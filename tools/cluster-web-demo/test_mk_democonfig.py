@@ -458,9 +458,9 @@ class TestDecnetRoster(unittest.TestCase):
         for me in M.DEMO_ROSTER:
             peers = [n for n in M.DEMO_ROSTER if n is not me]
             cmds = M.decnet_ncp_commands(me["name"])
-            self.assertEqual(cmds[:3], ["SET EXECUTOR ADDRESS %s" % me["decnet"],
-                                        "SET EXECUTOR NAME %s" % me["name"],
-                                        "SET EXECUTOR STATE ON"])
+            self.assertEqual(cmds[:3], ["DEFINE EXECUTOR ADDRESS %s" % me["decnet"],
+                                        "DEFINE EXECUTOR NAME %s" % me["name"],
+                                        "DEFINE EXECUTOR STATE ON"])
             self.assertEqual(cmds[3:], ["DEFINE NODE %s NAME %s" % (p["decnet"], p["name"])
                                         for p in peers])
 

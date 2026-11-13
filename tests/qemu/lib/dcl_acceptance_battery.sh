@@ -1127,10 +1127,16 @@ run_dcl_acceptance_battery() {
     # runtime cannot prove it) and must RED here, not silently pass because
     # nothing ran.
     local CTERM_OFF; CTERM_OFF=$(wc -c <"$LOG")
-    run_cmd 'DNETACC :== $SYS$SYSTEM:DECNETD.EXE'
+    # rd vms-0a7 S3: the self-tests are no longer in a shipped image -- they are
+    # the test image NETACP_TEST.EXE, which the rail's harness puts on a
+    # scratch test volume (DNET_TEST_MOUNT, e.g. "VDA100: DNETTEST") and names
+    # in DNET_TEST_IMAGE. Default: SYS$SYSTEM:NETACP_TEST.EXE (a harness that
+    # stages it on its own test system volume).
+    if [ -n "${DNET_TEST_MOUNT:-}" ]; then run_cmd "MOUNT ${DNET_TEST_MOUNT}"; fi
+    run_cmd "DNETACC :== \$${DNET_TEST_IMAGE:-SYS\$SYSTEM:NETACP_TEST.EXE}"
     send 'DNETACC --cterm-accept-test'
     if wait_for 'IVIMAGE' 15 "$CTERM_OFF"; then
-        bad "CTERM [vms-f40]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound-SET-HOST authentication proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
+        bad "CTERM [vms-f40]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the inbound-SET-HOST authentication proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
     elif wait_for 'DECNETD-CTERM-ACCEPT:' 180 "$CTERM_OFF"; then
         local CTSEG; CTSEG=$(tail -c "+$((CTERM_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$CTSEG" 'DECNETD-CTERM-ACCEPT: PASS' \
@@ -1151,7 +1157,7 @@ run_dcl_acceptance_battery() {
             "CTERM [vms-f40]: no assertion in the inbound-SET-HOST acceptance failed"
         negctl "$CTSEG" 'DECNETD-I-CTERMACCEPT' "DECnet CTERM acceptance"
     else
-        bad "CTERM [vms-f40]: DECNETD.EXE --cterm-accept-test produced no verdict line within 180s -- the inbound-SET-HOST authentication proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung session)"
+        bad "CTERM [vms-f40]: NETACP_TEST.EXE --cterm-accept-test produced no verdict line within 180s -- the inbound-SET-HOST authentication proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung session)"
     fi
     wait_for '$ ' 20 "$CTERM_OFF"
 
@@ -1174,7 +1180,7 @@ run_dcl_acceptance_battery() {
     local ISOL_OFF; ISOL_OFF=$(wc -c <"$LOG")
     send 'DNETACC --isolation-test'
     if wait_for 'IVIMAGE' 15 "$ISOL_OFF"; then
-        bad "NETACP isolation [vms-9ab]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the A2/A8 privileged-path isolation proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
+        bad "NETACP isolation [vms-9ab]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the A2/A8 privileged-path isolation proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
     elif wait_for 'DECNETD-ISOLATION:' 60 "$ISOL_OFF"; then
         local ISSEG; ISSEG=$(tail -c "+$((ISOL_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$ISSEG" 'DECNETD-ISOLATION: PASS' \
@@ -1185,7 +1191,7 @@ run_dcl_acceptance_battery() {
             "NETACP isolation [vms-9ab]: no isolation assertion failed"
         negctl "$ISSEG" 'DECNETD-I-ISOLATION' "DECnet NETACP isolation"
     else
-        bad "NETACP isolation [vms-9ab]: DECNETD.EXE --isolation-test produced no verdict line within 60s"
+        bad "NETACP isolation [vms-9ab]: NETACP_TEST.EXE --isolation-test produced no verdict line within 60s"
     fi
     wait_for '$ ' 20 "$ISOL_OFF"
 
@@ -1221,7 +1227,7 @@ run_dcl_acceptance_battery() {
     local FAL_OFF; FAL_OFF=$(wc -c <"$LOG")
     send 'DNETACC --fal-accept-test'
     if wait_for 'IVIMAGE' 15 "$FAL_OFF"; then
-        note "FAL COPY [vms-8c2]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound-FAL COPY authentication + transfer proof DID NOT RUN here (hard gate on the rails that ship the image; staging into the VAX sysvol + Alpha boot image is tracked follow-on)"
+        note "FAL COPY [vms-8c2]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the inbound-FAL COPY authentication + transfer proof DID NOT RUN here (hard gate on the rails that ship the image; staging into the VAX sysvol + Alpha boot image is tracked follow-on)"
     elif wait_for 'DECNETD-FAL-ACCEPT:' 180 "$FAL_OFF"; then
         local FALSEG; FALSEG=$(tail -c "+$((FAL_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$FALSEG" 'DECNETD-FAL-ACCEPT: PASS' \
@@ -1236,7 +1242,7 @@ run_dcl_acceptance_battery() {
             "FAL COPY [vms-8c2]: no assertion in the inbound-FAL COPY acceptance failed"
         negctl "$FALSEG" 'DECNETD-I-FALACCEPT' "DECnet FAL COPY acceptance"
     else
-        bad "FAL COPY [vms-8c2]: DECNETD.EXE --fal-accept-test produced no verdict line within 180s -- the inbound-FAL COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
+        bad "FAL COPY [vms-8c2]: NETACP_TEST.EXE --fal-accept-test produced no verdict line within 180s -- the inbound-FAL COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
     fi
     wait_for '$ ' 20 "$FAL_OFF"
 
@@ -1244,14 +1250,16 @@ run_dcl_acceptance_battery() {
     # DECnet FAL SERVER PROCESS PERSONA (rd vms-d85, R4 G3). An inbound FAL
     # access must run with the AUTHENTICATED user's identity, never NETACP's:
     # NETACP $CREPRCs SYS$SYSTEM:FAL.EXE with the user's UIC + default
-    # privileges and the DAP session moves through its link mailboxes. The
+    # privileges and SYS$NET naming the link; FAL.EXE accepts it ($ASSIGN
+    # _NET: + IO$_ACCESS) and the DAP session moves over $QIOW on the channel
+    # (rd vms-0a7 S3). The
     # DIFFERENTIAL is the proof -- the SAME SYSTEM-only file through the SAME
     # path is served to SYSTEM and REFUSED to GUEST, and the server process's
     # executive row carries the user's UIC. HARD GATE where DECNETD.EXE ships.
     local FALP_OFF; FALP_OFF=$(wc -c <"$LOG")
     send 'DNETACC --fal-proc-accept-test'
     if wait_for 'IVIMAGE' 15 "$FALP_OFF"; then
-        note "FAL persona [vms-d85]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the FAL server-process persona proof DID NOT RUN here (hard gate on the rails that ship the image)"
+        note "FAL persona [vms-d85]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the FAL server-process persona proof DID NOT RUN here (hard gate on the rails that ship the image)"
     elif wait_for 'DECNETD-FAL-PROC-ACCEPT:' 240 "$FALP_OFF" &&
          tail -c "+$((FALP_OFF + 1))" "$LOG" | grep -q 'DECNETD-FAL-PROC-ACCEPT: NOIMAGE'; then
         note "FAL persona [vms-d85]: SYS\$SYSTEM:FAL.EXE is not on THIS runtime's system disk (the VAX/Alpha staging follow-on), so the FAL server-process persona proof DID NOT RUN here"
@@ -1279,7 +1287,7 @@ run_dcl_acceptance_battery() {
             "FAL persona [vms-d85]: no assertion in the FAL server-process persona proof failed"
         negctl "$FALPSEG" 'DECNETD-I-FALPROC' "DECnet FAL server-process persona"
     else
-        bad "FAL persona [vms-d85]: DECNETD.EXE --fal-proc-accept-test produced no verdict line within 240s -- the persona proof did not run (a missing DECNETD.EXE/FAL.EXE, an absent /dev/vms, or a hung session)"
+        bad "FAL persona [vms-d85]: NETACP_TEST.EXE --fal-proc-accept-test produced no verdict line within 240s -- the persona proof did not run (a missing DECNETD.EXE/FAL.EXE, an absent /dev/vms, or a hung session)"
     fi
     wait_for '$ ' 20 "$FALP_OFF"
 
@@ -1293,7 +1301,7 @@ run_dcl_acceptance_battery() {
     local POOL_OFF; POOL_OFF=$(wc -c <"$LOG")
     send 'DNETACC --netacp-pool-selftest'
     if wait_for 'IVIMAGE' 15 "$POOL_OFF"; then
-        note "NETACP pool [vms-6af1]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the session-pool proof DID NOT RUN here (hard gate on the rails that ship the image)"
+        note "NETACP pool [vms-6af1]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the session-pool proof DID NOT RUN here (hard gate on the rails that ship the image)"
     elif wait_for 'DECNETD-POOL-SELFTEST:' 240 "$POOL_OFF"; then
         local POOLSEG; POOLSEG=$(tail -c "+$((POOL_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$POOLSEG" 'DECNETD-POOL-SELFTEST: PASS' \
@@ -1306,13 +1314,13 @@ run_dcl_acceptance_battery() {
             "NETACP pool [vms-277a]: a node may hold three concurrent sessions -- a VMS DELETE node::file;* opens three links to the FAL (VAX<->VAX capture)"
         must_have "$POOLSEG" 'is REFUSED another (reason 1) while other nodes are admitted' \
             "NETACP pool [vms-6af1]: a node already holding its share is refused while other nodes are admitted"
-        must_have "$POOLSEG" 'running as [128,129]' \
-            "NETACP pool [vms-6af1/vms-d85]: an inbound FAL connect lands on a FAL.EXE server process running as the authenticated user"
+        must_have "$POOLSEG" 'PASS: an inbound FAL connect GUEST/GUEST takes a pool slot held for a FAL.EXE server process created as [128,129]' \
+            "NETACP pool [vms-6af1/vms-d85/vms-0a7 S3]: an inbound FAL connect takes a pool slot held for a FAL.EXE server process created as the authenticated user (no Connect Confirm before it accepts)"
         must_not_have "$POOLSEG" 'DECNETD-POOL-SELFTEST: FAIL' \
             "NETACP pool [vms-6af1]: no assertion in the session-pool proof failed"
         negctl "$POOLSEG" 'DECNETD-I-POOL' "DECnet NETACP session pool"
     else
-        bad "NETACP pool [vms-6af1]: DECNETD.EXE --netacp-pool-selftest produced no verdict line within 240s -- the session-pool proof did not run"
+        bad "NETACP pool [vms-6af1]: NETACP_TEST.EXE --netacp-pool-selftest produced no verdict line within 240s -- the session-pool proof did not run"
     fi
     wait_for '$ ' 20 "$POOL_OFF"
 
@@ -1330,7 +1338,7 @@ run_dcl_acceptance_battery() {
     local M11_OFF; M11_OFF=$(wc -c <"$LOG")
     send 'DNETACC --mail11-accept-test'
     if wait_for 'IVIMAGE' 15 "$M11_OFF"; then
-        note "MAIL-11 [vms-47fd]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound MAIL-11 proof DID NOT RUN here (hard gate on the rails that ship the image)"
+        note "MAIL-11 [vms-47fd]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the inbound MAIL-11 proof DID NOT RUN here (hard gate on the rails that ship the image)"
         wait_for '$ ' 20 "$M11_OFF"
     elif wait_for 'DECNETD-MAIL11-ACCEPT:' 240 "$M11_OFF" &&
          tail -c "+$((M11_OFF + 1))" "$LOG" | grep -q 'DECNETD-MAIL11-ACCEPT: NOIMAGE'; then
@@ -1394,7 +1402,7 @@ run_dcl_acceptance_battery() {
             wait_for '$ ' 20 "$MAIL_OFF"
         fi
     else
-        bad "MAIL-11 [vms-47fd]: DECNETD.EXE --mail11-accept-test produced no verdict line within 240s -- the inbound MAIL-11 proof did not run"
+        bad "MAIL-11 [vms-47fd]: NETACP_TEST.EXE --mail11-accept-test produced no verdict line within 240s -- the inbound MAIL-11 proof did not run"
         wait_for '$ ' 20 "$M11_OFF"
     fi
 
@@ -1416,7 +1424,7 @@ run_dcl_acceptance_battery() {
     local NMBX_OFF; NMBX_OFF=$(wc -c <"$LOG")
     send 'DNETACC --net-mbx-selftest'
     if wait_for 'IVIMAGE' 15 "$NMBX_OFF"; then
-        note "NET mailbox [vms-22c]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the T1 mailbox transport round-trip DID NOT RUN here (hard gate on the rails that ship the image)"
+        note "NET mailbox [vms-22c]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the T1 mailbox transport round-trip DID NOT RUN here (hard gate on the rails that ship the image)"
     elif wait_for 'DECNETD-NET-MBX-SELFTEST:' 60 "$NMBX_OFF"; then
         local NMBXSEG; NMBXSEG=$(tail -c "+$((NMBX_OFF + 1))" "$LOG" | tr -d '\r')
         # Rule 9 / ONE RUNTIME: --net-mbx-selftest does NOT skip -- it always
@@ -1434,7 +1442,7 @@ run_dcl_acceptance_battery() {
             must_not_have "$NMBXSEG" 'DECNETD-NET-MBX-SELFTEST: FAIL' \
                 "NET mailbox [vms-22c]: no assertion in the T1 mailbox round-trip failed (a TERMINAL FAIL here means the real executive mailbox facility is broken, never a skipped proof)"
     else
-        bad "NET mailbox [vms-22c]: DECNETD.EXE --net-mbx-selftest produced no verdict line within 60s -- the T1 mailbox round-trip did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung mailbox)"
+        bad "NET mailbox [vms-22c]: NETACP_TEST.EXE --net-mbx-selftest produced no verdict line within 60s -- the T1 mailbox round-trip did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung mailbox)"
     fi
     wait_for '$ ' 20 "$NMBX_OFF"
 
@@ -1453,7 +1461,7 @@ run_dcl_acceptance_battery() {
     local NLB_OFF; NLB_OFF=$(wc -c <"$LOG")
     send 'DNETACC --net-loopback-accept-test'
     if wait_for 'IVIMAGE' 15 "$NLB_OFF"; then
-        note "NETACP _NET: links [vms-dda]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the brokered-link proof DID NOT RUN here (hard gate on the rails that ship the image)"
+        note "NETACP _NET: links [vms-dda]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the brokered-link proof DID NOT RUN here (hard gate on the rails that ship the image)"
     elif wait_for 'DECNETD-NET-LOOPBACK-ACCEPT:' 240 "$NLB_OFF" &&
          tail -c "+$((NLB_OFF + 1))" "$LOG" | grep -q 'DECNETD-E-NONET'; then
         note "NETACP _NET: links [vms-dda]: this VM has no NIC, so no _NET: device exists (NIC-gated, INV-6) -- the brokered-link proof is a hard gate in tests/qemu/test_decnet_startnet_boot_e2e.sh, which boots with a NIC and a running NETACP"
@@ -1471,7 +1479,7 @@ run_dcl_acceptance_battery() {
             "NETACP _NET: links [vms-dda]: no assertion in the brokered-link proof failed"
         negctl "$NLBSEG" 'DECNETD-I-NETLOOP' "DECnet NETACP-brokered _NET: links"
     else
-        bad "NETACP _NET: links [vms-dda]: DECNETD.EXE --net-loopback-accept-test produced no verdict line within 240s -- the brokered-link proof did not run (a missing DECNETD.EXE/FAL.EXE, an absent /dev/vms, or a hung link)"
+        bad "NETACP _NET: links [vms-dda]: NETACP_TEST.EXE --net-loopback-accept-test produced no verdict line within 240s -- the brokered-link proof did not run (a missing DECNETD.EXE/FAL.EXE, an absent /dev/vms, or a hung link)"
     fi
     wait_for '$ ' 20 "$NLB_OFF"
 
@@ -1491,7 +1499,7 @@ run_dcl_acceptance_battery() {
     local COPY_OFF; COPY_OFF=$(wc -c <"$LOG")
     send 'DNETACC --copy-accept-test'
     if wait_for 'IVIMAGE' 15 "$COPY_OFF"; then
-        note "outbound COPY [vms-ea8]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the outbound \$ COPY command-layer transfer proof DID NOT RUN here (hard gate on the rails that ship the image; VAX/Alpha staging is the same tracked follow-on as FAL)"
+        note "outbound COPY [vms-ea8]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the outbound \$ COPY command-layer transfer proof DID NOT RUN here (hard gate on the rails that ship the image; VAX/Alpha staging is the same tracked follow-on as FAL)"
     elif wait_for 'DECNETD-COPY-ACCEPT:' 180 "$COPY_OFF"; then
         local COPYSEG; COPYSEG=$(tail -c "+$((COPY_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$COPYSEG" 'DECNETD-COPY-ACCEPT: PASS' \
@@ -1504,7 +1512,7 @@ run_dcl_acceptance_battery() {
             "outbound COPY [vms-ea8]: no assertion in the outbound-COPY acceptance failed"
         negctl "$COPYSEG" 'DECNETD-I-COPYACCEPT' "DECnet outbound COPY acceptance"
     else
-        bad "outbound COPY [vms-ea8]: DECNETD.EXE --copy-accept-test produced no verdict line within 180s -- the outbound-COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
+        bad "outbound COPY [vms-ea8]: NETACP_TEST.EXE --copy-accept-test produced no verdict line within 180s -- the outbound-COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
     fi
     wait_for '$ ' 20 "$COPY_OFF"
 
@@ -1557,25 +1565,15 @@ run_dcl_acceptance_battery() {
             "DECnet config [vms-1f69]: NCP SET EXECUTOR ADDRESS 1.42 persists (no %NCP-E-CFGWRERR -- written through RMS over the ACP, not a Linux path)"
         run_cmd 'NCP SET EXECUTOR NAME OVMX'
         must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR NAME OVMX persists"
-        run_cmd 'NCP SET EXECUTOR STATE ON'
-        must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR STATE ON persists"
-        # LIST reads the PERMANENT database -- the file NCP just wrote (rd vms-30e:
-        # SHOW now reads the RUNNING NETACP, the VMS split).
-        run_cmd 'NCP LIST EXECUTOR'
-        must_have "$SEG" 'Executor node = 1.42 (OVMX)' \
-            "DECnet config [vms-1f69]: a FRESH NCP image reads back 1.42 (OVMX) -- all three SETs landed in the one executor database"
-        must_match "$SEG" 'State +=  *on' "DECnet config [vms-1f69]: LIST EXECUTOR reads back State = on"
-        negctl "$SEG" 'Executor node' "NCP LIST EXECUTOR"
-        # NCP SHOW / SHOW NETWORK READ THE RUNNING NETWORK (rd vms-30e). This VM
-        # has no NIC, so no _NET: device and no NETACP: SHOW EXECUTOR must FAIL
-        # honestly (no volatile database -- never the configured file passed off
-        # as the running network), and SHOW NETWORK must carry NO DECNET product
-        # line (VMS prints one only while NETACP serves). The POSITIVE half --
-        # SHOW EXECUTOR / CHARACTERISTICS / COUNTERS / KNOWN NODES / KNOWN LINKS
-        # and the DECNET line read from a RUNNING NETACP in the oracle layout --
-        # needs a NIC and a boot-time NETACP: test_decnet_startnet_boot_e2e.sh
-        # boot 2 (same CI job); the layout is diffed against the real VAX
-        # transcripts by decnetd_netacp_show_selftest (ctest).
+        # NCP SHOW / SHOW NETWORK READ THE RUNNING NETWORK (rd vms-30e). The
+        # node is CONFIGURED now (address + name in the permanent database) but
+        # the network is not started: no SET EXECUTOR STATE ON yet, so no
+        # NETACP on ANY rail. SHOW EXECUTOR must FAIL honestly (no volatile
+        # database -- never the configured file passed off as the running
+        # network), and SHOW NETWORK must carry NO DECNET product line (VMS
+        # prints one only while NETACP serves). STATE ON below starts NETACP;
+        # where the node has a LAN adapter it then SERVES (the VAX rail, qt0),
+        # so the running-network half is asserted after it, per rail.
         run_cmd 'NCP SHOW EXECUTOR'
         must_have "$SEG" '%NCP-F-OPEFAI' \
             "NCP SHOW [vms-30e]: with no NETACP serving, NCP SHOW EXECUTOR fails %NCP-F-OPEFAI (no volatile database to read)"
@@ -1587,10 +1585,12 @@ run_dcl_acceptance_battery() {
         must_not_have "$SEG" 'Product:  DECNET' \
             "SHOW NETWORK [vms-30e]: no DECNET product line while no NETACP serves"
         negctl "$SEG" 'Product:' "SHOW NETWORK"
-        run_cmd 'WRITE SYS$OUTPUT "[DNCFG:" + F$SEARCH("SYS$SYSTEM:NETNODE_LOCAL.DAT") + ":]"'
-        must_match "$SEG" '\[DNCFG:[^"]*NETNODE_LOCAL\.DAT[^"]*:\]' \
-            "DECnet config [vms-1f69]: SYS\$SYSTEM:NETNODE_LOCAL.DAT now EXISTS on the system disk (F\$SEARCH, STARTNET's own gate, sees what NCP wrote)"
-
+        # The datalink proofs below run a NETACP_TEST.EXE engine (DNETACC). They
+        # run BEFORE STATE ON, while no NETACP serves: a node runs one NETACP
+        # (rd vms-365), and a test engine run beside the live one would publish
+        # its own DNET$NETACP_REQ over the live NETACP's and delete it on exit,
+        # leaving the running network unreachable (NCP SHOW %NCP-F-OPEFAI
+        # DEVOFFLINE on the VAX rail, CI run 43290347353).
         # NETACP self-sources the address + names its datalink backend.
         run_cmd 'DNETACC --show-executor'
         must_have "$SEG" 'Executor node = 1.42' \
@@ -1634,7 +1634,7 @@ run_dcl_acceptance_battery() {
                         "NETACP [vms-b72]: the executive opened the datalink for an image of this interactive session (open $pass_n of 2, no reboot between)"
                     negctl "$DLSEG" 'DECNETD' "NETACP executive datalink open $pass_n"
                 else
-                    bad "NETACP [vms-b72]: DECNETD.EXE --iface $dl_if produced neither DECNETD-I-COUNTERS nor a DECNETD-E- verdict within 50s (open $pass_n)"
+                    bad "NETACP [vms-b72]: NETACP_TEST.EXE --iface $dl_if produced neither DECNETD-I-COUNTERS nor a DECNETD-E- verdict within 50s (open $pass_n)"
                     wait_for '$ ' 20 "$DL_OFF"
                 fi
             done
@@ -1653,24 +1653,72 @@ run_dcl_acceptance_battery() {
         else
             note "NETACP [vms-1f69]: DECNETD.EXE on this runtime is not built with the executive datalink backend (its --show-executor names another) -- the executive-datalink proof DID NOT RUN here"
         fi
-        # STARTNET now passes its NETNODE_LOCAL.DAT gate and attempts the
-        # detached NETACP launch -- and REPORTS IT HONESTLY: it may announce
-        # %DECNET-I-STARTNET only if RUN/DETACHED actually created the process.
-        # (From an interactive, non-root DCL session RUN/DETACHED is currently
-        # refused %RUN-F-CREPRC -SYSTEM-F-NOPRIV for ANY image -- rd vms-ff75, a
-        # general $CREPRC defect; then STARTNET must say %DECNET-E-STARTNET.
-        # The NETACP-actually-running proof is the boot-time STARTNET in
-        # tests/qemu/test_decnet_startnet_boot_e2e.sh, which runs it as the
-        # system does at LPBETA, on a VM with a NIC, and checks the wire.)
-        run_cmd '@SYS$MANAGER:STARTNET'
-        if printf '%s\n' "$SEG" | grep -qF '%RUN-F-CREPRC'; then
-            must_not_have "$SEG" '%RUN-S-PROC_ID' \
-                "STARTNET [vms-1f69]: a REFUSED RUN/DETACHED is never announced as a NETACP launch (honest .COM)"
-            note "STARTNET [vms-158d]: the refusal is RUN's own %RUN-F-CREPRC (the .COM adds no line of its own)"
-            note "STARTNET [vms-1f69]: interactive RUN/DETACHED from this non-root session was refused (rd vms-ff75); the running-NETACP proof is the boot-time e2e"
+        run_cmd 'NCP SET EXECUTOR STATE ON'
+        must_not_have "$SEG" '%NCP-E-' "DECnet config [vms-1f69]: NCP SET EXECUTOR STATE ON persists"
+        # LIST reads the PERMANENT database -- the file NCP just wrote (rd vms-30e:
+        # SHOW now reads the RUNNING NETACP, the VMS split).
+        run_cmd 'NCP LIST EXECUTOR'
+        must_have "$SEG" 'Executor node = 1.42 (OVMX)' \
+            "DECnet config [vms-1f69]: a FRESH NCP image reads back 1.42 (OVMX) -- all three SETs landed in the one executor database"
+        must_match "$SEG" 'State +=  *on' "DECnet config [vms-1f69]: LIST EXECUTOR reads back State = on"
+        negctl "$SEG" 'Executor node' "NCP LIST EXECUTOR"
+        # STATE ON created NETACP. Does this node have a LAN adapter (the
+        # executive's ETH0:, INV-6)? Without one (-nic none: x86_64/Alpha)
+        # NETACP logs its honest no-circuit refusal and exits (rd vms-bc6), so
+        # the network is STILL not running and SHOW must still say so. With
+        # one (the VAX rail's DELQA) NETACP serves, and SHOW reads it -- that
+        # positive half is asserted at the end of this block, once NETACP has
+        # had the intervening commands to open its datalink.
+        local DN_NIC=0 NIC_OFF; NIC_OFF=$(wc -c <"$LOG")
+        run_cmd 'IF F$GETDVI("ETH0:","EXISTS") THEN WRITE SYS$OUTPUT "[DNNIC:", "YES:]"'
+        if tail -c "+$((NIC_OFF + 1))" "$LOG" | tr -d '\r' | grep -qF '[DNNIC:YES:]'; then
+            DN_NIC=1
         else
-            must_have "$SEG" '%RUN-S-PROC_ID' \
-                "STARTNET [vms-1f69]: on the CONFIGURED node @SYS\$MANAGER:STARTNET passes its gate and launches NETACP detached (RUN's own line)"
+            run_cmd 'NCP SHOW EXECUTOR'
+            must_have "$SEG" '%NCP-F-OPEFAI' \
+                "NCP SHOW [vms-30e]: no LAN adapter -- the NETACP STATE ON created could not serve, NCP SHOW EXECUTOR fails %NCP-F-OPEFAI"
+            must_not_have "$SEG" 'Node Volatile Summary' \
+                "NCP SHOW [vms-30e]: no LAN adapter -- no volatile summary (the permanent file is not shown as the running network)"
+            run_cmd 'SHOW NETWORK'
+            must_not_have "$SEG" 'Product:  DECNET' \
+                "SHOW NETWORK [vms-30e]: no LAN adapter -- no DECNET product line while no NETACP serves"
+        fi
+        run_cmd 'WRITE SYS$OUTPUT "[DNCFG:" + F$SEARCH("SYS$SYSTEM:NETNODE_LOCAL.DAT") + ":]"'
+        must_match "$SEG" '\[DNCFG:[^"]*NETNODE_LOCAL\.DAT[^"]*:\]' \
+            "DECnet config [vms-1f69]: SYS\$SYSTEM:NETNODE_LOCAL.DAT now EXISTS on the system disk (F\$SEARCH, STARTNET's own gate, sees what NCP wrote)"
+
+        # STARTNET now passes its NETNODE_LOCAL.DAT gate and starts the network
+        # the VMS way (rd vms-0a7 S3): NCP SET EXECUTOR STATE ON $CREPRCs
+        # SYS$SYSTEM:NETACP.EXE detached. NCP prints NOTHING on success (as on
+        # VMS), so there is no RUN line to match any more; the proof is the
+        # procedure's own exit status, which STARTNET passes through from NCP
+        # (EXIT run_status) -- a refused $CREPRC (SS$_NOPRIV, a missing image)
+        # makes it even and prints NCP's %NCP-F- line. This VM has no NIC, so
+        # the NETACP it creates logs its honest no-circuit refusal and exits
+        # (rd vms-bc6); the NETACP-actually-running proof is the boot-time
+        # STARTNET in tests/qemu/test_decnet_startnet_boot_e2e.sh, which runs it
+        # as the system does at LPBETA, on a VM with a NIC, and checks the wire.
+        run_cmd '@SYS$MANAGER:STARTNET'
+        local SN_SEG="$SEG"
+        run_cmd 'WRITE SYS$OUTPUT "[SNST:", $STATUS, ":]"'
+        must_match "$SEG" '\[SNST:%X[0-9A-F]{7}[13579BDF]:\]' \
+            "STARTNET [vms-1f69]: on the CONFIGURED node @SYS\$MANAGER:STARTNET passes its gate and NCP SET EXECUTOR STATE ON creates NETACP (the procedure exits with NCP's success status)"
+        must_not_have "$SN_SEG" '%NCP-F-' \
+            "STARTNET [vms-1f69]: NCP did not refuse the NETACP launch (no %NCP-F- line)"
+        if [ "$DN_NIC" = 1 ]; then
+            # The node has a LAN adapter: the NETACP that STATE ON created
+            # SERVES, and SHOW reads the RUNNING network from it (rd vms-30e).
+            run_cmd 'NCP SHOW EXECUTOR'
+            must_have "$SEG" 'Node Volatile Summary' \
+                "NCP SHOW [vms-30e]: with a LAN adapter the NETACP STATE ON created serves -- NCP SHOW EXECUTOR reads its volatile summary"
+            must_have "$SEG" 'Executor node = 1.42 (OVMX)' \
+                "NCP SHOW [vms-30e]: the running NETACP's executor is 1.42 (OVMX), the node NCP configured"
+            must_not_have "$SEG" '%NCP-F-' \
+                "NCP SHOW [vms-30e]: NCP SHOW EXECUTOR does not fail while NETACP serves"
+            run_cmd 'SHOW NETWORK'
+            must_match "$SEG" 'Product:  DECNET +Node:  OVMX +Address\(es\):  1\.42' \
+                "SHOW NETWORK [vms-30e]: while NETACP serves, the DECNET product line names node OVMX at 1.42"
+            negctl "$SEG" 'Product:' "SHOW NETWORK (running)"
         fi
     fi
     wait_for '$ ' 20 "$DN_OFF"
@@ -1777,7 +1825,7 @@ run_dcl_acceptance_battery() {
     #     JOB_CONTROL went round its loop and issued $CREPRC again. There is
     #     no fork+execl left in that program to produce one another way.
     #   - A NON-SYSTEM SYSUAF account (GUEST, [128,129] = octal [200,201],
-    #     TMPMBX only, password GUEST -- tools/mksysuaf.c's seed) logs in and
+    #     TMPMBX,NETMBX (vms-f76), password GUEST -- tools/mksysuaf.c's seed) logs in and
     #     the process reports THAT ACCOUNT'S identity. The creator (JOB_CONTROL)
     #     is SYSTEM and passes no identity at all: if $CREPRC were stamping the
     #     creator's identity, or if LOGINOUT were not re-personaing through the
@@ -1840,7 +1888,7 @@ run_dcl_acceptance_battery() {
     negctl        "$SEG" 'Process ID' "SHOW PROCESS as GUEST"
 
     run_cmd 'SHOW PROCESS/PRIVILEGES'
-    # GUEST is authorized TMPMBX and nothing else. SYSTEM holds PRV$M_ALL, so
+    # GUEST is authorized TMPMBX,NETMBX (vms-f76) and nothing else. SYSTEM holds PRV$M_ALL, so
     # every one of these would be listed if the session were still its creator
     # -- each is a privilege GUEST must not have.
     must_have     "$SEG" 'Process privileges' "SHOW PROCESS/PRIVILEGES [vms-3e9]: prints the executive-held privilege blocks"

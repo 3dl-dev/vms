@@ -1,0 +1,14 @@
+04:16:05 VAXC logged in
+04:16:15 VAXC licensed
+04:16:16 VAXC DECnet on
+04:16:35 OVMXA logged in
+04:16:35 sample P0 before
+04:16:35 P0f STOP NETACP 10000004
+04:17:09 P C1 start
+04:17:20 P C1 done %X106710D2
+04:17:20 P C2 start
+04:18:20 P C2 done %X1067109A
+04:18:20 P C3 start
+04:18:20 P C3 done %X106C109C
+04:18:20 PC NETACP foreground image ended
+04:18:20 DONE

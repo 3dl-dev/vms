@@ -477,4 +477,7 @@ int32_t str$find_first_not_in_set(const struct dsc$descriptor_s *src, const stru
 #include "ovmx_optargs.h"
 #define str$concat(...) OVMX_PAD_16(str$concat, __VA_ARGS__)
 
+/* A 32-bit-pointer DEC C unit binds the VMS-ABI names (vms-7b3). */
+#include "ovmx_vmsabi_names.h"
+
 #endif /* __STR_ROUTINES_H */

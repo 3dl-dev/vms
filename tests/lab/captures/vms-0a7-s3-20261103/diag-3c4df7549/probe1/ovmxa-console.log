@@ -1,0 +1,503 @@
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID.80000001H:ECX.svm [bit 2]
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+Booting from ROM..c[?7l[2J[    0.000000] Linux version 6.12.103-ovmx (ovmx@ovmx) (gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #2 SMP PREEMPT_DYNAMIC Thu Jan  1 00:00:00 UTC 1970
+[    0.000000] Command line: console=ttyS0 loglevel=7 print-fatal-signals=1
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x000000001ffdcfff] usable
+[    0.000000] BIOS-e820: [mem 0x000000001ffdd000-0x000000001fffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000feffc000-0x00000000feffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+[    0.000000] NX (Execute Disable) protection: active
+[    0.000000] APIC: Static calls initialized
+[    0.000000] SMBIOS 3.0.0 present.
+[    0.000000] DMI: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+[    0.000000] DMI: Memory slots populated: 1/1
+[    0.000000] Hypervisor detected: KVM
+[    0.000000] last_pfn = 0x1ffdd max_arch_pfn = 0x400000000
+[    0.000000] kvm-clock: Using msrs 4b564d01 and 4b564d00
+[    0.000002] kvm-clock: using sched offset of 1410229292 cycles
+[    0.000005] clocksource: kvm-clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+[    0.000008] tsc: Detected 2207.998 MHz processor
+[    0.001344] last_pfn = 0x1ffdd max_arch_pfn = 0x400000000
+[    0.002274] MTRR map: 4 entries (3 fixed + 1 variable; max 19), built from 8 variable MTRRs
+[    0.002310] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+[    0.012068] found SMP MP-table at [mem 0x000f5470-0x000f547f]
+[    0.012207] RAMDISK: [mem 0x1ff39000-0x1ffcffff]
+[    0.012297] ACPI: Early table checksum verification disabled
+[    0.012304] ACPI: RSDP 0x00000000000F5280 000014 (v00 BOCHS )
+[    0.012358] ACPI: RSDT 0x000000001FFE1C2F 000034 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.012368] ACPI: FACP 0x000000001FFE1AE3 000074 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.012411] ACPI: DSDT 0x000000001FFE0040 001AA3 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.012416] ACPI: FACS 0x000000001FFE0000 000040
+[    0.012420] ACPI: APIC 0x000000001FFE1B57 000078 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.012425] ACPI: HPET 0x000000001FFE1BCF 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.012429] ACPI: WAET 0x000000001FFE1C07 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.012433] ACPI: Reserving FACP table memory at [mem 0x1ffe1ae3-0x1ffe1b56]
+[    0.012435] ACPI: Reserving DSDT table memory at [mem 0x1ffe0040-0x1ffe1ae2]
+[    0.012436] ACPI: Reserving FACS table memory at [mem 0x1ffe0000-0x1ffe003f]
+[    0.012437] ACPI: Reserving APIC table memory at [mem 0x1ffe1b57-0x1ffe1bce]
+[    0.012439] ACPI: Reserving HPET table memory at [mem 0x1ffe1bcf-0x1ffe1c06]
+[    0.012440] ACPI: Reserving WAET table memory at [mem 0x1ffe1c07-0x1ffe1c2e]
+[    0.016869] No NUMA configuration found
+[    0.016873] Faking a node at [mem 0x0000000000000000-0x000000001ffdcfff]
+[    0.016880] NODE_DATA(0) allocated [mem 0x1ffd9940-0x1ffdcfff]
+[    0.017332] Zone ranges:
+[    0.017334]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+[    0.017337]   DMA32    [mem 0x0000000001000000-0x000000001ffdcfff]
+[    0.017339]   Normal   empty
+[    0.017340] Movable zone start for each node
+[    0.017341] Early memory node ranges
+[    0.017342]   node   0: [mem 0x0000000000001000-0x000000000009efff]
+[    0.017344]   node   0: [mem 0x0000000000100000-0x000000001ffdcfff]
+[    0.017346] Initmem setup node 0 [mem 0x0000000000001000-0x000000001ffdcfff]
+[    0.020256] On node 0, zone DMA: 1 pages in unavailable ranges
+[    0.022870] On node 0, zone DMA: 97 pages in unavailable ranges
+[    0.109173] On node 0, zone DMA32: 35 pages in unavailable ranges
+[    0.114960] ACPI: PM-Timer IO Port: 0x608
+[    0.115012] ACPI: LAPIC_NMI (acpi_id[0xff] dfl dfl lint[0x1])
+[    0.115480] IOAPIC[0]: apic_id 0, version 17, address 0xfec00000, GSI 0-23
+[    0.115488] ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+[    0.115491] ACPI: INT_SRC_OVR (bus 0 bus_irq 5 global_irq 5 high level)
+[    0.115493] ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+[    0.115495] ACPI: INT_SRC_OVR (bus 0 bus_irq 10 global_irq 10 high level)
+[    0.115497] ACPI: INT_SRC_OVR (bus 0 bus_irq 11 global_irq 11 high level)
+[    0.115503] ACPI: Using ACPI (MADT) for SMP configuration information
+[    0.115504] ACPI: HPET id: 0x8086a201 base: 0xfed00000
+[    0.115530] CPU topo: Max. logical packages:   1
+[    0.115532] CPU topo: Max. logical dies:       1
+[    0.115532] CPU topo: Max. dies per package:   1
+[    0.115539] CPU topo: Max. threads per core:   1
+[    0.115540] CPU topo: Num. cores per package:     1
+[    0.115541] CPU topo: Num. threads per package:   1
+[    0.115542] CPU topo: Allowing 1 present CPUs plus 0 hotplug CPUs
+[    0.115648] kvm-guest: APIC: eoi() replaced with kvm_guest_apic_eoi_write()
+[    0.115753] PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+[    0.115756] PM: hibernation: Registered nosave memory: [mem 0x0009f000-0x000fffff]
+[    0.115758] [mem 0x20000000-0xfeffbfff] available for PCI devices
+[    0.115760] Booting paravirtualized kernel on KVM
+[    0.115763] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1910969940391419 ns
+[    0.123778] setup_percpu: NR_CPUS:64 nr_cpumask_bits:1 nr_cpu_ids:1 nr_node_ids:1
+[    0.126109] percpu: Embedded 56 pages/cpu s192216 r8192 d28968 u2097152
+[    0.126368] Kernel command line: console=ttyS0 loglevel=7 print-fatal-signals=1
+[    0.131605] Dentry cache hash table entries: 65536 (order: 7, 524288 bytes, linear)
+[    0.134250] Inode-cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[    0.134494] Fallback order for Node 0: 0 
+[    0.134499] Built 1 zonelists, mobility grouping on.  Total pages: 130939
+[    0.134502] Policy zone: DMA32
+[    0.134504] mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+[    0.140935] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+[    0.141150] Kernel/User page tables isolation: enabled
+[    0.145205] Dynamic Preempt: voluntary
+[    0.146926] rcu: Preemptible hierarchical RCU implementation.
+[    0.146928] rcu: 	RCU event tracing is enabled.
+[    0.146929] rcu: 	RCU restricting CPUs from NR_CPUS=64 to nr_cpu_ids=1.
+[    0.146931] 	Trampoline variant of Tasks RCU enabled.
+[    0.146932] 	Tracing variant of Tasks RCU enabled.
+[    0.146933] rcu: RCU calculated value of scheduler-enlistment delay is 100 jiffies.
+[    0.146934] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=1
+[    0.146980] RCU Tasks: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+[    0.146983] RCU Tasks Trace: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+[    0.157753] NR_IRQS: 4352, nr_irqs: 256, preallocated irqs: 16
+[    0.158883] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    0.158926] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+[    0.160311] Console: colour *CGA 80x25
+[    0.160752] printk: legacy console [ttyS0] enabled
+[    1.467138] ACPI: Core revision 20240827
+[    1.476188] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    1.493291] APIC: Switch to symmetric I/O mode setup
+[    1.526993] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    1.537898] clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x1fd3b6211b4, max_idle_ns: 440795230313 ns
+[    1.556521] Calibrating delay loop (skipped) preset value.. 4415.99 BogoMIPS (lpj=2207998)
+[    1.563681] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    1.564524] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    1.565531] Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization
+[    1.566524] Spectre V2 : Mitigation: Retpolines
+[    1.567522] Spectre V2 : Spectre v2 / SpectreRSB: Filling RSB on context switch and VMEXIT
+[    1.568523] Speculative Store Bypass: Vulnerable
+[    1.570523] MDS: Vulnerable: Clear CPU buffers attempted, no microcode
+[    1.571524] MMIO Stale Data: Unknown: No mitigations
+[    1.572525] active return thunk: its_return_thunk
+[    1.573523] ITS: Mitigation: Aligned branch/return thunks
+[    1.574527] x86/fpu: x87 FPU will use FXSAVE
+[    1.619514] Freeing SMP alternatives memory: 48K
+[    1.619534] pid_max: default: 32768 minimum: 301
+[    1.620554] LSM: initializing lsm=capability,selinux
+[    1.621549] SELinux:  Initializing.
+[    1.623524] Mount-cache hash table entries: 1024 (order: 1, 8192 bytes, linear)
+[    1.624616] Mountpoint-cache hash table entries: 1024 (order: 1, 8192 bytes, linear)
+[    1.701522] APIC calibration not consistent with PM-Timer: 98ms instead of 100ms
+[    1.702514] APIC delta adjusted to PM-Timer: 6251564 (6178894)
+[    1.704392] smpboot: CPU0: Intel QEMU Virtual CPU version 2.5+ (family: 0xf, model: 0x6b, stepping: 0x1)
+[    1.708711] Performance Events: unsupported Netburst CPU model 107 no PMU driver, software events only.
+[    1.709892] signal: max sigframe size: 1440
+[    1.711567] rcu: Hierarchical SRCU implementation.
+[    1.712523] rcu: 	Max phase no-delay instances is 400.
+[    1.724777] smp: Bringing up secondary CPUs ...
+[    1.725537] smp: Brought up 1 node, 1 CPU
+[    1.726529] smpboot: Total of 1 processors activated (4415.99 BogoMIPS)
+[    1.728851] Memory: 471352K/523756K available (18432K kernel code, 2859K rwdata, 7076K rodata, 2792K init, 992K bss, 49416K reserved, 0K cma-reserved)
+[    1.730552] devtmpfs: initialized
+[    1.733706] futex hash table entries: 256 (order: 2, 16384 bytes, linear)
+[    1.735520] PM: RTC time: 03:21:46, date: 2026-11-03
+[    1.738151] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    1.739543] audit: initializing netlink subsys (disabled)
+[    1.741785] thermal_sys: Registered thermal governor 'step_wise'
+[    1.741790] thermal_sys: Registered thermal governor 'user_space'
+[    1.742545] audit: type=2000 audit(1793676105.598:1): state=initialized audit_enabled=0 res=1
+[    1.745554] cpuidle: using governor menu
+[    1.748643] PCI: Using configuration type 1 for base access
+[    1.750722] kprobes: kprobe jump-optimization is enabled. All kprobes are optimized if possible.
+[    1.755192] HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+[    1.755522] HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+[    1.759703] ACPI: Added _OSI(Module Device)
+[    1.761525] ACPI: Added _OSI(Processor Device)
+[    1.763531] ACPI: Added _OSI(Processor Aggregator Device)
+[    1.767817] ACPI: 1 ACPI AML tables successfully acquired and loaded
+[    1.776825] ACPI: Interpreter enabled
+[    1.778542] ACPI: PM: (supports S0 S3 S4 S5)
+[    1.780531] ACPI: Using IOAPIC for interrupt routing
+[    1.782676] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[    1.783522] PCI: Using E820 reservations for host bridge windows
+[    1.787097] ACPI: Enabled 2 GPEs in block 00 to 0F
+[    1.808754] ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-ff])
+[    1.809538] acpi PNP0A03:00: _OSC: OS supports [ASPM ClockPM Segments MSI HPX-Type3]
+[    1.810527] acpi PNP0A03:00: _OSC: not requesting OS control; OS requires [ExtendedConfig ASPM ClockPM MSI]
+[    1.813964] acpi PNP0A03:00: fail to add MMCONFIG information, can't access extended configuration space under this bridge
+[    1.814858] PCI host bridge to bus 0000:00
+[    1.817988] pci_bus 0000:00: root bus resource [io  0x0000-0x0cf7 window]
+[    1.819527] pci_bus 0000:00: root bus resource [io  0x0d00-0xffff window]
+[    1.822956] pci_bus 0000:00: root bus resource [mem 0x000a0000-0x000bffff window]
+[    1.823526] pci_bus 0000:00: root bus resource [mem 0x20000000-0xfebfffff window]
+[    1.825759] pci_bus 0000:00: root bus resource [mem 0x100000000-0x17fffffff window]
+[    1.831100] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    1.832670] pci 0000:00:00.0: [8086:1237] type 00 class 0x060000 conventional PCI endpoint
+[    1.849770] pci 0000:00:01.0: [8086:7000] type 00 class 0x060100 conventional PCI endpoint
+[    1.870653] pci 0000:00:01.1: [8086:7010] type 00 class 0x010180 conventional PCI endpoint
+[    1.881522] pci 0000:00:01.1: BAR 4 [io  0xc0a0-0xc0af]
+[    1.886246] pci 0000:00:01.1: BAR 0 [io  0x01f0-0x01f7]: legacy IDE quirk
+[    1.886526] pci 0000:00:01.1: BAR 1 [io  0x03f6]: legacy IDE quirk
+[    1.887526] pci 0000:00:01.1: BAR 2 [io  0x0170-0x0177]: legacy IDE quirk
+[    1.888527] pci 0000:00:01.1: BAR 3 [io  0x0376]: legacy IDE quirk
+[    1.913380] pci 0000:00:01.3: [8086:7113] type 00 class 0x068000 conventional PCI endpoint
+[    1.929523] pci 0000:00:01.3: quirk: [io  0x0600-0x063f] claimed by PIIX4 ACPI
+[    1.930694] pci 0000:00:01.3: quirk: [io  0x0700-0x070f] claimed by PIIX4 SMB
+[    1.944290] pci 0000:00:02.0: [1af4:1000] type 00 class 0x020000 conventional PCI endpoint
+[    1.947524] pci 0000:00:02.0: BAR 0 [io  0xc080-0xc09f]
+[    1.951524] pci 0000:00:02.0: BAR 1 [mem 0xfebfe000-0xfebfefff]
+[    1.960526] pci 0000:00:02.0: BAR 4 [mem 0xfebf4000-0xfebf7fff 64bit pref]
+[    2.013521] pci 0000:00:03.0: [1af4:1001] type 00 class 0x010000 conventional PCI endpoint
+[    2.018521] pci 0000:00:03.0: BAR 0 [io  0xc000-0xc07f]
+[    2.022524] pci 0000:00:03.0: BAR 1 [mem 0xfebff000-0xfebfffff]
+[    2.033345] pci 0000:00:03.0: BAR 4 [mem 0xfebf8000-0xfebfbfff 64bit pref]
+[    2.119917] ACPI: PCI: Interrupt link LNKA configured for IRQ 10
+[    2.122548] ACPI: PCI: Interrupt link LNKB configured for IRQ 10
+[    2.127163] ACPI: PCI: Interrupt link LNKC configured for IRQ 11
+[    2.128882] ACPI: PCI: Interrupt link LNKD configured for IRQ 11
+[    2.131555] ACPI: PCI: Interrupt link LNKS configured for IRQ 9
+[    2.135889] iommu: Default domain type: Translated
+[    2.137519] iommu: DMA domain TLB invalidation policy: lazy mode
+[    2.140852] SCSI subsystem initialized
+[    2.145259] ACPI: bus type USB registered
+[    2.145562] usbcore: registered new interface driver usbfs
+[    2.147649] usbcore: registered new interface driver hub
+[    2.149705] usbcore: registered new device driver usb
+[    2.151786] pps_core: LinuxPPS API ver. 1 registered
+[    2.152524] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    2.155724] PTP clock support registered
+[    2.161354] Advanced Linux Sound Architecture Driver Initialized.
+[    2.163564] NetLabel: Initializing
+[    2.164523] NetLabel:  domain hash size = 128
+[    2.165523] NetLabel:  protocols = UNLABELED CIPSOv4 CALIPSO
+[    2.168918] NetLabel:  unlabeled traffic allowed by default
+[    2.170573] PCI: Using ACPI for IRQ routing
+[    2.176835] vgaarb: loaded
+[    2.177656] hpet: 3 channels of 0 reserved for per-cpu timers
+[    2.180693] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+[    2.181522] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+[    2.192204] clocksource: Switched to clocksource kvm-clock
+[    2.215418] VFS: Disk quotas dquot_6.6.0
+[    2.227999] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    2.241991] pnp: PnP ACPI init
+[    2.249138] pnp: PnP ACPI: found 5 devices
+[    2.299920] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+[    2.315918] NET: Registered PF_INET protocol family
+[    2.325798] IP idents hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    2.340787] tcp_listen_portaddr_hash hash table entries: 256 (order: 0, 4096 bytes, linear)
+[    2.356149] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    2.369135] TCP established hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[    2.382471] TCP bind hash table entries: 4096 (order: 5, 131072 bytes, linear)
+[    2.396591] TCP: Hash tables configured (established 4096 bind 4096)
+[    2.409228] UDP hash table entries: 256 (order: 1, 8192 bytes, linear)
+[    2.420580] UDP-Lite hash table entries: 256 (order: 1, 8192 bytes, linear)
+[    2.433347] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    2.444571] RPC: Registered named UNIX socket transport module.
+[    2.456012] RPC: Registered udp transport module.
+[    2.465003] RPC: Registered tcp transport module.
+[    2.474009] RPC: Registered tcp-with-tls transport module.
+[    2.484716] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    2.497299] pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+[    2.509504] pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+[    2.520789] pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000bffff window]
+[    2.533180] pci_bus 0000:00: resource 7 [mem 0x20000000-0xfebfffff window]
+[    2.546483] pci_bus 0000:00: resource 8 [mem 0x100000000-0x17fffffff window]
+[    2.559102] pci 0000:00:01.0: PIIX3: Enabling Passive Release
+[    2.569294] pci 0000:00:00.0: quirk_passive_release+0x0/0xb0 took 10111 usecs
+[    2.581899] pci 0000:00:00.0: Limiting direct PCI/PCI transfers
+[    2.592195] pci 0000:00:00.0: quirk_natoma+0x0/0x40 took 10054 usecs
+[    2.604990] PCI: CLS 0 bytes, default 64
+[    2.612279] kwatchdog (40) used greatest stack depth: 15656 bytes left
+[    2.624536] clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x1fd3b6211b4, max_idle_ns: 440795230313 ns
+[    2.641026] Unpacking initramfs...
+[    2.662070] Initialise system trusted keyrings
+[    2.678199] workingset: timestamp_bits=56 max_order=17 bucket_order=0
+[    2.699611] Freeing initrd memory: 604K
+[    2.707244] NFS: Registering the id_resolver key type
+[    2.716184] Key type id_resolver registered
+[    2.723286] Key type id_legacy registered
+[    2.730440] 9p: Installing v9fs 9p2000 file system support
+[    2.764239] Key type asymmetric registered
+[    2.770989] Asymmetric key parser 'x509' registered
+[    2.777893] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 251)
+[    2.787616] io scheduler mq-deadline registered
+[    2.794140] io scheduler kyber registered
+[    2.801009] input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input0
+[    2.810909] ACPI: button: Power Button [PWRF]
+[    2.828934] ACPI: \_SB_.LNKB: Enabled at IRQ 10
+[    2.851005] ACPI: \_SB_.LNKC: Enabled at IRQ 11
+[    2.863017] Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled
+[    2.870375] 00:03: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+[    2.878984] Non-volatile memory driver v1.3
+[    2.883027] Linux agpgart interface v0.103
+[    2.887207] ACPI: bus type drm_connector registered
+[    2.901396] loop: module loaded
+[    2.905195] virtio_blk virtio1: 1/0/0 default/read/poll queues
+[    2.916098] virtio_blk virtio1: [vda] 262144 512-byte logical blocks (134 MB/128 MiB)
+[    2.929873] scsi host0: ata_piix
+[    2.933766] scsi host1: ata_piix
+[    2.937180] ata1: PATA max MWDMA2 cmd 0x1f0 ctl 0x3f6 bmdma 0xc0a0 irq 14 lpm-pol 0
+[    2.944986] ata2: PATA max MWDMA2 cmd 0x170 ctl 0x376 bmdma 0xc0a8 irq 15 lpm-pol 0
+[    2.965998] e100: Intel(R) PRO/100 Network Driver
+[    2.970673] e100: Copyright(c) 1999-2006 Intel Corporation
+[    2.976504] e1000: Intel(R) PRO/1000 Network Driver
+[    2.981755] e1000: Copyright (c) 1999-2006 Intel Corporation.
+[    2.988170] e1000e: Intel(R) PRO/1000 Network Driver
+[    2.993685] e1000e: Copyright(c) 1999 - 2015 Intel Corporation.
+[    3.000464] sky2: driver version 1.30
+[    3.005004] usbcore: registered new interface driver usblp
+[    3.012481] usbcore: registered new interface driver usb-storage
+[    3.021032] i8042: PNP: PS/2 Controller [PNP0303:KBD,PNP0f13:MOU] at 0x60,0x64 irq 1,12
+[    3.036450] serio: i8042 KBD port at 0x60,0x64 irq 1
+[    3.041283] serio: i8042 AUX port at 0x60,0x64 irq 12
+[    3.048310] input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input1
+[    3.056549] rtc_cmos 00:04: RTC can wake from S4
+[    3.066803] rtc_cmos 00:04: registered as rtc0
+[    3.076118] rtc_cmos 00:04: alarms up to one day, y3k, 242 bytes nvram, hpet irqs
+[    3.092282] device-mapper: ioctl: 4.48.0-ioctl (2023-03-01) initialised: dm-devel@lists.linux.dev
+[    3.108755] intel_pstate: CPU model not supported
+[    3.113853] hid: raw HID events driver (C) Jiri Kosina
+[    3.120596] usbcore: registered new interface driver usbhid
+[    3.128063] usbhid: USB HID core driver
+[    3.134784] Initializing XFRM netlink socket
+[    3.141172] NET: Registered PF_INET6 protocol family
+[    3.149358] Segment Routing with IPv6
+[    3.153986] In-situ OAM (IOAM) with IPv6
+[    3.158817] sit: IPv6, IPv4 and MPLS over IPv4 tunneling driver
+[    3.167207] NET: Registered PF_PACKET protocol family
+[    3.174064] 9pnet: Installing 9P2000 support
+[    3.179167] Key type dns_resolver registered
+[    3.184324] IPI shorthand broadcast: enabled
+[    3.193991] registered taskstats version 1
+[    3.198277] Loading compiled-in X.509 certificates
+[    3.203189] kworker/u4:0 (52) used greatest stack depth: 15256 bytes left
+[    3.210413] Loaded X.509 cert 'OVMX ephemeral module signing key: 6f1f918872644a06a7ddfe1bcb4a197036498d1e'
+[    3.224840] Demotion targets for Node 0: null
+[    3.230738] PM:   Magic number: 2:394:360
+[    3.235930] printk: legacy console [netcon0] enabled
+[    3.241831] netconsole: network logging started
+[    3.247321] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    3.256606] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    3.263268] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    3.271775] platform regulatory.0: Direct firmware load for regulatory.db failed with error -2
+[    3.281612] Unstable clock detected, switching default tracing clock to "global"
+[    3.281612] If you want to keep using the local clock, then add:
+[    3.281612]   "trace_clock=local"
+[    3.281612] on the kernel command line
+[    3.306451] cfg80211: failed to load regulatory.db
+[    3.312509] ALSA device list:
+[    3.319103]   No soundcards found.
+[    3.329790] Freeing unused kernel image (initmem) memory: 2792K
+[    3.334076] Write protecting the kernel read-only data: 26624k
+[    3.338912] Freeing unused kernel image (rodata/data gap) memory: 1116K
+[    3.395500] x86/mm: Checked W+X mappings: passed, no W+X pages found.
+[    3.401424] x86/mm: Checking user space page tables
+[    3.460505] x86/mm: Checked W+X mappings: passed, no W+X pages found.
+[    3.466159] Run /init as init process
+OVMX/Linux -- SYSKRNL (Linux kernel)
+
+    OpenVMX V0.7-15 - OpenVMS-compatible
+     3-NOV-2026 03:21:47.46
+
+%STDRV-I-STARTUP, OpenVMX startup begun at  3-NOV-2026 03:21:47.52
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:21:47.53  %%%%%%%%%%%
+Operator _OVMX$OPA0: has been enabled, username SYSTEM
+
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:21:47.61  %%%%%%%%%%%
+Operator status for operator _OVMX$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+The OVMX system is now executing the site-specific startup commands.
+%RUN-S-PROC_ID, identification of created process is 10000005
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:21:48.71  %%%%%%%%%%%
+Message from user SYSTEM on OVMX
+DECnet starting
+
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-15 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMX V0.7-15 - OpenVMS-compatible[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+ $ SHOW SYSTEM
+OpenVMX V0.7-15 - OpenVMS-compatible  on node OVMX   3-NOV-2026 03:22:04.41  Uptime  0 00:00:19
+  Pid    Process Name          CPU         Page flts   Pages
+10000001 STARTUP            0 00:00:00.83        101     358
+10000002 OPCOM              0 00:00:00.02        270     729
+10000006 SYSTEM             0 00:00:00.03       1102     916
+10000005 JOB_CONTROL        0 00:00:00.00         93     352
+10000004 NETACP             0 00:00:00.99        277     505
+ $ TYPE SYS$MANAGER:NETACP.LOG
+03-Nov-2026 03:21:48 DECNETD-I-DATALINK, datalink open on ETH0: via the executive (VMS_IOCTL_L2_OPEN, PHY_IO; no CAP_NET_RAW), station address AA-00-04-00-C3-07
+03-Nov-2026 03:21:48 DECNETD-I-STARTED, NETACP up: DECnet Phase IV endnode on circuit ETH-0 (wire engine demoted to NETACP's datalink; the raw L2 path hidden behind the _NET: device face, Rule 1)
+Node Volatile Summary
+Executor node = 1.963 (OVMXA)
+State                    = on
+Identification           = OVMX DECnet-compatible networking
+Type                     = nonrouting IV (endnode)
+Known Circuit Volatile Summary
+Circuit = ETH-0
+State                    = on
+Designated router        = none
+Hello timer              = 15
+Adjacent nodes           = 0
+03-Nov-2026 03:21:48 DECNETD-I-CTERMLISTEN, serving inbound $ SET HOST (Session Control object 42 -> LOGINOUT on RTAn:) and file access (object 17 -> FAL.EXE as the user); up to 32 sessions, 3 per node
+03-Nov-2026 03:21:49 DECNETD-I-BROKER, outbound logical links are brokered for local processes ($ASSIGN _NET:): request mailbox MBA2: = DNET$NETACP_REQ; up to 32 links in the pool, 3 per process
+03-Nov-2026 03:21:56 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+ $ SHOW SYSTEM
+OpenVMX V0.7-15 - OpenVMS-compatible  on node OVMX   3-NOV-2026 03:22:20.05  Uptime  0 00:00:34
+  Pid    Process Name          CPU         Page flts   Pages
+10000007                    0 00:00:00.01        422     640
+10000001 STARTUP            0 00:00:00.83        101     358
+10000002 OPCOM              0 00:00:00.02        270     729
+10000006 SYSTEM             0 00:00:00.06       1110     916
+10000005 JOB_CONTROL        0 00:00:00.00         93     352
+10000004 NETACP             0 00:00:01.95        373     537
+ $ TYPE SYS$MANAGER:NETACP.LOG
+03-Nov-2026 03:21:48 DECNETD-I-DATALINK, datalink open on ETH0: via the executive (VMS_IOCTL_L2_OPEN, PHY_IO; no CAP_NET_RAW), station address AA-00-04-00-C3-07
+03-Nov-2026 03:21:48 DECNETD-I-STARTED, NETACP up: DECnet Phase IV endnode on circuit ETH-0 (wire engine demoted to NETACP's datalink; the raw L2 path hidden behind the _NET: device face, Rule 1)
+Node Volatile Summary
+Executor node = 1.963 (OVMXA)
+State                    = on
+Identification           = OVMX DECnet-compatible networking
+Type                     = nonrouting IV (endnode)
+Known Circuit Volatile Summary
+Circuit = ETH-0
+State                    = on
+Designated router        = none
+Hello timer              = 15
+Adjacent nodes           = 0
+03-Nov-2026 03:21:48 DECNETD-I-CTERMLISTEN, serving inbound $ SET HOST (Session Control object 42 -> LOGINOUT on RTAn:) and file access (object 17 -> FAL.EXE as the user); up to 32 sessions, 3 per node
+03-Nov-2026 03:21:49 DECNETD-I-BROKER, outbound logical links are brokered for local processes ($ASSIGN _NET:): request mailbox MBA2: = DNET$NETACP_REQ; up to 32 links in the pool, 3 per process
+03-Nov-2026 03:21:56 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+03-Nov-2026 03:22:11 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+03-Nov-2026 03:22:19 DECNETD-I-SESSTART, inbound SET HOST accepted on RTA0: -- LOGINOUT is authenticating (Remote Port Info: VAXC::SYSTEM)
+ $ SHOW SYSTEM
+OpenVMX V0.7-15 - OpenVMS-compatible  on node OVMX   3-NOV-2026 03:22:21.19  Uptime  0 00:00:35
+  Pid    Process Name          CPU         Page flts   Pages
+10000007                    0 00:00:00.01        436     672
+10000001 STARTUP            0 00:00:00.83        101     358
+10000002 OPCOM              0 00:00:00.02        270     729
+10000006 SYSTEM             0 00:00:00.10       1118     916
+10000005 JOB_CONTROL        0 00:00:00.00         93     352
+10000004 NETACP             0 00:00:01.97        374     537
+ $ TYPE SYS$MANAGER:NETACP.LOG
+03-Nov-2026 03:21:48 DECNETD-I-DATALINK, datalink open on ETH0: via the executive (VMS_IOCTL_L2_OPEN, PHY_IO; no CAP_NET_RAW), station address AA-00-04-00-C3-07
+03-Nov-2026 03:21:48 DECNETD-I-STARTED, NETACP up: DECnet Phase IV endnode on circuit ETH-0 (wire engine demoted to NETACP's datalink; the raw L2 path hidden behind the _NET: device face, Rule 1)
+Node Volatile Summary
+Executor node = 1.963 (OVMXA)
+State                    = on
+Identification           = OVMX DECnet-compatible networking
+Type                     = nonrouting IV (endnode)
+Known Circuit Volatile Summary
+Circuit = ETH-0
+State                    = on
+Designated router        = none
+Hello timer              = 15
+Adjacent nodes           = 0
+03-Nov-2026 03:21:48 DECNETD-I-CTERMLISTEN, serving inbound $ SET HOST (Session Control object 42 -> LOGINOUT on RTAn:) and file access (object 17 -> FAL.EXE as the user); up to 32 sessions, 3 per node
+03-Nov-2026 03:21:49 DECNETD-I-BROKER, outbound logical links are brokered for local processes ($ASSIGN _NET:): request mailbox MBA2: = DNET$NETACP_REQ; up to 32 links in the pool, 3 per process
+03-Nov-2026 03:21:56 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+03-Nov-2026 03:22:11 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+03-Nov-2026 03:22:19 DECNETD-I-SESSTART, inbound SET HOST accepted on RTA0: -- LOGINOUT is authenticating (Remote Port Info: VAXC::SYSTEM)
+ $ SHOW SYSTEM
+OpenVMX V0.7-15 - OpenVMS-compatible  on node OVMX   3-NOV-2026 03:22:32.62  Uptime  0 00:00:47
+  Pid    Process Name          CPU         Page flts   Pages
+10000001 STARTUP            0 00:00:00.83        101     358
+10000002 OPCOM              0 00:00:00.02        270     729
+10000006 SYSTEM             0 00:00:00.14       1126     916
+10000005 JOB_CONTROL        0 00:00:00.00         93     352
+ $ TYPE SYS$MANAGER:NETACP.LOG
+03-Nov-2026 03:21:48 DECNETD-I-DATALINK, datalink open on ETH0: via the executive (VMS_IOCTL_L2_OPEN, PHY_IO; no CAP_NET_RAW), station address AA-00-04-00-C3-07
+03-Nov-2026 03:21:48 DECNETD-I-STARTED, NETACP up: DECnet Phase IV endnode on circuit ETH-0 (wire engine demoted to NETACP's datalink; the raw L2 path hidden behind the _NET: device face, Rule 1)
+Node Volatile Summary
+Executor node = 1.963 (OVMXA)
+State                    = on
+Identification           = OVMX DECnet-compatible networking
+Type                     = nonrouting IV (endnode)
+Known Circuit Volatile Summary
+Circuit = ETH-0
+State                    = on
+Designated router        = none
+Hello timer              = 15
+Adjacent nodes           = 0
+03-Nov-2026 03:21:48 DECNETD-I-CTERMLISTEN, serving inbound $ SET HOST (Session Control object 42 -> LOGINOUT on RTAn:) and file access (object 17 -> FAL.EXE as the user); up to 32 sessions, 3 per node
+03-Nov-2026 03:21:49 DECNETD-I-BROKER, outbound logical links are brokered for local processes ($ASSIGN _NET:): request mailbox MBA2: = DNET$NETACP_REQ; up to 32 links in the pool, 3 per process
+03-Nov-2026 03:21:56 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+03-Nov-2026 03:22:11 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+03-Nov-2026 03:22:19 DECNETD-I-SESSTART, inbound SET HOST accepted on RTA0: -- LOGINOUT is authenticating (Remote Port Info: VAXC::SYSTEM)
+ $ SHOW SYSTEM
+OpenVMX V0.7-15 - OpenVMS-compatible  on node OVMX   3-NOV-2026 03:22:35.87  Uptime  0 00:00:50
+  Pid    Process Name          CPU         Page flts   Pages
+10000001 STARTUP            0 00:00:00.83        101     358
+10000002 OPCOM              0 00:00:00.02        270     729
+10000006 SYSTEM             0 00:00:00.18       1134     916
+10000005 JOB_CONTROL        0 00:00:00.00         93     352
+ $ TYPE SYS$MANAGER:NETACP.LOG
+03-Nov-2026 03:21:48 DECNETD-I-DATALINK, datalink open on ETH0: via the executive (VMS_IOCTL_L2_OPEN, PHY_IO; no CAP_NET_RAW), station address AA-00-04-00-C3-07
+03-Nov-2026 03:21:48 DECNETD-I-STARTED, NETACP up: DECnet Phase IV endnode on circuit ETH-0 (wire engine demoted to NETACP's datalink; the raw L2 path hidden behind the _NET: device face, Rule 1)
+Node Volatile Summary
+Executor node = 1.963 (OVMXA)
+State                    = on
+Identification           = OVMX DECnet-compatible networking
+Type                     = nonrouting IV (endnode)
+Known Circuit Volatile Summary
+Circuit = ETH-0
+State                    = on
+Designated router        = none
+Hello timer              = 15
+Adjacent nodes           = 0
+03-Nov-2026 03:21:48 DECNETD-I-CTERMLISTEN, serving inbound $ SET HOST (Session Control object 42 -> LOGINOUT on RTAn:) and file access (object 17 -> FAL.EXE as the user); up to 32 sessions, 3 per node
+03-Nov-2026 03:21:49 DECNETD-I-BROKER, outbound logical links are brokered for local processes ($ASSIGN _NET:): request mailbox MBA2: = DNET$NETACP_REQ; up to 32 links in the pool, 3 per process
+03-Nov-2026 03:21:56 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+03-Nov-2026 03:22:11 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+03-Nov-2026 03:22:19 DECNETD-I-SESSTART, inbound SET HOST accepted on RTA0: -- LOGINOUT is authenticating (Remote Port Info: VAXC::SYSTEM)
+ $ 

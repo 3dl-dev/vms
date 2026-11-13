@@ -3,7 +3,7 @@
 # Phase IV permanent databases, so boot-time STARTNET starts NETACP and a
 # visitor can SET HOST between the OVMX nodes (rd vms-5843).
 #
-# WHAT A VMS SITE DOES: run NCP once -- SET EXECUTOR ADDRESS/NAME/STATE ON and
+# WHAT A VMS SITE DOES: run NCP once -- DEFINE EXECUTOR ADDRESS/NAME/STATE ON and
 # DEFINE NODE for its peers -- and reboot; @SYS$MANAGER:STARTNET finds
 # SYS$SYSTEM:NETNODE_LOCAL.DAT and starts the network. The browser demo cannot
 # boot each node once to type that, so this does the same thing offline:

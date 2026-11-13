@@ -315,6 +315,17 @@ else
     SECOND_SERIAL=(-serial "file:$ASSERT_TRANSCRIPT")
 fi
 
+# rd vms-6a1b: KE_CONSOLE_LOG, when set, also writes the guest console to that
+# file AS IT IS PRODUCED (QEMU's chardev logfile). The console is otherwise only
+# captured into $OUTPUT below and printed once QEMU exits, so a run its CALLER
+# stops early (the negctl shard budget, a CI job limit) left no trace of where
+# the guest was. Unset, the console path is exactly -serial stdio as before.
+if [ -n "${KE_CONSOLE_LOG:-}" ]; then
+    FIRST_SERIAL=(-chardev "stdio,id=ovmxcon0,logfile=$KE_CONSOLE_LOG" -serial chardev:ovmxcon0)
+else
+    FIRST_SERIAL=(-serial stdio)
+fi
+
 echo "=== OVMX QEMU Test Runner ==="
 echo "Architecture: $ARCH"
 echo "QEMU: $QEMU"
@@ -350,7 +361,7 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -netdev user,id=net0 \
     -device virtio-net-pci,netdev=net0,romfile= \
     -nodefaults \
-    -serial stdio \
+    "${FIRST_SERIAL[@]}" \
     "${SECOND_SERIAL[@]}" \
     -drive if=none,id=ovmxdisk0,file="$OVMX_DISK0",format=raw \
     -device virtio-blk-pci,drive=ovmxdisk0 \

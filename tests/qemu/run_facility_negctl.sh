@@ -118,12 +118,25 @@
 #   FACILITY_NEGCTL_REQUIRE_RECORD 1 to fail when NO record is committed in the
 #                                  tree (default 0 -- see the comparison block
 #                                  at the bottom of this script)
+#   FACILITY_NEGCTL_BASE_TAG       the harness image tag (default
+#                                  ovmx-ktest-negctl-base:latest). A private tag
+#                                  keeps a local run off another run's image.
+#   NEGCTL_DEADLINE                epoch second by which this run must have
+#                                  stopped (rd vms-6a1b). Unset: no budget. Set:
+#                                  the guest still running at the deadline is
+#                                  stopped, the run reports the defect it was
+#                                  on with its partial console, names the
+#                                  defects it never reached, and exits 1.
+#   NEGCTL_DEATH_DIR               where consoles worth keeping go (default
+#                                  $RUNNER_TEMP/negctl-deaths); its live/
+#                                  holds inflight.txt and the console of the
+#                                  run in progress, written as the guest runs.
 
 set -u
 
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 MANIFEST="$REPO_ROOT/tests/qemu/facility_defects.sh"
-BASE_TAG=ovmx-ktest-negctl-base:latest
+BASE_TAG="${FACILITY_NEGCTL_BASE_TAG:-ovmx-ktest-negctl-base:latest}"
 
 # The execution-sourced attribution record (rd vms-d894, rd vms-659). This
 # script is the only thing in the program that executes anything, and until
@@ -241,6 +254,68 @@ RUNLOG=$(mktemp)
 trap 'rm -f "$OUTFILE" "$OUTFILE.raw" "$OUTFILE.map" "$OUTFILE.map.scoped" "$RUNLOG"
       if [ "$LIVE_RECORD_IS_TEMP" -eq 1 ]; then rm -f "$LIVE_RECORD"; fi' EXIT INT TERM
 
+# ---------------------------------------------------------------------------
+# rd vms-6a1b: a hung guest must end the run RED, naming the defect, never as a
+# CI job cancelled at its limit with the log thrown away. Two parts:
+#  - live/: before each guest starts, live/inflight.txt names it, and the
+#    guest's console is written to live/<label>.console as it is produced
+#    (run_tests.sh KE_CONSOLE_LOG). Whatever stops the job, that is on disk.
+#  - NEGCTL_DEADLINE: a guest still running at the deadline is stopped
+#    (`engine kill`) and run_harness returns BUDGET_RC; the callers report it.
+#    The per-guest wall (KE_WALL_TIMEOUT) is unchanged; this bounds the SUM.
+# ---------------------------------------------------------------------------
+DEATH_DIR="${NEGCTL_DEATH_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/negctl-deaths}"
+LIVE_DIR="$DEATH_DIR/live"
+mkdir -p "$LIVE_DIR" && chmod 0777 "$LIVE_DIR" || {
+    echo "FATAL: cannot create $LIVE_DIR for the live guest console"; exit 2; }
+BUDGET_RC=252
+
+# engine_run_bounded <label> <engine run args...>
+engine_run_bounded() {
+    _label=$1; shift
+    _cname="ovmx-negctl-$$-$_label"
+    _flag="$LIVE_DIR/.budget.$$"
+    rm -f "$LIVE_DIR/$_label.console" "$_flag"
+    printf '%s\tstarted %s\tdeadline %s\n' "$_label" "$(date -u +%FT%TZ)" \
+        "${NEGCTL_DEADLINE:-none}" >"$LIVE_DIR/inflight.txt"
+    if [ -n "${NEGCTL_DEADLINE:-}" ] && [ "$(date +%s)" -ge "$NEGCTL_DEADLINE" ]; then
+        return $BUDGET_RC
+    fi
+    "$ENGINE" run --rm --name "$_cname" -v "$LIVE_DIR:/negctl-live" \
+        -e "KE_CONSOLE_LOG=/negctl-live/$_label.console" "$@" &
+    _pid=$!
+    if [ -n "${NEGCTL_DEADLINE:-}" ]; then
+        ( while kill -0 "$_pid" 2>/dev/null; do
+              if [ "$(date +%s)" -ge "$NEGCTL_DEADLINE" ]; then
+                  : >"$_flag"; "$ENGINE" kill "$_cname" >/dev/null 2>&1; exit 0
+              fi
+              sleep 5
+          done ) &
+        _wpid=$!
+    else
+        _wpid=""
+    fi
+    wait "$_pid"; _rc=$?
+    if [ -n "$_wpid" ]; then wait "$_wpid" 2>/dev/null; fi
+    if [ -f "$_flag" ]; then rm -f "$_flag"; return $BUDGET_RC; fi
+    # Completed: the whole console is in the run's output; keep live/ small.
+    rm -f "$LIVE_DIR/$_label.console"
+    return $_rc
+}
+
+# budget_report <label> <defects never started...>: name the guest the budget
+# stopped and what it was doing, then the defects that never ran.
+budget_report() {
+    _label=$1; shift
+    echo "  FAIL: NEGCTL SHARD BUDGET EXHAUSTED (NEGCTL_DEADLINE $(date -u -d "@$NEGCTL_DEADLINE" +%FT%TZ 2>/dev/null || echo "$NEGCTL_DEADLINE")) while running '$_label'."
+    echo "        The guest was stopped there; it had not finished. Its console so far"
+    echo "        is kept as $LIVE_DIR/$_label.console. Last 60 lines:"
+    tail -60 "$LIVE_DIR/$_label.console" 2>/dev/null | tr -d '\r' | sed 's/^/  | /'
+    if [ "$#" -gt 0 ]; then
+        echo "  NOT RUN (the budget was gone): $*"
+    fi
+}
+
 # run_harness <defect|"">  -> normalised output in $OUTFILE
 # Returns the harness exit status, or:
 #   3     BROKEN FIXTURE (the injection did not land -- NOT a verdict)
@@ -273,7 +348,8 @@ run_harness() {
         # slows an uncontended boot (which still finishes in ~250s and never
         # reaches the wall); it only lets a starved boot complete instead of
         # SIGTERMing the run-order tail into a false-red rc=MISSING mass.
-        "$ENGINE" run --rm -e KE_WALL_TIMEOUT="${NEGCTL_WALL:-1800}" "$BASE_TAG" >"$OUTFILE.raw" 2>&1
+        engine_run_bounded pristine -e KE_WALL_TIMEOUT="${NEGCTL_WALL:-1800}" \
+            "$BASE_TAG" >"$OUTFILE.raw" 2>&1
     else
         # Defect run: same env-configurable wall. inject_and_run.sh honours an
         # inherited KE_WALL_TIMEOUT (its own default is also 1800), so passing it
@@ -281,7 +357,7 @@ run_harness() {
         # gets 2700 -- pristine and each defect run boot the full suite set at the
         # same cost, so both walls must move together or the flake just relocates
         # from the pristine control to the first defect run.
-        "$ENGINE" run --rm -e "FACILITY_DEFECT=$_defect" \
+        engine_run_bounded "$_defect" -e "FACILITY_DEFECT=$_defect" \
             -e KE_WALL_TIMEOUT="${NEGCTL_WALL:-1800}" "$BASE_TAG" \
             /inject_and_run.sh >"$OUTFILE.raw" 2>&1
     fi
@@ -481,6 +557,12 @@ echo "--- positive control: pristine image, every suite green ---"
 DEFECT_BAD=0
 run_harness ""
 BASE_RC=$?
+if [ "$BASE_RC" -eq "$BUDGET_RC" ]; then
+    if [ $# -gt 0 ]; then budget_report pristine "$@"
+    else budget_report pristine $(sh "$MANIFEST" list); fi
+    echo "Failing: the positive control (budget) -- no negative control ran"
+    exit 1
+fi
 if [ "$BASE_RC" -eq 124 ]; then
     # timeout(1)'s exit code: the QEMU wall (run_tests.sh) fired before the
     # full suite finished, so the guest was SIGTERM'd mid-run and every suite
@@ -585,6 +667,15 @@ for defect in $DEFECT_LIST; do
 
     run_harness "$defect"
     RUN_RC=$?
+
+    if [ "$RUN_RC" -eq "$BUDGET_RC" ]; then
+        _rest=$(echo $DEFECT_LIST | tr ' ' '\n' | sed -n "/^$defect\$/,\$p" | sed 1d | tr '\n' ' ')
+        budget_report "$defect" $_rest
+        fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect(budget)"
+        for _d in $_rest; do fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $_d(not-run)"; done
+        echo ""
+        break
+    fi
 
     # Distinguish a broken FIXTURE from a broken GATE. facility_defects.sh
     # refuses to continue when its sed anchor no longer matches, and that is a

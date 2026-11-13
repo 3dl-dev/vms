@@ -1825,4 +1825,7 @@ uint32_t sys$purge_ws(const void *inadr, uint64_t count);
 #define sys$creprc(...) OVMX_PAD_14(sys$creprc, __VA_ARGS__)
 #endif
 
+/* A 32-bit-pointer DEC C unit binds the VMS-ABI names (vms-7b3). */
+#include "ovmx_vmsabi_names.h"
+
 #endif /* __STARLET_H */

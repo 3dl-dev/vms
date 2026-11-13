@@ -714,6 +714,17 @@ uint32_t ovmx_vmsabi_get_symbol(const struct ovmx_abi_dx *sym, struct ovmx_abi_d
     return dst_close(&v, val, st);
 }
 
+uint32_t ovmx_vmsabi_get_foreign(struct ovmx_abi_dx *res, const struct ovmx_abi_dx *prompt,
+                                 uint16_t *len, uint32_t *flags)
+{
+    struct dsc$descriptor_s r, p;
+    uint32_t st = dst_open(&r, res);
+    if (!(st & 1))
+        return st;
+    st = lib$get_foreign(&r, dx_in(&p, prompt), len, flags);
+    return dst_close(&r, res, st);
+}
+
 uint32_t ovmx_vmsabi_delete_symbol(const struct ovmx_abi_dx *sym, const uint32_t *tbl)
 {
     struct dsc$descriptor_s s;

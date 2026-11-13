@@ -654,3 +654,15 @@ add_executable(test_devtab_fullnam ${CMAKE_CURRENT_SOURCE_DIR}/test_devtab_fulln
 target_include_directories(test_devtab_fullnam PRIVATE ${CMAKE_SOURCE_DIR}/src/kernel-core)
 target_compile_options(test_devtab_fullnam PRIVATE -Wall -Wextra -Werror)
 add_test(NAME test_devtab_fullnam COMMAND test_devtab_fullnam)
+
+# vms-7b3: a VMS-ABI entry reads a string descriptor of either form (the
+# 32-bit form or DSC64, told apart by MBO/MBMO) and gets the same answer; the
+# negative control breaks the DSC64 recognition and requires the test to fail;
+# every name a 32-bit DEC C caller is bound to has its VMS-ABI entry.
+add_executable(test_vmsabi_dsc ${CMAKE_CURRENT_SOURCE_DIR}/test_vmsabi_dsc.c)
+target_include_directories(test_vmsabi_dsc PRIVATE ${CMAKE_SOURCE_DIR}/src/libvms/syssvc)
+add_test(NAME test_vmsabi_dsc COMMAND test_vmsabi_dsc)
+add_test(NAME negctl_vmsabi_dsc64
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/negctl_vmsabi_dsc64.sh ${CMAKE_C_COMPILER} ${CMAKE_SOURCE_DIR})
+add_test(NAME check_vmsabi_names
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/check_vmsabi_names.sh ${CMAKE_SOURCE_DIR})

@@ -31,6 +31,23 @@
 
 static int fails, first_fail;
 
+/* vms-7b3: LIBRTL string routines by their VMS names. Each takes either
+ * descriptor form; the 64-bit one (DSC64) is told apart by MBO=1/MBMO=-1. */
+extern int STR$COPY_DX(void *dst, void *src);
+extern int STR$PREFIX(void *dst, void *src);
+extern int STR$FREE1_DX(void *dst);
+extern int LIB$GET_FOREIGN(void *res, ...);
+extern int LIB$GET_SYMBOL(void *sym, void *val, ...);
+struct dsc64_t {
+    unsigned short mbo;
+    unsigned char dtype, cls;
+    int mbmo;
+    unsigned long long len, ptr;
+};
+#define DSC64_INIT(d, cl, l, p) \
+    do { (d).mbo = 1; (d).dtype = DSC$K_DTYPE_T; (d).cls = (cl); (d).mbmo = -1; \
+         (d).len = (l); (d).ptr = (unsigned long long)(unsigned long)(p); } while (0)
+
 static void check(int ok, int code, const char *what)
 {
     printf("VMSABI: %s %s\n", ok ? "ok  " : "FAIL", what);
@@ -239,6 +256,74 @@ int main(void)
         bad.fab$b_bid = 0;
         st = SYS$MODIFY(&bad, 0, 0);
         check(st == RMS_FAB, 31, "negative control: SYS$MODIFY on a block that is not a FAB is RMS$_FAB");
+    }
+
+    /* vms-7b3: STR$COPY_DX and STR$PREFIX with the 32-bit form and with
+     * DSC64 give the same string; LIB$GET_FOREIGN returns the foreign command
+     * line (SYSTARTUP invokes this image as VMSABI_T DSCPROBE) into the form
+     * the DCL symbol VMSABI_FORM names ("32" on the first invocation, "64" on
+     * the second -- the line is the CLI's to give once per activation). */
+    {
+        static char head[] = "ODS2-", tail[] = "VMSABI";
+        struct dsc$descriptor_s h32 = { 5, DSC$K_DTYPE_T, DSC$K_CLASS_S, head };
+        struct dsc$descriptor_s t32 = { 6, DSC$K_DTYPE_T, DSC$K_CLASS_S, tail };
+        struct dsc$descriptor_s r32 = { 0, DSC$K_DTYPE_T, DSC$K_CLASS_D, 0 };
+        struct dsc64_t h64, t64, r64;
+        DSC64_INIT(h64, DSC$K_CLASS_S, 5, head);
+        DSC64_INIT(t64, DSC$K_CLASS_S, 6, tail);
+        DSC64_INIT(r64, DSC$K_CLASS_D, 0, 0);
+        int s1 = STR$COPY_DX(&r32, &t32), s2 = STR$PREFIX(&r32, &h32);
+        int s3 = STR$COPY_DX(&r64, &t64), s4 = STR$PREFIX(&r64, &h64);
+        printf("VMSABI-DSC32: st=%%X%08X,%%X%08X \"%.*s\"\n", (unsigned)s1, (unsigned)s2,
+               (int)r32.dsc$w_length, r32.dsc$a_pointer ? r32.dsc$a_pointer : "");
+        printf("VMSABI-DSC64: st=%%X%08X,%%X%08X mbo=%u mbmo=%d \"%.*s\"\n", (unsigned)s3,
+               (unsigned)s4, r64.mbo, r64.mbmo, (int)r64.len,
+               r64.ptr ? (char *)(unsigned long)r64.ptr : "");
+        check((s1 & s2 & 1) && r32.dsc$w_length == 11 && !memcmp(r32.dsc$a_pointer, "ODS2-VMSABI", 11),
+              32, "STR$COPY_DX+STR$PREFIX into a 32-bit class-D descriptor give ODS2-VMSABI");
+        check((s3 & s4 & 1) && r64.mbo == 1 && r64.mbmo == -1 && r64.len == 11 && r64.ptr
+              && !memcmp((char *)(unsigned long)r64.ptr, "ODS2-VMSABI", 11),
+              33, "STR$COPY_DX+STR$PREFIX into a DSC64 class-D descriptor give ODS2-VMSABI");
+        STR$FREE1_DX(&r32);
+        STR$FREE1_DX(&r64);
+
+        static char symnam[] = "VMSABI_FORM";
+        char formbuf[8];
+        unsigned short formlen = 0;
+        struct dsc$descriptor_s sym = { 11, DSC$K_DTYPE_T, DSC$K_CLASS_S, symnam };
+        struct dsc$descriptor_s fv = { sizeof formbuf, DSC$K_DTYPE_T, DSC$K_CLASS_S, formbuf };
+        int sf = LIB$GET_SYMBOL(&sym, &fv, &formlen);
+        int want64 = (sf & 1) && formlen == 2 && formbuf[0] == '6';
+        unsigned short flen = 0;
+        int sg;
+        const char *fp;
+        unsigned fl;
+        struct dsc$descriptor_s f32 = { 0, DSC$K_DTYPE_T, DSC$K_CLASS_D, 0 };
+        struct dsc64_t f64;
+        DSC64_INIT(f64, DSC$K_CLASS_D, 0, 0);
+        if (want64) {
+            sg = LIB$GET_FOREIGN(&f64, 0, &flen);
+            fp = f64.ptr ? (const char *)(unsigned long)f64.ptr : "";
+            fl = (unsigned)f64.len;
+        } else {
+            sg = LIB$GET_FOREIGN(&f32, 0, &flen);
+            fp = f32.dsc$a_pointer ? f32.dsc$a_pointer : "";
+            fl = f32.dsc$w_length;
+        }
+        printf("VMSABI-FOREIGN%s: st=%%X%08X len=%u \"%.*s\"\n", want64 ? "64" : "32",
+               (unsigned)sg, (unsigned)flen, (int)fl, fp);
+        check((sg & 1) && fl == 8 && flen == 8 && !memcmp(fp, "DSCPROBE", 8), 34,
+              want64 ? "LIB$GET_FOREIGN into a DSC64 returns the foreign command line"
+                     : "LIB$GET_FOREIGN into a 32-bit descriptor returns the foreign command line");
+        if (want64) {
+            /* The second invocation proves the DSC64 form only. */
+            if (fails) {
+                printf("OVMX VMSABI DSC64 run: %d check(s) FAILED (first %d)\n", fails, first_fail);
+                return first_fail;
+            }
+            printf("OVMX VMSABI DSC64 run: OK\n");
+            return 7;
+        }
     }
 
     if (fails) {

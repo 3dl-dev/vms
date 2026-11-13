@@ -896,6 +896,13 @@ assert_veneer() {
 assert_vmsabi() {
   local log="$1" fid region
   grep -aq "OVMX VMSABI RMS test: OK" "$log" || { echo "  assert_vmsabi: the image did not report every check OK" >&2; return 1; }
+  # vms-7b3: STR$/LIB$ by VMS name with both descriptor forms, and
+  # LIB$GET_FOREIGN into each form on its own activation.
+  grep -aq 'VMSABI-DSC32: st=%X00000001,%X00000001 "ODS2-VMSABI"' "$log" || { echo "  assert_vmsabi: STR\$PREFIX into a 32-bit descriptor did not give ODS2-VMSABI" >&2; return 1; }
+  grep -aq 'VMSABI-DSC64: st=%X00000001,%X00000001 mbo=1 mbmo=-1 "ODS2-VMSABI"' "$log" || { echo "  assert_vmsabi: STR\$PREFIX into a DSC64 did not give ODS2-VMSABI" >&2; return 1; }
+  grep -aq 'VMSABI-FOREIGN32: st=%X00000001 len=8 "DSCPROBE"' "$log" || { echo "  assert_vmsabi: LIB\$GET_FOREIGN into a 32-bit descriptor did not return the command line" >&2; return 1; }
+  grep -aq 'VMSABI-FOREIGN64: st=%X00000001 len=8 "DSCPROBE"' "$log" || { echo "  assert_vmsabi: LIB\$GET_FOREIGN into a DSC64 did not return the command line" >&2; return 1; }
+  grep -aq "OVMX VMSABI DSC64 run: OK" "$log" || { echo "  assert_vmsabi: the DSC64 activation did not report OK" >&2; return 1; }
   fid=$(grep -aoE "VMSABI-FID: \([0-9]+,[0-9]+,[0-9]+\)" "$log" | head -1 | sed 's/VMSABI-FID: //')
   [ -n "$fid" ] || { echo "  assert_vmsabi: no File ID from SYS\$SEARCH" >&2; return 1; }
   region=$(awk '/VMSABI-PROOF: === INDEPENDENT READER/{f=1} f{print} /VMSABI-PROOF: === END INDEPENDENT READER/{f=0}' "$log")
@@ -3580,7 +3587,12 @@ EOF
     {
       echo "VMSABI-FID: (34,1,0)"
       echo "VMSABI-QIOFID: (34,1,0)"
+      echo 'VMSABI-DSC32: st=%X00000001,%X00000001 "ODS2-VMSABI"'
+      echo 'VMSABI-DSC64: st=%X00000001,%X00000001 mbo=1 mbmo=-1 "ODS2-VMSABI"'
+      echo 'VMSABI-FOREIGN32: st=%X00000001 len=8 "DSCPROBE"'
       echo "OVMX VMSABI RMS test: OK (\$PARSE/\$SEARCH over VMS-layout FAB/NAM)"
+      echo 'VMSABI-FOREIGN64: st=%X00000001 len=8 "DSCPROBE"'
+      echo "OVMX VMSABI DSC64 run: OK"
       echo "VMSABI-PROOF: === INDEPENDENT READER: DIRECTORY/FULL ==="
       echo "VMSABI-QIOCRE: %X00BC3AB5C5957000"
       echo "JOINT_E2E.EXE;1                File ID:  (34,1,0)"
@@ -3597,7 +3609,10 @@ EOF
     sed 's/VMSABI-QIOCRE: %X00BC3AB5C5957000/VMSABI-QIOCRE: %X00BC3AB5CCBC7E00/' "$_st/pass.log" > "$_st/crelie.log"
     sed 's/VMSABI-QIOCRE: %X00BC3AB5C5957000/VMSABI-QIOCRE: %X0000000000000000/' "$_st/pass.log" > "$_st/crezero.log"
     sed 's/VMSABI-QIOCRE: %X00BC3AB5C5957000/VMSABI-QIOCRE: %X0000000000000000/; s/Created:   8-OCT-2026 14:00:00.00/Created:  <not recorded>/' "$_st/pass.log" > "$_st/notrecorded.log"
-    for _c in "pass:0" "mismatch:1" "notok:1" "nolnm:1" "qiofid:1" "noqio:1" "nocre:1" "crelie:1" "crezero:1" "notrecorded:1"; do
+    sed 's/mbo=1 mbmo=-1 "ODS2-VMSABI"/mbo=1 mbmo=-1 "VMSABI"/' "$_st/pass.log" > "$_st/dsc64.log"
+    grep -v "VMSABI-FOREIGN64" "$_st/pass.log" > "$_st/nofor64.log"
+    sed 's/VMSABI-DSC32: st=%X00000001,%X00000001 "ODS2-VMSABI"/VMSABI-DSC32: st=%X00000001,%X00000001 "ODS2-"/' "$_st/pass.log" > "$_st/dsc32.log"
+    for _c in "dsc64:1" "nofor64:1" "dsc32:1" "pass:0" "mismatch:1" "notok:1" "nolnm:1" "qiofid:1" "noqio:1" "nocre:1" "crelie:1" "crezero:1" "notrecorded:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_vmsabi "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  vmsabi selftest $_n: PASS"; else echo "  vmsabi selftest $_n: FAIL"; _fails=$((_fails+1)); fi

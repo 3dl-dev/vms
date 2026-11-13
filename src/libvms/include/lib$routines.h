@@ -1857,4 +1857,7 @@ uint32_t lib$traverse_tree(
 #define lib$delete_file(...) OVMX_PAD_10(lib$delete_file, __VA_ARGS__)
 #endif
 
+/* A 32-bit-pointer DEC C unit binds the VMS-ABI names (vms-7b3). */
+#include "ovmx_vmsabi_names.h"
+
 #endif /* __LIB_ROUTINES_H */
